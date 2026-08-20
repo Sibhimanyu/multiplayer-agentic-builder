@@ -1,0 +1,1 @@
+/Users/sibhi-zstch1643/conductor/repos/multiplayer-agentic-builder/.claude/skills/gstack/diagram/SKILL.md
