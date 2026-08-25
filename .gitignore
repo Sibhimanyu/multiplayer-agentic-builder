@@ -1,0 +1,17 @@
+# generated agent context, never committed
+.agentic/
+AGENTS.md
+
+# workspace scratch (also in .git/info/exclude, but that does not travel to a clone)
+.context/
+
+# vendored gstack (deprecated; each dev installs their own)
+.claude/skills/gstack/
+
+node_modules/
+dist/
+.env
+.env.local
+*.log
+.DS_Store
+*.tsbuildinfo
