@@ -1,0 +1,16 @@
+{
+  "name": "catalyst-builder",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Multiplayer agentic builder -- SHARED foundation. Both impl branches consume this; neither may fork it.",
+  "scripts": {
+    "test": "node --test \"shared/**/*.test.ts\"",
+    "test:memory": "node --test shared/store/memory.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
