@@ -1,0 +1,603 @@
+#!/usr/bin/env node
+// builder — the CLI half of the agentic file contract.
+//
+//   builder connect <invite>   write AGENTS.md + .agentic/, store the token
+//   builder status             what the board thinks is happening
+//   builder claim <task_id>    atomic claim, then acquire the file scope
+//   builder report "<msg>"     append one progress line to the outbox
+//   builder start              the long-running loop: drain outbox, deliver inbox, heartbeat
+//
+// The agent runs none of these except by convention. It writes to outbox.jsonl and reads
+// inbox.jsonl; `start` is what moves bytes between those files and the network.
+//
+// Exit codes are deliberate:
+//   0  it worked, INCLUDING a lost claim (B3) and including being offline
+//   1  a real failure: bad usage, revoked token, unpublishable state
+//   2  not connected yet
+
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import process from 'node:process';
+
+import {
+  LAYOUT,
+  appendInbox,
+  readState,
+  writeAgenticTree,
+  writeState,
+  type CliState,
+  type ProjectFile,
+  type RolePack,
+} from './agentic.ts';
+import { appendOutbox, drain, isConnected, readCursor, type OutboxRecord } from './outbox.ts';
+import { ApiClient, connectWithInvite, type WhoAmI } from './client.ts';
+import { materialise, publishToBlackboard } from './blackboard.ts';
+import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
+import { LAYER_OF, type Event, type EventKind, type Logger } from '../shared/store/types.ts';
+
+const log: Logger = {
+  info: (msg, meta) => console.error(`  ${msg}${meta ? ` ${fmt(meta)}` : ''}`),
+  warn: (msg, meta) => console.error(`! ${msg}${meta ? ` ${fmt(meta)}` : ''}`),
+};
+const fmt = (m: Record<string, unknown>): string =>
+  Object.entries(m)
+    .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+    .join(' ');
+
+const out = (s: string) => process.stdout.write(`${s}\n`);
+
+/** Token file. Outside .agentic/ so the agent's own tree never contains a credential. */
+const TOKEN_FILE = '.builder-token';
+
+interface Config {
+  root: string;
+  api_base: string;
+  repo: string;
+}
+
+async function loadConfig(root: string): Promise<Config> {
+  // Backend URL comes from the environment, never from .agentic/ — putting it there would let
+  // the agent see which platform it is on and break the byte-identical tree (B2).
+  const api_base = process.env.BUILDER_API_URL ?? '';
+  let repo = process.env.BUILDER_REPO ?? '';
+  if (!repo) {
+    const raw = await fs.readFile(path.join(root, LAYOUT.project), 'utf8').catch(() => '');
+    if (raw) repo = (JSON.parse(raw) as ProjectFile).repo_url ?? '';
+  }
+  return { root, api_base, repo };
+}
+
+async function readToken(root: string): Promise<string> {
+  const t = await fs.readFile(path.join(root, TOKEN_FILE), 'utf8').catch(() => '');
+  return t.trim();
+}
+
+// ---- commands ---------------------------------------------------------------------------
+
+async function cmdConnect(root: string, invite: string): Promise<number> {
+  const cfg = await loadConfig(root);
+  if (!cfg.api_base) {
+    log.warn('BUILDER_API_URL is not set; nothing to connect to');
+    return 1;
+  }
+
+  const res = await connectWithInvite(cfg.api_base, invite, detectHarness());
+  // 0600: the token is the agent's identity for the whole session.
+  await fs.writeFile(path.join(root, TOKEN_FILE), `${res.token}\n`, { mode: 0o600 });
+
+  const client = new ApiClient({ base_url: cfg.api_base, token: res.token, log });
+  const me = await client.whoami();
+  const snap = await client.readSnapshot();
+
+  const role = rolePackFor(me);
+  const project: ProjectFile = {
+    project_id: res.project_id,
+    name: snap?.snapshot.project_name ?? res.project_id,
+    repo_url: snap?.snapshot.repo_url ?? cfg.repo,
+    brief: '',
+    protocol_version: '0.2',
+  };
+  const state: CliState = { agent_id: res.agent_id, last_seen_seq: 0, last_written_seq: 0 };
+
+  const written = await writeAgenticTree(root, { role, project, task: null, state }, log);
+
+  out(`connected as ${res.agent_id} (${res.role_slug}) to ${project.name}`);
+  out(`wrote ${written.length} files: ${LAYOUT.agents_md} and ${LAYOUT.project.split('/')[0]}/`);
+  out('');
+  out('Add .agentic/ and .builder-token to .gitignore if they are not already there.');
+  return 0;
+}
+
+async function cmdStatus(root: string): Promise<number> {
+  if (!(await isConnected(root))) {
+    log.warn('not connected: run `builder connect <invite>` first');
+    return 2;
+  }
+  const cfg = await loadConfig(root);
+  const token = await readToken(root);
+  const state = await readState(root, log);
+
+  const client = new ApiClient({ base_url: cfg.api_base, token, log });
+
+  let me: WhoAmI;
+  try {
+    me = await client.whoami();
+  } catch (err) {
+    if (err instanceof StoreOfflineError) {
+      // Offline is a normal state, and `status` is exactly when a human wants to know it.
+      out('offline — cannot reach the backend');
+      out(`agent:      ${state.agent_id || '(unknown)'}`);
+      out(await pendingLine(root));
+      return 0;
+    }
+    throw err;
+  }
+
+  const snap = await client.readSnapshot();
+  out(`project:    ${snap?.snapshot.project_name ?? me.project_id}`);
+  out(`agent:      ${me.agent_id}  role ${me.role_slug}`);
+  out(
+    `permissions: push=${yn(me.permissions.push_branches)} pr=${yn(me.permissions.open_prs)} ` +
+      `merge=${yn(me.permissions.merge)} contracts=${yn(me.permissions.publish_contracts)}`,
+  );
+
+  // B10: freshness is READ from the backend's own report, never a hardcoded string. The two
+  // builds print different lines here and that is the honest result, not a bug.
+  out(
+    me.freshness.mode === 'live'
+      ? 'freshness:  live (push; worst-case staleness 0ms)'
+      : `freshness:  poll every ${me.freshness.stale_ms}ms (worst-case staleness ${me.freshness.stale_ms}ms)`,
+  );
+
+  out(await pendingLine(root));
+
+  if (snap) {
+    const mine = snap.snapshot.tasks.filter((t) => t.claimed_by === me.agent_id);
+    out(`ledger seq: ${snap.snapshot.seq}  (you have seen ${state.last_seen_seq})`);
+    out('');
+    if (mine.length === 0) out('no task claimed');
+    for (const t of mine) {
+      out(`claimed:    ${t.task_id}  ${t.status}${t.ci ? `  ci ${t.ci}` : ''}`);
+      if (t.blocked_reason) out(`  blocked:  ${t.blocked_reason}`);
+    }
+    const stale = snap.snapshot.agents.filter((a) => a.stale && a.status !== 'offline');
+    for (const a of stale) out(`! stale:    ${a.agent_id} last seen ${a.last_heartbeat_at ?? 'never'}`);
+  }
+  return 0;
+}
+
+const yn = (b: boolean) => (b ? 'yes' : 'no');
+
+async function pendingLine(root: string): Promise<string> {
+  const pending = await countPending(root);
+  return `outbox:     ${pending.lines} queued line(s), ${pending.spooled} spooled file(s), cursor ${pending.cursor}`;
+}
+
+async function countPending(root: string): Promise<{ lines: number; spooled: number; cursor: number }> {
+  const cursor = await readCursor(root, LAYOUT.outbox_cursor, log);
+  const buf = await fs.readFile(path.join(root, LAYOUT.outbox)).catch(() => Buffer.alloc(0));
+  const tail = buf.subarray(Math.min(cursor, buf.byteLength)).toString('utf8');
+  const lines = tail.split('\n').filter((l) => l.trim() !== '').length;
+  const spooled = (await fs.readdir(path.join(root, LAYOUT.outbox_spool)).catch(() => []))
+    .filter((n) => n.endsWith('.json') && !n.startsWith('.tmp-')).length;
+  return { lines, spooled, cursor };
+}
+
+async function cmdClaim(root: string, task_id: string): Promise<number> {
+  if (!(await isConnected(root))) {
+    log.warn('not connected: run `builder connect <invite>` first');
+    return 2;
+  }
+  const cfg = await loadConfig(root);
+  const client = new ApiClient({ base_url: cfg.api_base, token: await readToken(root), log });
+
+  const claim = await client.claimTask(task_id);
+  if (!claim.ok) {
+    // B3: EXIT 0. Losing a claim is a normal outcome of a race, not an error, and exiting
+    // non-zero here would make every agent harness treat a routine race as a failed command.
+    out(`${task_id} is owned by ${claim.owner} (claimed ${claim.claimed_at})`);
+    out('pick another task');
+    return 0;
+  }
+
+  const snap = await client.readSnapshot();
+  const task = snap?.snapshot.tasks.find((t) => t.task_id === task_id);
+
+  // Scope is acquired AFTER the claim, and a conflict here means the claim must be given back.
+  // Holding a task you cannot legally edit is worse than not holding it.
+  if (task && task.file_scope.length > 0) {
+    const scope = await client.acquireScope(task_id, task.file_scope);
+    if (!scope.ok) {
+      out(`cannot take ${task_id}: file scope conflicts`);
+      for (const c of scope.conflicts) {
+        out(`  ${c.agent_id} holds ${c.globs.join(', ')} for ${c.task_id}`);
+      }
+      await client.releaseTask(task_id);
+      out('claim released; pick another task');
+      return 0;
+    }
+  }
+
+  const state = await readState(root, log);
+  await writeAgenticTree(
+    root,
+    { role: rolePackFor(await client.whoami()), project: await projectFile(root), task: task ?? null, state },
+    log,
+  );
+  out(`claimed ${task_id}`);
+  if (task) out(`scope: ${task.file_scope.join(', ') || '(none declared)'}`);
+  out(`see ${LAYOUT.current_task}`);
+  return 0;
+}
+
+async function cmdReport(root: string, message: string): Promise<number> {
+  if (!(await isConnected(root))) {
+    log.warn('not connected: run `builder connect <invite>` first');
+    return 2;
+  }
+  const state = await readState(root, log);
+  const snapPath = path.join(root, LAYOUT.current_task);
+  const current = await fs.readFile(snapPath, 'utf8').catch(() => '');
+  const task_id = /^task_id:\s*(\S+)/m.exec(current)?.[1] ?? null;
+
+  // Appends to the outbox and nothing else (B4). No network call: `start` publishes.
+  const r = await appendOutbox(root, { kind: 'task_progress', body: { task_id, summary: message } }, log);
+  out(
+    r.target === 'jsonl'
+      ? `queued 1 line in ${LAYOUT.outbox} (${r.bytes} bytes)`
+      : `queued ${LAYOUT.outbox_spool}/${r.file} (${r.bytes} bytes, over the 4 KiB append limit)`,
+  );
+  void state;
+  return 0;
+}
+
+/**
+ * The long-running loop.
+ *
+ * Three jobs, on different clocks:
+ *   drain outbox        every 2s   — the agent's work must leave promptly
+ *   deliver inbox       on change  — driven by the store's own notification
+ *   heartbeat           every 30s  — see the cost note below
+ *
+ * Heartbeat interval, and why 30s: presence must be fresher than the 90s stale timeout, and
+ * every heartbeat is one durable write. At 20s, three agents cost 12,960 writes/day against a
+ * 20,000/day free tier — 65% of the budget on presence alone. At 30s it is 8,640/day for three
+ * agents running continuously, or 2,880 for a realistic 8-hour session. 30s keeps a 3x margin
+ * under the timeout while leaving the write budget for actual work.
+ */
+async function cmdStart(root: string): Promise<number> {
+  if (!(await isConnected(root))) {
+    log.warn('not connected: run `builder connect <invite>` first');
+    return 2;
+  }
+  const cfg = await loadConfig(root);
+  const token = await readToken(root);
+  const client = new ApiClient({ base_url: cfg.api_base, token, log });
+
+  const me = await client.whoami();
+  out(`builder start — ${me.agent_id} (${me.role_slug})`);
+  out(`freshness: ${me.freshness.mode}${me.freshness.mode === 'poll' ? ` ${me.freshness.stale_ms}ms` : ''}`);
+
+  let running = true;
+  let offline = false;
+  const stop = () => {
+    running = false;
+  };
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+
+  const publish = makePublisher(client, root, cfg, log);
+
+  while (running) {
+    // ---- drain the outbox ----
+    try {
+      const r = await drain(root, publish, log, {
+        onOffline: (err) => {
+          if (err instanceof StoreAuthError) throw err;
+          offline = true;
+        },
+      });
+      if (r.published > 0 || r.duplicates > 0) {
+        out(`published ${r.published}, deduped ${r.duplicates}, ${r.remaining} remaining`);
+        offline = false;
+      }
+    } catch (err) {
+      if (err instanceof StoreAuthError) {
+        // A14: STOP. Do not retry a revoked token.
+        log.warn('token revoked or rejected; stopping', { error: err.message });
+        return 1;
+      }
+      throw err;
+    }
+
+    // ---- deliver the inbox ----
+    try {
+      const state = await readState(root, log);
+      const { events } = await client.readEvents(state.last_seen_seq);
+      let advanced = state.last_seen_seq;
+      for (const e of events) {
+        // Belt to the API's braces. The API already filters the human layer, but this file
+        // writes the agent's context and a leak here is the one that actually hurts (B8).
+        if (LAYER_OF[e.kind] === 'human') {
+          log.warn('human-layer event reached the CLI; not delivering', { kind: e.kind, seq: e.seq });
+          advanced = Math.max(advanced, e.seq);
+          continue;
+        }
+        await deliver(root, e, cfg, log);
+        advanced = Math.max(advanced, e.seq);
+      }
+      if (advanced > state.last_seen_seq) {
+        await writeState(root, { ...state, last_seen_seq: advanced });
+        out(`delivered ${events.length} event(s) to ${LAYOUT.inbox}`);
+      }
+      offline = false;
+    } catch (err) {
+      if (err instanceof StoreAuthError) {
+        log.warn('token revoked or rejected; stopping', { error: err.message });
+        return 1;
+      }
+      if (err instanceof StoreOfflineError) {
+        if (!offline) log.info('offline; the agent keeps working and the outbox keeps growing', {});
+        offline = true;
+      } else {
+        throw err;
+      }
+    }
+
+    // ---- heartbeat ----
+    try {
+      const state = await readState(root, log);
+      const current = await fs.readFile(path.join(root, LAYOUT.current_task), 'utf8').catch(() => '');
+      const task_id = /^task_id:\s*(\S+)/m.exec(current)?.[1] ?? null;
+      // 'working' unconditionally: a heartbeat that reaches the backend proves we are not
+      // offline, so there is no state where a different value would be sent.
+      await client.heartbeat('working', task_id, null);
+      void state;
+    } catch (err) {
+      if (err instanceof StoreAuthError) return 1;
+      if (!(err instanceof StoreOfflineError)) throw err;
+      offline = true;
+    }
+
+    await sleep(2_000);
+  }
+
+  out('stopped');
+  return 0;
+}
+
+/**
+ * Turn one outbox record into a published event.
+ *
+ * Contract, schema and decision events go through git first: the file the agent named is
+ * committed, pushed, and the body is REWRITTEN as a pointer before the append. The agent never
+ * handles a commit sha.
+ */
+function makePublisher(client: ApiClient, root: string, cfg: Config, logger: Logger) {
+  return async (rec: OutboxRecord): Promise<{ seq: number; duplicate: boolean }> => {
+    const kind = rec.kind;
+
+    if (kind === 'contract_published' || kind === 'schema_published' || kind === 'decision_recorded') {
+      const source = typeof rec.body.file === 'string' ? rec.body.file : null;
+      if (!source) {
+        // Not publishable, and never will be. Reported loudly; the caller's cursor still
+        // advances so one malformed line does not wedge the queue forever.
+        logger.warn('contract event names no file; cannot publish', { kind, key: rec.idempotency_key });
+        return { seq: 0, duplicate: true };
+      }
+      if (!cfg.repo) {
+        throw new StoreOfflineError('BUILDER_REPO is not set; cannot publish to the blackboard', 'firestore');
+      }
+
+      const published = await publishToBlackboard(
+        { source_file: source, kind, body: rec.body },
+        { root, repo: cfg.repo },
+        logger,
+      );
+
+      // The pointer, not the content. This is the rewrite the blackboard doc describes.
+      const pointerBody: Record<string, unknown> = {
+        name: rec.body.name,
+        path: published.path,
+        commit_sha: published.commit_sha,
+      };
+      if (kind === 'contract_published') {
+        pointerBody.version = rec.body.version ?? 1;
+        pointerBody.supersedes = rec.body.supersedes ?? null;
+      }
+      return client.appendEvent(kind, pointerBody, rec.idempotency_key);
+    }
+
+    return client.appendEvent(kind as EventKind, rec.body, rec.idempotency_key);
+  };
+}
+
+/**
+ * Write one event into the agent's inbox.
+ *
+ * For a contract pointer the blob is fetched from the sha-pinned CDN and written to disk
+ * FIRST, then `body.local` is set, then the line is appended (B9). The ordering is the
+ * contract: an agent that reads a line naming a file it cannot open has to handle a network
+ * failure it was promised it would never see.
+ */
+async function deliver(root: string, e: Event, cfg: Config, logger: Logger): Promise<void> {
+  const body: Record<string, unknown> = { ...e.body };
+
+  const pointerPath = typeof body.path === 'string' ? body.path : null;
+  const sha = typeof body.commit_sha === 'string' ? body.commit_sha : null;
+  if (pointerPath && sha && cfg.repo) {
+    const local = await materialise(
+      { path: pointerPath, commit_sha: sha },
+      { root, repo: cfg.repo, token: process.env.BUILDER_GIT_TOKEN },
+      logger,
+    );
+    body.local = local;
+  }
+  // C7: the sha never reaches the agent. It is CLI plumbing.
+  delete body.commit_sha;
+
+  await appendInbox(
+    root,
+    { v: '0.2', seq: e.seq, layer: e.layer, kind: e.kind, ts: e.created_at, body },
+    logger,
+  );
+}
+
+// ---- helpers ----------------------------------------------------------------------------
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+function detectHarness(): string {
+  if (process.env.CLAUDE_CODE_MESSAGING_TOKEN || process.env.CLAUDECODE) return 'claude-code';
+  if (process.env.CODEX_SANDBOX || process.env.OPENAI_CODEX) return 'codex';
+  return 'manual';
+}
+
+async function projectFile(root: string): Promise<ProjectFile> {
+  const raw = await fs.readFile(path.join(root, LAYOUT.project), 'utf8');
+  return JSON.parse(raw) as ProjectFile;
+}
+
+/**
+ * Build the role pack the generated files describe.
+ *
+ * File scope comes from the role slug, and permissions come from the API's own answer — not
+ * from a table duplicated here. A local table would eventually disagree with the server, and
+ * AGENTS.md would tell the agent it can do something the API refuses.
+ */
+function rolePackFor(me: WhoAmI): RolePack {
+  const SCOPES: Record<string, { edit: string[]; not: string[]; prefix: string; title: string; what: string }> = {
+    architect: {
+      edit: ['contracts/**', 'schema/**', 'decisions/**'],
+      not: ['client/**', 'functions/**', 'test/**'],
+      prefix: 'agent/architect/',
+      title: 'Architect',
+      what: 'You own the API contracts, the data schema and the recorded decisions for this project.',
+    },
+    'backend-builder': {
+      edit: ['functions/**', 'schema/**'],
+      not: ['client/**', 'test/e2e/**'],
+      prefix: 'agent/backend/',
+      title: 'Backend Builder',
+      what: 'You own backend functions, data access, API contracts and backend tests for this project.',
+    },
+    'frontend-builder': {
+      edit: ['client/**'],
+      not: ['functions/**', 'schema/**', 'test/e2e/**'],
+      prefix: 'agent/frontend/',
+      title: 'Frontend Builder',
+      what: 'You own the client application, its routes and its component tests for this project.',
+    },
+    'qa-verifier': {
+      edit: ['test/**'],
+      not: ['client/**', 'functions/**', 'schema/**'],
+      prefix: 'agent/qa/',
+      title: 'QA Verifier',
+      what: 'You own end-to-end tests and the smoke suite for this project.',
+    },
+    'docs-writer': {
+      edit: ['docs/**'],
+      not: ['client/**', 'functions/**', 'schema/**', 'test/**'],
+      prefix: 'agent/docs/',
+      title: 'Docs Writer',
+      what: 'You own the written documentation for this project.',
+    },
+  };
+  const s = SCOPES[me.role_slug] ?? {
+    edit: [],
+    not: ['**'],
+    prefix: `agent/${me.role_slug || 'unknown'}/`,
+    title: me.role_slug || 'Unknown role',
+    // Fail closed and say so, rather than inventing a scope for a role nobody defined.
+    what:
+      'This role has no file scope defined. Do not edit anything; ask the project owner to ' +
+      'assign a known role.',
+  };
+  return {
+    role_slug: me.role_slug,
+    title: s.title,
+    responsibilities: s.what,
+    may_edit: s.edit,
+    may_not_edit: s.not,
+    branch_prefix: s.prefix,
+    push_branches: me.permissions.push_branches,
+    open_prs: me.permissions.open_prs,
+    merge: me.permissions.merge,
+  };
+}
+
+// ---- entry ------------------------------------------------------------------------------
+
+const USAGE = `builder — agentic coordination CLI
+
+  builder connect <invite>     write AGENTS.md + .agentic/, store the agent token
+  builder status               what the board thinks is happening
+  builder claim <task_id>      atomic claim, then acquire the declared file scope
+  builder report "<message>"   queue one progress line in the outbox
+  builder start                drain the outbox, deliver the inbox, heartbeat
+
+Environment:
+  BUILDER_API_URL     coordination API base url (required)
+  BUILDER_REPO        owner/repo for the git blackboard
+  BUILDER_GIT_TOKEN   token for reading contracts from a private repo
+`;
+
+export async function main(argv: string[]): Promise<number> {
+  const root = process.env.BUILDER_ROOT ?? process.cwd();
+  const [cmd, ...rest] = argv;
+
+  switch (cmd) {
+    case 'connect': {
+      const invite = rest[0];
+      if (!invite) {
+        log.warn('usage: builder connect <invite>');
+        return 1;
+      }
+      return cmdConnect(root, invite);
+    }
+    case 'status':
+      return cmdStatus(root);
+    case 'claim': {
+      const task = rest[0];
+      if (!task) {
+        log.warn('usage: builder claim <task_id>');
+        return 1;
+      }
+      return cmdClaim(root, task);
+    }
+    case 'report': {
+      const message = rest.join(' ').trim();
+      if (!message) {
+        log.warn('usage: builder report "<message>"');
+        return 1;
+      }
+      return cmdReport(root, message);
+    }
+    case 'start':
+      return cmdStart(root);
+    case undefined:
+    case '-h':
+    case '--help':
+      out(USAGE);
+      return 0;
+    default:
+      log.warn(`unknown command: ${cmd}`);
+      out(USAGE);
+      return 1;
+  }
+}
+
+// Only run when invoked directly, so the module can be imported by tests.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main(process.argv.slice(2))
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      // Named at the top level: an unexpected throw prints its type, not a bare stack.
+      if (err instanceof StoreAuthError) {
+        log.warn('authentication failed; not retrying', { error: err.message });
+        process.exit(1);
+      }
+      log.warn(`${(err as Error).name ?? 'Error'}: ${(err as Error).message}`);
+      process.exit(1);
+    });
+}

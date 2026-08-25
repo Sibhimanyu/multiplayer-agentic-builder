@@ -1,0 +1,12 @@
+{
+  "indexes": [],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "events",
+      "fieldPath": "body",
+      "indexes": [],
+      "__comment__": "Event bodies are opaque pointers, never queried. Exempting them from indexing removes an index entry per body field per event, which is both a storage cost and a write-latency cost on every append."
+    }
+  ],
+  "__comment__": "readEvents is a single-field range+order on `seq`, served by the automatic single-field index. No composite index is required, which is why `indexes` is empty rather than unwritten."
+}

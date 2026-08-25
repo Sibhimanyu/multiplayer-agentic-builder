@@ -10,7 +10,11 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": { "react": "^19.0.0", "react-dom": "^19.0.0" },
+  "dependencies": {
+    "firebase": "^12.18.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
   "devDependencies": {
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

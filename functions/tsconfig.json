@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "nodenext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "declaration": false,
+
+    // The repo runs .ts directly under node's type stripping, so every relative import is
+    // written with an explicit .ts extension. These two flags let tsc accept that and rewrite
+    // the specifiers to .js on emit — without them the compiled output imports "*.ts" paths
+    // that do not exist in lib/, and the function crashes on cold start with MODULE_NOT_FOUND.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+
+    // rootDir spans the repo root so shared/ compiles into the deploy artifact alongside
+    // functions/src. Cloud Functions only uploads the `source` directory, so shared code that
+    // lived outside lib/ would simply be missing at runtime.
+    "rootDir": "..",
+    "outDir": "lib"
+  },
+  "include": ["src/**/*.ts", "../shared/**/*.ts"],
+  // Both spellings are needed: an `exclude` glob starting with ** cannot traverse upward out
+  // of the tsconfig directory, so "**/*.test.ts" alone leaves ../shared's test files in the
+  // deploy artifact — including the TCP-cutting proxy in shared/store/testing, which has no
+  // business shipping to production.
+  "exclude": ["**/*.test.ts", "../shared/**/*.test.ts", "../shared/store/testing/**"]
+}

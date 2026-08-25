@@ -1,0 +1,134 @@
+rules_version = '2';
+
+// Deny all by default, then allow exactly what a browser needs. Nothing more.
+//
+// The shape of this file follows one decision from docs/protocol/agent-coordination.md:
+// clients never write the ledger. Every write arrives through the Cloud Functions API, which
+// runs with admin credentials and therefore bypasses these rules entirely. So the rules only
+// have to answer one question — "may this signed-in browser READ this project?" — and answer
+// "no" to every write.
+//
+// That is why the write rules below are `false` rather than a careful per-field check. A
+// per-field client write rule would be a second, weaker implementation of the API's authority
+// checks, and the weaker one is the one an attacker uses. `agent_id` is never accepted from a
+// client because a client cannot write at all.
+//
+// Consequences worth stating plainly:
+//   - The dashboard is read-only. Owner actions (invite, assign, merge-confirm) go to the API.
+//   - Admin SDK writes are NOT tested by these rules. They are tested by the API's own
+//     authority checks (see functions/src/authority.ts) and by the forged-agent_id test.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---- helpers ----------------------------------------------------------------
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Membership is a document, not a custom claim: a claim needs a token refresh to revoke,
+    // and revocation has to be immediate. One extra document read per rule evaluation is the
+    // price, and rule-evaluation reads of the membership doc are not separately billed.
+    function isMember(pid) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/projects/$(pid)/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/projects/$(pid)/members/$(request.auth.uid))
+             .data.revoked != true;
+    }
+
+    // No isOwner() helper here on purpose: owner-only actions are all writes, and writes are
+    // all denied to clients. Owner authority is checked in the API (functions/src/authority.ts),
+    // in one place, against the same membership document.
+
+    // ---- the project document ---------------------------------------------------
+
+    match /projects/{pid} {
+      allow get, list: if isMember(pid);
+      allow create, update, delete: if false; // API only
+
+      // ---- readable by any member: this is what the board renders ----------------
+
+      // Folded board state.
+      match /tasks/{taskId} {
+        allow get, list: if isMember(pid);
+        allow write: if false;
+      }
+
+      // Presence. `stale` is derived client-side from last_heartbeat_ms, so there is no
+      // field here a client could usefully forge even if it could write.
+      match /agents/{agentId} {
+        allow get, list: if isMember(pid);
+        allow write: if false;
+      }
+
+      // File-scope locks. Readable so the dashboard can show who owns which paths.
+      match /locks/{agentId} {
+        allow get, list: if isMember(pid);
+        allow write: if false;
+      }
+
+      // Contract pointers: name, version, path, commit_sha. Never contract content.
+      match /contracts/{contractId} {
+        allow get, list: if isMember(pid);
+        allow write: if false;
+      }
+
+      // Claims. Read-only to the browser; the atomic claim is a transaction in the API.
+      match /claims/{taskId} {
+        allow get, list: if isMember(pid);
+        allow write: if false;
+      }
+
+      // The ledger. Readable for an audit view, append-only and API-written.
+      //
+      // Note the absence of an `allow update` or `allow delete` even for the owner: A6 and
+      // mandatory behaviour 3 say an appended event is never mutated or removed, and the
+      // cheapest way to guarantee that is to make it unexpressible at the rules layer. The
+      // admin SDK could still do it, which is why the API has no code path that does.
+      match /events/{eventId} {
+        allow get, list: if isMember(pid);
+        allow create, update, delete: if false;
+      }
+
+      // seq counter. One document, read by the dashboard to display ledger position.
+      match /meta/{docId} {
+        allow get, list: if isMember(pid);
+        allow write: if false;
+      }
+
+      // ---- membership and roles ---------------------------------------------------
+
+      // A member sees the roster (the board shows member labels). Only the API mutates it,
+      // so a member cannot promote themselves to owner or un-revoke their own token.
+      match /members/{uid} {
+        allow get, list: if isMember(pid);
+        allow write: if false;
+      }
+
+      match /roles/{roleSlug} {
+        allow get, list: if isMember(pid);
+        allow write: if false;
+      }
+
+      // Invite codes are write-only secrets: an existing member must not be able to read a
+      // pending invite and connect a second agent under someone else's role. Owners cannot
+      // read them either — the API returns the code once, at creation, and never again.
+      match /invites/{code} {
+        allow read, write: if false;
+      }
+
+      // Anything added under a project later is denied until someone writes a rule for it.
+      // This is the line that makes "deny all by default" true as the schema grows, rather
+      // than true only on the day it was written.
+      match /{unmatched=**} {
+        allow read, write: if false;
+      }
+    }
+
+    // Belt and braces: nothing outside /projects exists, and nothing may be created there.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
