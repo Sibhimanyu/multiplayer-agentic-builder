@@ -174,6 +174,30 @@ describe('D5 event mapping', () => {
     assert.equal(out.event.body.commit, 'def456');
   });
 
+  test('D5b: pull_request closed maps to merged ONLY on strict merged === true', () => {
+    // Four assertions. `merged` is the only field separating a merge from an
+    // abandon, and a truthy check would call an abandoned PR merged the moment
+    // GitHub sent a string or omitted the field.
+    const close = (merged: unknown) => mapGithubEvent({
+      event: 'pull_request',
+      payload: {
+        action: 'closed', repository: repo, sender,
+        pull_request: { number: 7, merged, merge_commit_sha: 'aaa111', head: { ref: 'agent/backend/task_items_api' } },
+      },
+    });
+
+    const merged = close(true);
+    assert.ok(merged.ok);
+    assert.equal(merged.event.kind, 'merged');
+
+    for (const value of [false, undefined, null]) {
+      assert.equal(close(value).ok, false,
+        `merged=${String(value)} must not read as merged`);
+    }
+    // And a truthy non-boolean must not sneak through either.
+    assert.equal(close('true').ok, false, 'a string must not satisfy a strict check');
+  });
+
   test('pull_request closed with merged:true -> merged', () => {
     const out = mapGithubEvent({
       event: 'pull_request',
@@ -187,20 +211,52 @@ describe('D5 event mapping', () => {
     assert.equal(out.event.body.commit, 'aaa111');
   });
 
-  test('check_suite completed -> ci_passed / ci_failed', () => {
+  test('D5a: the check_suite conclusion mapping is exactly the normative table', () => {
+    // Nine conclusions, all asserted. Both builds must be identical here -- a
+    // divergence is worse than a missing badge, because an absence is obvious
+    // and a divergence is not.
     const base = {
       action: 'completed', repository: repo, sender,
       check_suite: { head_branch: 'agent/backend/task_items_api', pull_requests: [{ number: 7 }], app: { name: 'GitHub Actions' }, url: 'https://api.github.com/x' },
     };
-    const passed = mapGithubEvent({ event: 'check_suite', payload: { ...base, check_suite: { ...base.check_suite, conclusion: 'success' } } });
+    const map = (conclusion: unknown) => mapGithubEvent({
+      event: 'check_suite',
+      payload: { ...base, check_suite: { ...base.check_suite, conclusion } },
+    });
+
+    const passed = map('success');
     assert.ok(passed.ok);
     assert.equal(passed.event.kind, 'ci_passed');
     assert.equal(passed.event.body.pr_number, 7);
     assert.equal(passed.event.body.check_name, 'GitHub Actions');
 
-    const failed = mapGithubEvent({ event: 'check_suite', payload: { ...base, check_suite: { ...base.check_suite, conclusion: 'failure' } } });
+    const failed = map('failure');
     assert.ok(failed.ok);
     assert.equal(failed.event.kind, 'ci_failed');
+
+    // A timeout is a CONCLUSIVE terminal failure, not an inconclusive one.
+    // GitHub shows a red X. Dropping it would leave the board silent while the
+    // agent believes CI is still pending.
+    const timedOut = map('timed_out');
+    assert.ok(timedOut.ok, 'timed_out must map, not drop');
+    assert.equal(timedOut.event.kind, 'ci_failed');
+
+    for (const conclusion of ['neutral', 'cancelled', 'skipped', 'stale', 'action_required', null]) {
+      assert.equal(map(conclusion).ok, false, `${String(conclusion)} must drop`);
+    }
+  });
+
+  test('D5a: an unrecognised future conclusion drops rather than defaulting to failed', () => {
+    // The table is an allowlist. If GitHub adds a conclusion, the safe default
+    // is silence, not a red badge on a task whose CI never reported one.
+    const out = mapGithubEvent({
+      event: 'check_suite',
+      payload: {
+        action: 'completed', repository: repo, sender,
+        check_suite: { head_branch: 'agent/backend/task_items_api', conclusion: 'quantum_undecided' },
+      },
+    });
+    assert.equal(out.ok, false);
   });
 
   test('every mapped event is coordination-layer, never human-layer', () => {
@@ -255,7 +311,8 @@ describe('D6 unmappable deliveries are dropped, never thrown', () => {
   });
 
   test('an inconclusive check_suite is dropped rather than shown as failed', () => {
-    for (const conclusion of ['neutral', 'cancelled', 'skipped', 'stale', 'timed_out', null]) {
+    // timed_out is deliberately NOT in this list -- it is conclusive. See D5a.
+    for (const conclusion of ['neutral', 'cancelled', 'skipped', 'stale', 'action_required', null]) {
       const out = mapGithubEvent({
         event: 'check_suite',
         payload: {

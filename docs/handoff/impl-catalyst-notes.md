@@ -738,6 +738,82 @@ defect was in the test's housekeeping, not the check.
 
 ---
 
+# Order 0010 — `timed_out` corrected, territory check clean
+
+## I had `timed_out` wrong, and the ruling is right
+
+My mapping dropped `timed_out` along with `neutral`, `cancelled`, `skipped` and `stale`, on
+the reasoning that an inconclusive result must not show a red badge. `timed_out` is not
+inconclusive: it is a **conclusive terminal failure**, GitHub renders it with a red X, and
+dropping it leaves the board silent while the agent goes on believing CI is still pending.
+That is a worse outcome than a slightly generous label — silence reads as "not finished yet",
+which is precisely the wrong belief.
+
+The mapping is now a table rather than a pair of `if`s, so the whole allowlist is visible at
+once:
+
+| `conclusion` | Maps to |
+|---|---|
+| `success` | `ci_passed` |
+| `failure` | `ci_failed` |
+| `timed_out` | `ci_failed` |
+| `neutral`, `cancelled`, `skipped`, `stale`, `action_required`, `null`/absent | drop |
+
+Absent from the table means drop, so a conclusion GitHub adds later drops rather than
+defaulting to failed. There is a test for that specific case (`quantum_undecided`), because
+the failure mode of a permissive default is a red badge on a task whose CI never reported one.
+
+D5b now has its four assertions plus a fifth: `merged` must be strictly `true`, and the string
+`"true"` must not satisfy it either.
+
+## Territory check — clean
+
+```
+git diff --stat origin/zoho-catalyst-app-builder HEAD -- \
+  docs shared package.json tsconfig.json \
+  client/src/components.tsx client/src/tokens.css \
+  client/index.html client/tsconfig.json client/src/store/types.ts
+```
+
+One file: `docs/handoff/impl-catalyst-notes.md`, which `territory.md` lists as **per-build**
+— it is this report. Everything else in the frozen set is byte-identical.
+
+## The test-resolution axis, checked four ways
+
+The Firebase build found its test files sitting under `shared/`, so root `npm test` reported
+25 on its branch and 19 here — meaning "both builds pass the same tests" would have been
+measured by two different commands while appearing to be one. That is the headline claim of
+the whole exercise, and it would have been quietly false.
+
+Confirmed clean here, checking both directions rather than just the obvious one:
+
+1. The only test file under `shared/` is `shared/store/memory.test.ts`, **byte-identical** to
+   the shared branch — I own no test there.
+2. The root `test` script is character-for-character identical to the shared branch's.
+3. `npm test` reports **19 on my branch and 19 on the shared branch**, verified by running it
+   in a throwaway worktree of the shared branch rather than by inspection.
+4. Neither command leaks into the other: root `npm test` picks up nothing from `catalyst/` or
+   `functions/`, and my command does not re-run the shared conformance suite.
+
+All eight of my test files live under `catalyst/` or `functions/`.
+
+## Composite keys — staying with the separator rule
+
+Firebase hit MB1a one field over from where it was predicted: its `event_id` derived from the
+client-supplied key with no project in it, so two projects sharing a key produced two events
+with one `event_id`. Its fix hashes each part separately and combines the digests, which makes
+the `"a:b"+"c"` class structurally impossible rather than policed, and sidesteps the varchar
+255 clamp.
+
+Both approaches are permitted; a separator with no policing is what is forbidden. Staying with
+the separator plus rejection, deliberately: it is tested, it has already caught two real
+things (the `gh:` delivery key and the ambiguity itself), and it keeps rows **readable** — you
+can look at a `task_claims` row and see which project and task it belongs to. The hash version
+destroys that, which matters for a system whose failure mode is a human squinting at a claim
+row wondering why an agent is blocked.
+
+---
+
 # Blocked on the coordinator
 
 1. **Catalyst project ID** for this build — the handoff said `<paste>`. Needed for step 3.

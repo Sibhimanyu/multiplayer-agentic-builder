@@ -143,6 +143,21 @@ export function mapGithubEvent(delivery: GithubDelivery): MapResult {
   };
 }
 
+/**
+ * The complete `check_suite` conclusion mapping. Absent from this table means
+ * drop -- including `null`, an unset conclusion, and any value GitHub adds
+ * later. A new conclusion defaulting to "failed" would put a red badge on a task
+ * whose CI never reported one.
+ */
+export const CHECK_SUITE_CONCLUSIONS: Record<string, EventInput['kind'] | undefined> = {
+  success: 'ci_passed',
+  failure: 'ci_failed',
+  timed_out: 'ci_failed',
+  // Everything below is deliberately absent rather than listed as undefined, so
+  // the table reads as an allowlist:
+  //   neutral, cancelled, skipped, stale, action_required, null
+};
+
 interface MappedKind {
   kind: EventInput['kind'];
   branch: string | null;
@@ -196,12 +211,19 @@ function mapKind(event: string, payload: Record<string, any>): MappedKind | null
       if (payload.action !== 'completed') return null;
       const suite = payload.check_suite ?? {};
       const branch = typeof suite.head_branch === 'string' ? suite.head_branch : null;
-      const conclusion = suite.conclusion;
-      // Only these two conclusions are a verdict. neutral, cancelled, skipped,
-      // stale and timed_out are not "CI failed" and must not show a red badge.
-      if (conclusion !== 'success' && conclusion !== 'failure') return null;
+      // Normative table, acceptance-checklist D5a. The rule is: CONCLUSIVE
+      // FAILURES MAP, EVERYTHING ELSE DROPS.
+      //
+      // timed_out is the one that reads wrong at a glance. It is not
+      // inconclusive -- GitHub renders it with a red X, and it is terminal.
+      // Dropping it leaves the board silent while the agent goes on believing CI
+      // is still pending, which is worse than a slightly generous label.
+      // cancelled, skipped, stale and action_required are genuinely not code
+      // verdicts, and neutral is neutral by definition.
+      const kind = CHECK_SUITE_CONCLUSIONS[String(suite.conclusion)];
+      if (kind === undefined) return null;
       return {
-        kind: conclusion === 'success' ? 'ci_passed' : 'ci_failed',
+        kind,
         branch,
         body: {
           pr_number: Array.isArray(suite.pull_requests) && suite.pull_requests.length > 0
