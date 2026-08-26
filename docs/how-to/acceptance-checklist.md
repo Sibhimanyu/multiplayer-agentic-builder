@@ -13,6 +13,8 @@ Run the same suite against all three adapters: `memory`, `catalyst`, `firebase`.
 | # | Test | Evidence |
 |---|---|---|
 | A1 | Same `idempotency_key` twice → same `seq`, `duplicate:true`, ledger grew by 1 | assertion |
+| A1b | Under concurrency, every idempotency record **correlates**: an event exists at that `seq` **and carries the same key**. Not "an event exists at that seq" — see the rule below. | assertion, 12 concurrent |
+| A1c | A replay after contention returns the **settled** `seq`, belonging to a real event with the right key | assertion, warmed ledger |
 | A2 | 20 concurrent `claimTask` on one task → exactly 1 `{ok:true}` | assertion, repeated 50x |
 | A3 | Losing claimant receives `{ok:false, owner}`, not a thrown error | assertion |
 | A4 | `readEvents` returns strictly ascending `seq` | assertion |
@@ -115,6 +117,38 @@ Record real numbers. These are the point of building both.
 | G8 | Total build hours | honest log |
 | G9 | Every platform constraint hit, with the workaround | written list |
 | G10 | Would you choose this again? One paragraph, written before seeing the other build's number | prose |
+
+## Testing rule: assert correlation, not count
+
+**A test that cannot distinguish the bug from the fix is worse than no test**, because it
+converts an open question into false confidence.
+
+Worked example, from A1b. The weak assertion is "for each idempotency record, some event exists
+at that `seq`". That **passes while the records are cross-wired to the wrong events** — which is
+exactly the corruption mandatory behaviour 1b exists to prevent. The counts are right; the
+correlation is wrong.
+
+The correct assertion pairs the two: an event exists at that `seq` **and** carries the same
+key. Apply this shape wherever a test checks that two things were written consistently:
+
+- A2 exactly-one claim: assert the winner's `agent_id` matches the row, not just that one
+  call returned `ok:true`.
+- A7 scope conflict: assert the returned conflict names the actual holder, not merely that a
+  conflict was returned.
+- D4 webhook replay: assert the ledger contains the original event, not just that the count
+  did not increase.
+
+Ask of every assertion: *would this still pass if the values were correct in number but wired
+to the wrong records?* If yes, it is not testing the thing you care about.
+
+## Guard rule: missing is drift
+
+A consistency guard must treat **absent** as a violation, not as "nothing to check". If the
+`_lib` drift guard had stayed quiet about missing copies to avoid a false positive from a
+test's own cleanup, it would have been broken in the direction that matters — a deploy with no
+vendored library would have passed.
+
+When a guard fires on something your tooling caused, fix the tooling. Do not soften the guard.
 
 ## H. Non-negotiables
 
