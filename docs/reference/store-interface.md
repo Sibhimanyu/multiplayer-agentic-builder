@@ -185,6 +185,32 @@ Both implementations MUST satisfy all of these. `docs/how-to/acceptance-checklis
 
 1. **Idempotent append.** Same `idempotency_key` twice returns the same `seq` with
    `duplicate: true`, and the ledger grows by one, not two.
+
+   Two requirements that are easy to get wrong and are backend-agnostic:
+
+   **1a. The idempotency key is CLIENT-SUPPLIED, so it MUST be scoped per project.** It is not
+   safe to treat a uuid v4 as globally unique just because it usually is. On a store where
+   uniqueness is table-global, a client in project A sending a colliding key makes project B's
+   append absorb as a duplicate and return someone else's `seq`: HTTP 200, a plausible `seq`,
+   and the event never written. Silent cross-tenant event loss. Scope the key
+   (`<project_id>:<idempotency_key>`) and never trust client-supplied uniqueness.
+
+   **1b. The idempotency record MUST store the `seq` the event ACTUALLY received**, not a
+   candidate value computed before allocation settled. If allocation can retry, recording the
+   first candidate makes a later replay return a `seq` belonging to a different event — silent
+   corruption in place of a loud failure.
+
+   On Catalyst these two interact, because `seq` allocation needs a retry loop (behaviour 4)
+   and the dedupe row cannot know the final `seq` until the loop settles. Writing the dedupe
+   row inside the retry loop makes attempt 2 collide with a key attempt 1 wrote itself.
+   Required order there: **insert the event first, carrying its own dedupe key, then the
+   dedupe row.** A `seq` collision then retries the event insert alone, touching exactly one
+   unique column, and a crash between the two is recoverable by reading the orphan's
+   `dedupe_key` back and adopting its `seq` — no UPDATE needed. `events.dedupe_key` is
+   deliberately NOT unique.
+
+   Firestore has no equivalent failure mode; `runTransaction` makes both writes atomic.
+   G9 entry.
 2. **Exactly-one claim, scoped per project.** N concurrent `claimTask` calls for one task
    produce exactly one `{ok:true}`. Verified by test, not by inspection.
 
