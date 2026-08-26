@@ -921,3 +921,120 @@ the value the way `varchar` clamping does.
 - `is_unique: true` accepted on `varchar` **and** `bigint` in production use, matching the probe.
 - `text` columns carry no `search_index_enabled` in the response, consistent with the API
   schema refusing it for that type.
+
+---
+
+# G-metrics — real numbers, measured 2026-08-26
+
+All against the deployed function on `multiplayer-agents`, IN DC, from a laptop in
+Asia/Kolkata. **Measurement discipline applied to my own numbers**: the first call of every
+run is reported separately and never folded into the percentiles, because a cold start is a
+real cost but one sample — averaging it in makes the warm p50 look worse *and* hides the cold
+cost. Failures are counted, not dropped.
+
+## G1 — publish → visible, n=100
+
+| | append returns | publish → visible |
+|---|---|---|
+| p50 | **202 ms** | **318 ms** |
+| p95 | **281 ms** | **419 ms** |
+| p99 | 334 ms | 561 ms |
+| min / max | 187 / 334 ms | 294 / 561 ms |
+| mean | 211 ms | 330 ms |
+| cold first call | 310 ms | 439 ms |
+| failed | 0 / 100 | 0 / 100 |
+
+**What "visible" means here, precisely.** A fresh reader polling `/events` sees the event.
+This is the **ledger read path, not the folded-snapshot path** — the Stratus snapshot builder
+is build-order step 5 and does not exist yet, so the 34 ms Stratus figure in the design doc is
+*not* what this measures and these numbers must not be compared to it. Every one of the 100
+was visible on the first read attempt, so the number is append + one round trip, with no
+convergence delay to wait out.
+
+## G2 — claim round-trip, n=200
+
+| | |
+|---|---|
+| p50 | **127 ms** |
+| p95 | **182 ms** |
+| p99 | 409 ms |
+| min / max | 113 / 1186 ms |
+| mean | 139 ms |
+| cold first call | 252 ms |
+| won | 200 / 200 |
+
+The `max` of 1186 ms against a p95 of 182 ms is the shape worth noting, not the number: one
+sample in 200 took **9× the p95**. A single outlier is not a threshold and I am not treating it
+as one, but a claim that occasionally takes over a second is a real user-visible stall, and it
+is the kind of tail that a mean of 139 ms conceals completely.
+
+Each of the 200 claims was a distinct task, so every one performed a real INSERT that won its
+unique constraint. Wall clock for the whole run: 28 s. G1's 100 publishes plus 100 visibility
+reads: 34 s.
+
+## G4 — operations consumed, per action
+
+Counted at the call sites in `functions/coordination/index.ts`, then cross-checked against the
+durable rows the session left behind. `COUNT(ROWID)` confirms **201 `task_claims` + 101
+`events` + 101 `request_dedupe` = 403 rows**, matching the computed INSERT total exactly.
+
+| Action | SELECT | INSERT | Actions/month on the free tier |
+|---|---|---|---|
+| claim (won) | 2 | 1 | 5,000 |
+| claim (lost) | 3 | 1 | 3,333 |
+| **append (new)** | **5** | **2** | **2,000** |
+| append (replay) | 3 | 0 | 3,333 |
+| readEvents (partial page) | 3 | 0 | 3,333 |
+| readEvents (full page) | 4 | 0 | 2,500 |
+| webhook delivery (new) | 4 | 2 | 2,500 |
+| webhook delivery (replay) | 2 | 0 | 5,000 |
+
+### The finding: SELECT is the binding constraint, not INSERT
+
+**Every authenticated request pays 2 SELECTs before its own work starts** — token → agent,
+then project+role → permissions. The protocol requires that resolution on *every* request
+("The server resolves `token → agent_id → project_id → role → permissions` on **every**
+request"), so it cannot be cached without weakening the guarantee it exists to provide.
+
+Consequence: an append costs **5 SELECTs and 2 INSERTs**, so the 10,000/month SELECT allowance
+runs out at **2,000 appends** while the 5,000 INSERT allowance would have allowed 2,500. The
+quota that binds is the one nobody designs against.
+
+Every planning number in the earlier notes was framed around INSERTs. That framing was wrong,
+and it was wrong because it was reasoned from the schema rather than measured from a request.
+
+## G5 — extrapolated monthly cost
+
+At 2 people, one active project, a working day of 8 h and the observed per-action costs:
+
+| Scenario | Appends/day | SELECT/month | Verdict |
+|---|---|---|---|
+| 2 people, light (20 appends/day each) | 40 | ~6,000 | inside free tier |
+| 2 people, active (60 appends/day each) | 120 | ~18,000 | **exceeds** free tier in ~17 days |
+| 10 people, active | 600 | ~90,000 | free tier lasts ~3.3 days |
+
+The 10-person figure is the one that matters for the comparison: this design does not fit the
+Catalyst free tier at team scale, and the reason is the mandatory per-request auth reads rather
+than the ledger writes.
+
+**Not yet priced in dollars.** Converting to pay-as-you-go needs the rate card from
+`catalyst-pricing`, and I would rather report the operation counts I measured than multiply
+them by a rate I have not verified.
+
+## G6 — free-tier headroom after this session
+
+| Quota | Allowance | Used | Remaining |
+|---|---|---|---|
+| SELECT | 10,000/month | **1,260 (12.6%)** | 8,740 |
+| INSERT | 5,000/month | **403 (8.1%)** | 4,597 |
+| UPDATE | 1,000/month | **0** | 1,000 |
+
+**Zero UPDATEs, by design and now confirmed in production.** Presence is a Cache key with a
+TTL and task status is folded from the ledger, so nothing in the steady state issues one. The
+`stats.durable_updates` assertion in the memory adapter turned out to describe the deployed
+system accurately.
+
+The A5 warning from earlier holds and is now quantifiable: one full conformance run against
+this backend costs ~301 appends ≈ **1,505 SELECTs and 602 INSERTs**, which is 15% of the
+monthly SELECT allowance for a single test run. Order 0005's "run it against the real backend
+once" was the right call, and the reason is SELECTs rather than INSERTs.
