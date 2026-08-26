@@ -12,7 +12,8 @@
     "typecheck": "cd .. && tsc --noEmit -p tsconfig.firebase.json",
     "seed:demo": "cd .. && scripts/emulator.sh 'node firebase/seed-demo.ts'",
     "test:scoping": "cd .. && scripts/emulator.sh 'node --test --test-timeout=300000 firebase/scoping.test.ts'",
-    "test:concurrency": "cd .. && scripts/emulator.sh 'node --test --test-timeout=300000 firebase/concurrency.test.ts'"
+    "test:concurrency": "cd .. && scripts/emulator.sh 'node --test --test-timeout=300000 firebase/concurrency.test.ts'",
+    "xcheck": "cd .. && scripts/xcheck.sh"
   },
   "dependencies": {
     "firebase-admin": "^13.0.0"

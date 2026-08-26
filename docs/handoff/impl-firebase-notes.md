@@ -389,6 +389,54 @@ whole build was working-tree only, and a rebase would have destroyed it. Committ
 what made the order safe to execute at all.
 
 
+
+### 20. The counter-document ceiling is real, and it is load-dependent
+
+Upgraded from theoretical to **measured**. G9.2 recorded that a single counter document inside
+every append transaction caps ledger throughput. Under 32 concurrent appends the emulator
+returned `10 ABORTED: Transaction lock timeout` on `projects/{pid}/meta/ledger` — the SDK's
+internal transaction retries exhausted, surfacing as `StoreBusyError`.
+
+Three things worth separating here.
+
+**The adapter was right.** `ABORTED` maps to `StoreBusyError`, which the contract defines as a
+normal retryable outcome. A raw `appendEvent` refusing under heavy contention is the adapter
+behaving exactly as specified.
+
+**My test was wrong.** It asserted all 32 appends resolve, which is asserting that the contract
+is not the contract. Rewritten to assert what must actually hold: whatever refuses refuses
+*retryably*, nothing that landed shares a `seq`, and the same 32 all land when the caller
+honours the retry contract via the shared `withRetry`.
+
+**It is load-dependent, not a hard number.** The next run landed all 32 with zero refusals. So
+the original test was not merely wrong, it was *intermittently* wrong — red under load and green
+otherwise, which is the worst failure mode a test can have. That intermittency was the real bug.
+
+For G4, when a live project exists: the number to record is not "the ceiling is 32". It is that
+contention refusal is probabilistic above roughly a dozen concurrent appends, and that the
+documented recovery clears it. Anyone quoting a hard figure has measured one run.
+
+### 21. "Verify by running" caught a defect that reading could not
+
+Order 0011 formalised this and it is downstream of my own worst mistake, so it belongs here.
+
+My test files sat under `shared/`, so root `npm test` reported **25 tests on this branch and 19
+on the other**. From inside either branch everything looked correct: the script was fine, the
+suite passed, the config matched. The divergence was invisible from within a single branch and
+only appeared when the same command ran in both places.
+
+"Both builds pass the same tests" is the headline claim of this whole exercise, and it would
+have been measured by two different commands — quietly false, with nothing failing to reveal it.
+
+`scripts/xcheck.sh` now runs root `npm test` in a throwaway worktree and compares counts. It
+references the **shared branch** rather than the other build's: that branch is the normative
+source for root `package.json` and `tsconfig.json`, which both builds are frozen to, so matching
+it proves both builds match each other transitively — and it keeps this workspace off the other
+implementation's branch entirely, which is a standing instruction here. Counting another
+branch's output would have been permissible; it was not necessary.
+
+An absent or unparseable count fails the check rather than passing it. Missing is drift.
+
 ---
 
 ## G9 asymmetries — guarantees Catalyst paid for and Firestore did not

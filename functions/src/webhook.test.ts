@@ -288,15 +288,48 @@ test('D5a timed_out is NOT dropped — this was the ruled correction', () => {
   if (m.kind === 'event') assert.equal(m.event.kind, 'ci_failed');
 });
 
+test('D5a-unknown a conclusion GitHub has not invented yet DROPS', () => {
+  // The allowlist has an explicit default-drop, and this is the assertion that proves it.
+  // Testing the nine conclusions that exist today does not cover the tenth: GitHub will add
+  // one eventually, and a permissive default is invisible until it misfires -- as a red badge
+  // on a task whose CI never reported a failure.
+  //
+  // Absent from CONCLUSIVE means drop, by construction rather than by a matching `else`.
+  for (const invented of ['flaky', 'partially_succeeded', 'quarantined', 'SUCCESS', 'Success', '']) {
+    const m = mapDelivery(
+      'check_suite',
+      { action: 'completed', check_suite: { conclusion: invented, head_branch: BRANCH } },
+      CTX,
+    );
+    assert.equal(m.kind, 'drop', `unknown conclusion ${JSON.stringify(invented)} must drop`);
+    if (m.kind === 'drop') assert.ok(m.reason.length > 0, 'and say why');
+  }
+
+  // Case matters: the map is exact, so 'SUCCESS' is unknown rather than a lenient match. A
+  // case-insensitive lookup would be a permissive default wearing a different hat.
+  const shouty = mapDelivery(
+    'check_suite',
+    { action: 'completed', check_suite: { conclusion: 'SUCCESS', head_branch: BRANCH } },
+    CTX,
+  );
+  assert.equal(shouty.kind, 'drop', "'SUCCESS' must not match 'success'");
+});
+
 test('D5b pull_request closed maps to merged ONLY on strict merged === true', () => {
-  // Four assertions: true, false, undefined, null. A truthy check would let an absent field
-  // read as unmerged-but-present, and a loose check would mark an abandoned PR merged --
-  // which, in an append-only ledger, cannot be corrected afterwards.
+  // true / false / undefined / null / the string "true" / the string "false". A truthy check
+  // would let an absent field read as unmerged-but-present, and a loose check would mark an
+  // abandoned PR merged -- which, in an append-only ledger, cannot be corrected afterwards.
   const cases: { merged: unknown; expect: 'merged' | 'drop' }[] = [
     { merged: true, expect: 'merged' },
     { merged: false, expect: 'drop' },
     { merged: undefined, expect: 'drop' },
     { merged: null, expect: 'drop' },
+    // The string "true". Cheap, and it is the shape a JSON/serialisation quirk actually takes
+    // -- Catalyst returns booleans as strings, where Boolean("false") is true. A truthy check
+    // here marks an ABANDONED pull request merged, and in an append-only ledger that cannot be
+    // corrected afterwards. Both builds parse the same payloads, so both need the assertion.
+    { merged: 'true', expect: 'drop' },
+    { merged: 'false', expect: 'drop' },
   ];
 
   for (const { merged, expect } of cases) {
