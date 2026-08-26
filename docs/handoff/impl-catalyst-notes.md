@@ -1299,3 +1299,62 @@ A1–A6, A12, A14, A15 are reachable now. **A7–A11 and A13 are not**: A9 needs
 through the store (available), but A10, A11 and A13 need `subscribe`/`readSnapshot`. So the
 single full run stays blocked on the Stratus gate, which is the right place for it — running
 18 of 19 and calling it a pass would misreport the bar.
+
+---
+
+# Adapter smoke against the real backend — 12/12, and NOT a conformance run
+
+`catalyst/measure/adapter-smoke.ts`. 16 requests, roughly 50 SELECT and 8 INSECT-equivalent
+writes. Permitted by order 0020 as cheap reachable signal, and labelled in the file's own
+header so it cannot be mistaken for the suite.
+
+**Why it was worth running at all.** Three different things had been verified and I had
+conflated them: the *endpoints* (curl), the *status mapping* (injected fetch, 22 tests), and
+`catalyst/store/catalyst.ts` **against the real service** — which had never run. The middle one
+passing says nothing about the third.
+
+| Check | Shape | Result |
+|---|---|---|
+| append returns a seq | A1 | seq=108 |
+| replay returns the ORIGINAL seq | A1 | `duplicate=true`, same seq |
+| human-layer event withheld from an agent | protocol | 0 returned, none human-layer |
+| emoji stripped before the write | A12 | `"blocked on the contract  waiting "` |
+| readEvents strictly ascending by seq | A4 | 50 events, `has_more=true` |
+| first claim wins / second answered | A3 | `{ok:true}` then `{ok:false, owner, claimed_at}` |
+| reclaim after release succeeds | F12 | `{ok:true}` |
+| acquireScope grants a disjoint glob | A8 | `{ok:true}` |
+| heartbeat then presence is fresh | A9 | `status=working stale=false` |
+| readSnapshot / subscribe refuse | gate | `NotProvisionedError` both |
+
+## The one failure, and why it improved the check
+
+First run: 10/11, with "emoji stripped" failing on an empty string. Not a bug — I appended a
+**human-layer** `task_progress` event and read it back through an agent-audience read, which
+correctly withheld it. The filter working was indistinguishable from the write failing, because
+I had written a check that could not tell those apart.
+
+Two changes came out of it. The emoji check now uses a **coordination-layer** kind so it can
+read its own write back. And the accident became an assertion: *human-layer event withheld from
+an agent* is now checked explicitly, which the protocol calls its most important rule and which
+nothing here had verified against the real backend.
+
+## What this deliberately does NOT cover
+
+- **A10, A11, A13** — need `subscribe`/`readSnapshot`, blocked on the Stratus gate.
+- **A2** — 50 rounds × 20 claimants is 1,000 claims, ~20% of both monthly allowances.
+- **A5** — ~1,505 SELECTs, 15% of the monthly SELECT allowance.
+
+A2 and A5 belong to the single full run, per order 0005. Running them now would spend ~30% of a
+month's quota to learn the same thing twice.
+
+## A gap in order 0020 worth flagging
+
+The order says `NotProvisionedError` "lives in `shared/`" and it is now normative in
+`store-interface.md` — but `shared/store/errors.ts` **does not contain it**. The spec mandates a
+shared type the shared code does not provide.
+
+My implementation is in `catalyst/store/catalyst.ts` and satisfies every stated requirement:
+distinct type, `UNPROVISIONED_OPERATIONS` exported, no network call on either gated operation.
+I have not added it to `shared/` because `shared/` is frozen and that needs an order — and if
+Firebase and I each define our own, they diverge, which is the "two different suites" failure
+in a different costume.
