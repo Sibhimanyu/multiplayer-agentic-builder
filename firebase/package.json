@@ -4,13 +4,14 @@
   "type": "module",
   "description": "The Firebase half of the bake-off: the CoordinationStore adapter, its harness for the SHARED conformance suite, and the demo fixture.",
   "scripts": {
-    "test": "cd .. && scripts/emulator.sh 'node --test --test-timeout=600000 firebase/store.test.ts firebase/errors.test.ts'",
+    "test": "cd .. && scripts/emulator.sh 'node --test --test-timeout=600000 firebase/store.test.ts firebase/errors.test.ts firebase/scoping.test.ts'",
     "test:errors": "cd .. && node --test --test-timeout=60000 firebase/errors.test.ts",
-    "test:emulator": "cd .. && scripts/emulator.sh 'node --test --test-timeout=600000 firebase/store.test.ts firebase/errors.test.ts functions/src/api.test.ts functions/src/reaper.test.ts'",
+    "test:emulator": "cd .. && scripts/emulator.sh 'node --test --test-timeout=600000 firebase/store.test.ts firebase/errors.test.ts firebase/scoping.test.ts functions/src/api.test.ts functions/src/reaper.test.ts'",
     "test:webhook": "cd .. && node --test --test-timeout=60000 functions/src/webhook.test.ts",
     "test:cli": "cd .. && node --test --test-timeout=180000 cli/outbox.test.ts cli/blackboard.test.ts cli/client.test.ts",
     "typecheck": "cd .. && tsc --noEmit -p tsconfig.firebase.json",
-    "seed:demo": "cd .. && scripts/emulator.sh 'node firebase/seed-demo.ts'"
+    "seed:demo": "cd .. && scripts/emulator.sh 'node firebase/seed-demo.ts'",
+    "test:scoping": "cd .. && scripts/emulator.sh 'node --test --test-timeout=300000 firebase/scoping.test.ts'"
   },
   "dependencies": {
     "firebase-admin": "^13.0.0"
