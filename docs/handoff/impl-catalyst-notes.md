@@ -246,6 +246,30 @@ This is the return on writing it first, as the handoff instructed.
 
 ---
 
+# Orders log
+
+| Order | Status | Evidence |
+|---|---|---|
+| 0001 adopt the order channel | acknowledged | This notes file exists and is committed. Orders are now read at the start of every session via `git log --oneline origin/zoho-catalyst-app-builder -- docs/orders/`, read-only, no merge. |
+| 0002 consume the shared foundation | done | Rebased onto `origin/zoho-catalyst-app-builder`. `npm test` 19/19, `tsc --noEmit` clean. `git diff origin/zoho-catalyst-app-builder HEAD -- shared/ package.json tsconfig.json` is **empty** — `shared/` is not forked. |
+| 0003 record the `is_unique` probe | done | The whole first section of this file. Pushed before anything else was touched. |
+| 0004 push after every commit | adopted | Order 0003's commit was pushed before the rebase was started, not batched. Standing practice from here. |
+
+## One conflict resolved during the 0002 rebase
+
+`package.json` conflicted add/add on a single line, the `description` field: this workspace
+had written "Catalyst implementation (route C1)", the promoted foundation says "SHARED
+foundation. Both impl branches consume this; neither may fork it."
+
+**Resolved in favour of upstream**, by rule rather than preference — `package.json` is the
+root workspace for `shared/`, and order 0002 freezes `shared/` to this workspace too.
+
+The rest of commit `f5a7dce` was dropped by the rebase as already applied: its content *is*
+the shared foundation, promoted verbatim. This branch is now the shared branch plus this one
+notes file.
+
+---
+
 # Blocked on the coordinator
 
 1. **Catalyst project ID** for this build — the handoff said `<paste>`. Needed for step 3.
