@@ -19,5 +19,27 @@
   },
   "created_at": "2026-08-26",
   "github_repo": "https://github.com/Sibhimanyu/inventory-tracker-catalyst",
-  "note": "Every resource this build created, verbatim, per order 0015. Nothing pre-existing was touched."
+  "note": "Every resource this build created, verbatim, per order 0015. Nothing pre-existing was touched.",
+  "functions": {
+    "coordination": {
+      "id": "53069000000059006",
+      "type": "advancedio",
+      "url": "https://multiplayer-agents-60083782173.development.catalystserverless.in/server/coordination/"
+    },
+    "reaper": {
+      "id": "53069000000061375",
+      "type": "job"
+    }
+  },
+  "job_pool": {
+    "name": "coordination_jobs",
+    "id": "53069000000057394",
+    "capacity_mb": 256
+  },
+  "cron": {
+    "name": "reap_stale_claims",
+    "id": "53069000000055385",
+    "every": "5 minutes",
+    "timezone": "Asia/Kolkata"
+  }
 }

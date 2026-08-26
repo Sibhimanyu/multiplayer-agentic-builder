@@ -33,6 +33,7 @@ import type { WebhookPort } from '../github-webhook/index.ts';
 import { handleAcquireScope, handleReleaseScope } from '../scope/index.ts';
 import type { LockRecord, ScopePort } from '../scope/index.ts';
 import { handleHeartbeat, handleListPresence, PRESENCE_SEGMENT } from '../presence/index.ts';
+import { REAPER_STATUS_KEY } from '../reaper/index.ts';
 import type { PresenceDeps, PresencePort } from '../presence/index.ts';
 import { resolvePrincipal } from '../_lib/auth.ts';
 import type { AuthPort } from '../_lib/auth.ts';
@@ -382,7 +383,17 @@ async function route(app: CatalystApp, req: HttpRequest, log: Logger): Promise<H
   }
 
   if (path === '/health') {
-    return json(200, { ok: true, ops: { ...ops } });
+    // Also surfaces the reaper's last pass, because a job function's console
+    // output is not retrievable and its failures report no message.
+    let reaper: unknown = null;
+    try {
+      const raw = await app.cache().segment(PRESENCE_SEGMENT).get(REAPER_STATUS_KEY);
+      const text = normaliseCacheValue(raw);
+      reaper = text === null ? null : JSON.parse(text);
+    } catch {
+      reaper = { error: 'could not read the reaper status key' };
+    }
+    return json(200, { ok: true, ops: { ...ops }, reaper });
   }
 
   // Everything below resolves token -> agent -> project -> role, every request.

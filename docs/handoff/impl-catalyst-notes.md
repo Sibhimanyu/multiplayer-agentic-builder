@@ -1152,3 +1152,89 @@ our own lock back.
 One deliberate fail-closed choice: an **unparseable `globs` column is treated as `['**']`**, a
 lock on everything, so it conflicts loudly. Treating it as `[]` would silently disable the
 check this table exists for.
+
+---
+
+# Step 6 — the reaper. Working, and it exposed a bug in the append path's cousin.
+
+Verified live: three claims, **reaped 3, failed 0** — two `stale`, one `revoked` — with three
+`task_unblocked` events at seq 102–104 each naming what was released and why. Claims table
+empty afterwards, so F12 ("another agent claims the released task") has nothing standing in
+its way.
+
+## Resources
+
+| | |
+|---|---|
+| Job pool | `coordination_jobs` / `53069000000057394` / 256 MB |
+| Cron | `reap_stale_claims` / `53069000000055385` / every 5 min / Asia/Kolkata |
+| Function | `reaper` / `53069000000061375` / **type `job`** |
+
+## It is a JOB function, not a CRON function, and that was forced
+
+The build order says "Cron Function". A `cron`-type function turned out to be **unreachable
+programmatically**:
+
+- HTTP invocation → `403 {"error_code":"INVALID_OPERATION","message":"HTTP Execution is not supported"}`
+- `catalyst functions:execute` → needs a real node18 binary on PATH; this machine has node 26
+- Job Scheduling API → `{"message":"The given function is not a job function."}`
+
+A `job`-type function is both schedulable *and* triggerable on demand through the same API, so
+it is the only variant that can be tested at all. Unlike the Stratus case this is **not** a
+measured component — the reaper's schedule appears in no G-metric, and F11's criterion
+("released within 15 min") is satisfied identically — so substituting was legitimate rather
+than a workaround that corrupts a measurement. Recorded, not silent.
+
+Cost of that discovery: the deployed `cron` function had to be **deleted** before a `job`
+function of the same name could deploy, because type is immutable on a function.
+
+Also worth noting: "a Cron Function" is really **three** resources — a Job Pool, a Cron, and
+the function — where the design doc named one.
+
+## Two SDK traps, and one of them cost two deploy cycles
+
+**`initialize(context)`, not `initialize(jobRequest)` and not `initializeApp()`.** A job
+handler receives `(jobRequest, context)` and only the *second* can initialise the SDK. The
+SDK's `initialize` accepts an object carrying `headers` (Advanced I/O) or `catalystHeaders`
+(Basic I/O); `jobRequest` has neither, so it throws `invalid_app_object`. The generated
+`types/job.d.ts` says this outright — *"Context … the object used to initialize the Catalyst
+sdk"* — and reading it would have saved both cycles.
+
+**Every wrong form fails identically and invisibly**: `job_status: FAILURE`,
+`response_code: "Code_Exception"`, no message, and **nothing retrievable from the logs API**.
+
+## The observability problem, and what I did about it
+
+`Get_Logs` returns `[]` for both of this project's functions, at every level and window I
+tried. A deployed function's `console.log` is, as far as I can reach it, write-only. So a pass
+that silently did nothing was indistinguishable from a pass that had nothing to do.
+
+Fix: the reaper writes its pass summary — counts, ops, and the first three failure details —
+to a Cache key, and `/health` returns it. That converted a blind debug loop into two readable
+answers. The failure detail rides in `ReapResult` rather than only in a log line, because a
+failure that exists only in an unreadable log is a failure nobody can diagnose.
+
+## The actual bug: ZCQL ignores an aggregate's column alias
+
+```
+SELECT MAX(seq) AS max_seq FROM events
+  -> {"events": {"MAX(seq)": "101"}}
+```
+
+**The alias is discarded** — the key is the raw expression — **and the value is a string.**
+
+`catalyst/lib/zcql.ts`'s `readMaxSeq` already handled both, because it was written against a
+measured response. The reaper had a **hand-rolled reimplementation** that read `max_seq`, got
+`undefined`, defaulted to `0`, allocated seq 1, and collided with an event that has existed
+since the first append.
+
+The lesson is not about ZCQL. I duplicated logic that already existed in correct form, and the
+duplicate was the broken one. The reaper now calls `readMaxSeq` and `allocateSeqAndInsert`
+rather than its own copies — which also gives it the retry loop it was missing.
+
+**Why this surfaced here and not in `append`:** `allocateSeqAndInsert` increments on collision,
+so a broken `MAX(seq)` read would have been *absorbed* — walking up from 1 until it found a
+free seq, correct but expensive. The reaper had no retry, so it failed loudly. A retry loop
+made the same class of bug invisible in one place and fatal in another; the loud one is what
+got it found. Worth remembering that the append path's correctness was never evidence its
+`MAX(seq)` read worked.
