@@ -179,6 +179,53 @@ interface CoordinationStore {
 }
 ```
 
+## Wire-level rulings
+
+These are forced by measured platform behaviour and apply to **all** routes, because the CLI is
+shared and cannot branch per platform.
+
+### The auth header is `X-Agent-Token`, never `Authorization`
+
+Probed 2026-08-26. **The Catalyst API Gateway reserves `Authorization`.** It validates any such
+header as a Zoho OAuth token *before the function runs* — `Bearer` yields `INVALID_TOKEN`,
+anything else `AUTHENTICATION_FAILURE`, and the function never sees the request. No handler code
+can recover it.
+
+The CLI is shared, so it cannot send `Authorization` to Catalyst at all. Either the CLI branches
+per platform — which is exactly the divergence this whole structure exists to prevent — or every
+route uses one header that works everywhere.
+
+**Canonical: `X-Agent-Token: <token>`.** All three routes. Not negotiable per-platform.
+
+### `created_at` is metadata. It is NEVER an ordering key.
+
+Probed: Catalyst `datetime` columns **reject RFC3339**, the exact format the protocol specifies.
+Only `YYYY-MM-DD HH:MM:SS` is accepted, reads return a `.mmm` suffix that is itself not
+accepted back, and **milliseconds are dropped**.
+
+So a Catalyst ledger stores second-resolution `created_at` where Firestore stores milliseconds.
+
+**Ruling:** `seq` is authoritative for ordering (behaviour 4), so `created_at` is display and
+audit metadata only. Second resolution is the floor. **Do not degrade Firestore to match** —
+keep each platform's native fidelity and record the difference. Nothing may sort, page, or
+deduplicate on `created_at`.
+
+### Never match on an error message string
+
+Probed: `zcatalyst-sdk-node` reshapes errors. It rejects with a plain
+`{statusCode, code, message}` — renaming `error_code` to `code` and dropping the documented REST
+wrapper — and **the message does not contain the error code**, so message matching is not even a
+fallback.
+
+Each adapter maps its own backend's error shape to the `StoreError` family at one chokepoint.
+Detection uses structured fields, never substring matching on human-readable text.
+
+### `readEvents` must not over-fetch by one
+
+Probed: ZCQL **rejects** `LIMIT 0, 301` outright rather than clamping to 300. The
+fetch-one-extra-to-detect-more trick fails at exactly the default page size. `has_more` costs
+one additional query when a full page comes back. Budget for it.
+
 ## Mandatory behaviours
 
 Both implementations MUST satisfy all of these. `docs/how-to/acceptance-checklist.md` tests them.
