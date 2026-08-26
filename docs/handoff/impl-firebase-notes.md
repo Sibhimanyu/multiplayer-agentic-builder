@@ -606,6 +606,103 @@ given rule 2 from G9.20: an intermittent test is worse than a failing one.
 Worth stating as a general point rather than a Firestore one: **any test suite sharing one
 external resource must serialise at the file level**, and the default is against you.
 
+
+---
+
+## Provisioning, measured (order 0015)
+
+**Project ID: `multiplayer-agents-eec02`** — display name `multiplayer-agents`. They differ:
+Google appended `-eec02` because the plain name was globally taken. Every CLI and SDK call needs
+the ID.
+
+The human created the project in the console. I verified that first-hand rather than on
+assertion — eight projects were catalogued on this account at the start of this session,
+`projects:list` now returns nine, and the ninth is this one.
+
+### What one CLI-driven session provisioned
+
+| Step | Command | Result |
+|---|---|---|
+| select | `firebase use` | instant |
+| web app | `firebase apps:create web` | 9 s |
+| Firestore API | *enabled implicitly by the rules deploy* | ~75 s to propagate |
+| Firestore DB | `firestore:databases:create --location asia-south1` | ok |
+| rules + indexes | `firebase deploy --only firestore:rules,firestore:indexes` | ok |
+| hosting | `firebase deploy --only hosting` | live |
+| demo repo | `gh repo create` | instant |
+
+**7 CLI commands, 0 console steps, ~4 minutes** of wall clock from an existing empty project to a
+live dashboard with deployed security rules. For the register: the Catalyst CLI has no
+`project:create` at all, so the comparable figure there is not a slower number, it is *no CLI
+path*.
+
+Two honest deductions from that headline, though:
+
+1. **The project itself was created by a human in the console.** `firebase projects:create` does
+   exist and would have made it 8 commands and 0 console steps — but that is not what happened
+   here, so the measured figure covers provisioning *into* an existing project.
+2. **Blaze and the budget alert remain console-only**, so the end-to-end number is 7 CLI commands
+   plus 2 console steps that no tool can perform. Register entry 10, fourth confirmation.
+
+### A correction I was one command from shipping
+
+I was about to report "enabling the Firestore API is a console step; firebase-tools cannot do
+it", on the strength of **three consecutive 403s**. It was wrong.
+`firebase deploy --only firestore:rules` prints `missing required API firestore.googleapis.com.
+Enabling now...` and does enable it. The 403s were propagation lag; a fourth attempt 25 seconds
+later succeeded.
+
+One retry separated a true finding from a false one, in precisely the area where I had spent the
+session telling the coordinator to verify rather than assume. The coordinator had even warned
+that the project took ~20 s to appear in `projects:list`. Same lesson, and I nearly missed it
+twice.
+
+### `asia-south1` is a measurement decision, not a default
+
+The database location is **permanent** and it directly determines G1 and G2. This machine is in
+India and Catalyst is a Zoho product served from India, so a nearby region is the like-for-like
+comparison. Accepting the US multi-region default (`nam5`) would have added roughly 200 ms of RTT
+to every Firestore figure and flattered Catalyst on all of them — a measurement artefact dressed
+as a platform difference. Recorded here because it cannot be changed afterwards.
+
+### First real latency numbers, such as they are
+
+The live rules check does seven round trips to `asia-south1` from this machine:
+
+```
+read tasks   201 ms / 71 ms      WRITE event  164 ms
+read events   71 ms / 69 ms      WRITE claim  207 ms
+read agents   69 ms / 83 ms      read invites  91 ms
+```
+
+**These are permission-denied round trips, not successful operations, so they are not G1 or G2.**
+They are useful only as a floor on network RTT: roughly **70–90 ms warm, ~200 ms cold**. Quoting
+them as latency results would be exactly the single-run-threshold error I wrote a rule against.
+
+### Deny-all verified against the live backend
+
+Not a rules review — seven operations attempted as an unauthenticated client against the deployed
+project, all seven denied: reading tasks, events and agents; **writing** an event and a claim;
+reading invites; and reading outside `/projects` entirely.
+
+That is the "clients never write the ledger" half of non-negotiable H verified in production
+rather than in the emulator. `npm --prefix firebase run check:live-rules`, and it fails on zero
+probes as well as on any allowed operation — missing is drift, applied to the guard.
+
+### The blocker on G1–G6, and why I did not work around it
+
+The conformance suite needs the **admin** SDK, which needs credentials `firebase login` does not
+provide. There is no ADC on this machine and `gcloud` is absent, so the sanctioned path is a
+service-account key — a console step.
+
+A shortcut exists and I declined it. `~/.config/configstore/firebase-tools.json` holds a refresh
+token with `https://www.googleapis.com/auth/cloud-platform` scope, which the Admin SDK's
+`refreshToken` credential would accept. That credential can reach **all nine projects on the
+account**, including the eight unrelated ones I am under standing orders never to touch. Loading
+it into a test process that performs 1,000+ concurrent writes, when a per-project service account
+costs one console click, is the wrong trade. Least privilege wins over convenience even when the
+convenience is mine.
+
 ---
 
 ## G9 asymmetries — guarantees Catalyst paid for and Firestore did not

@@ -46,7 +46,15 @@ masquerading as a platform difference.
 2. **Budget alert** — console.cloud.google.com/billing → Budgets & alerts → Create budget.
    Scope: **this project only**. Amount **$5/month**. Alerts at 50 / 90 / 100% of *actual* spend.
    Expected real spend at this volume is **$0**, so any alert at all means something is looping.
-3. Then this build runs: `firebase deploy --only functions --project multiplayer-agents-eec02`
+3. **Service-account key** — console.firebase.google.com/project/multiplayer-agents-eec02/settings/serviceaccounts/adminsdk
+   → Generate new private key. Needed for the conformance suite and the F1–F12 demo to reach the
+   real backend via the admin SDK: there is no ADC on this machine and `gcloud` is absent.
+   Save it outside the repo and set `GOOGLE_APPLICATION_CREDENTIALS` to its path.
+
+   A shortcut was available and declined: the firebase-tools config holds a `cloud-platform`
+   scoped refresh token that would work, but it can reach all nine projects on the account
+   including the eight that are off-limits. A per-project service account is least privilege.
+4. Then this build runs: `firebase deploy --only functions --project multiplayer-agents-eec02`
 
 **Order matters: 2 before 3.** Blaze has no spending cap by default, only alerts.
 
