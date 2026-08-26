@@ -73,6 +73,8 @@ export const TABLES: TableSpec[] = [
       { name: 'actor_type', ...ID, mandatory: true },
       { name: 'actor_id', ...ID, mandatory: true, note: 'Resolved server-side from the token. Never accepted from the client.' },
       { name: 'created_at', type: 'datetime', mandatory: true, note: 'Server clock. Not a seq source -- ms resolution, and a batch shares one value.' },
+      { name: 'dedupe_key', ...ID, search_index: true,
+        note: 'Correlates an event with the request that produced it. NOT unique -- the unique guard lives on request_dedupe, and a second unique column here would give the seq retry two ways to fail. Exists so a crash between the event write and the dedupe write is recoverable without an UPDATE.' },
       { name: 'body', type: 'text',
         note: 'JSON. text, not varchar: bodies exceed 255. Capped at 10,000 by the platform, enforced and logged in shared/sanitize.ts. Contract bodies are POINTERS, so they stay small.' },
     ],

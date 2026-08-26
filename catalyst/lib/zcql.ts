@@ -114,6 +114,12 @@ export function selectLocksForProject(project_id: string, limit: number = LIMITS
     ` WHERE project_id = ${zqStr(project_id)} ORDER BY acquired_at LIMIT 0, ${zqInt(cap.applied)}`;
 }
 
+/** Crash recovery: did the event for this request already land? */
+export function selectEventByDedupeKey(dedupe_key: string): string {
+  return `SELECT seq, event_id, dedupe_key FROM events` +
+    ` WHERE dedupe_key = ${zqStr(dedupe_key)} LIMIT 0, 1`;
+}
+
 export function selectDedupe(dedupe_key: string): string {
   return `SELECT dedupe_key, idempotency_key, project_id, seq, event_id FROM request_dedupe` +
     ` WHERE dedupe_key = ${zqStr(dedupe_key)} LIMIT 0, 1`;

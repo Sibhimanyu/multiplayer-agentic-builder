@@ -15,11 +15,28 @@
 //
 //   4  strictly ascending seq, via the global allocator (order 0005). NOT ROWID.
 //
-// Write order is deliberate: the dedupe row goes in FIRST, carrying the seq it
-// reserved. A crash between the two writes leaves a dedupe row whose event is
-// missing, and the replay path completes the write with the SAME seq rather than
-// allocating a second one. The reverse order would let a crash produce two
-// events for one request, which breaks A1 permanently.
+// WRITE ORDER, and why it is the opposite of what it first looks like.
+//
+// The obvious design writes the dedupe row first, reserving a seq, then writes
+// the event. It is wrong, and the schema dry run caught it under concurrency:
+// the seq retry loop re-runs its whole body, so attempt 2 re-inserts the SAME
+// dedupe row and collides with its own attempt 1. Every contended append then
+// failed with a duplicate error on a key it had just written itself. Eleven of
+// twelve concurrent appends died that way.
+//
+// Nor can the dedupe row simply be hoisted out of the retry: it has to record
+// the seq the event ACTUALLY got, and that is not known until the retry settles.
+// Recording the first candidate would make a replay return a seq belonging to a
+// different event -- silent corruption, which is worse than the failure.
+//
+// So: EVENT FIRST, carrying its dedupe_key, then the dedupe row.
+//   - a seq collision retries the event insert alone, with nothing to collide with
+//   - the dedupe row is written once, with the settled seq
+//   - the crash window (event written, dedupe row missing) is recoverable
+//     WITHOUT an UPDATE, because events.dedupe_key can be read back
+//
+// events.dedupe_key is deliberately NOT unique. The unique guard stays on
+// request_dedupe, so the seq retry has exactly one unique column to fight over.
 //
 // NOT WIRED: Data Store calls are behind AppendPort. Needs a project ID.
 
@@ -45,9 +62,10 @@ export interface AppendPort {
   /** INSERT into request_dedupe. Throws DuplicateValueError on a replay. */
   insertDedupe(row: DedupeRow & { created_at: string }): Promise<void>;
   findDedupe(dedupe_key: string): Promise<DedupeRow | null>;
+  /** Crash recovery: the event for this request, if it already landed. */
+  findEventByDedupeKey(dedupe_key: string): Promise<{ seq: Seq; event_id: string } | null>;
   /** INSERT into events. Throws DuplicateValueError when seq collides. */
   insertEvent(row: Record<string, unknown>): Promise<void>;
-  eventExists(seq: Seq): Promise<boolean>;
 }
 
 export function eventIdFor(seq: Seq): string {
@@ -85,43 +103,57 @@ export async function handleAppend(
   // A replay short-circuits before any allocation.
   const prior = await port.findDedupe(dedupe_key);
   if (prior) {
-    if (!(await port.eventExists(prior.seq))) {
-      // Crash recovery: the dedupe row landed, its event did not. Complete the
-      // write with the SAME seq rather than allocating a new one.
-      log.warn('append.completing_orphan_dedupe', 'dedupe row had no event; completing with the reserved seq', {
-        project_id, idempotency_key, dedupe_key, seq: prior.seq,
-      });
-      await port.insertEvent(eventRow(prior.seq, project_id, layer, kind, principal, clean_body, now(), log));
-    }
     return json(200, { event_id: prior.event_id, seq: prior.seq, duplicate: true });
+  }
+
+  // Crash recovery: the event landed but its dedupe row did not. Adopt the seq
+  // that is already in the ledger rather than appending a second copy.
+  const orphan = await port.findEventByDedupeKey(dedupe_key);
+  if (orphan) {
+    log.warn('append.adopting_orphan_event', 'event existed with no dedupe row; adopting its seq', {
+      project_id, idempotency_key, dedupe_key, seq: orphan.seq,
+    });
+    await port.insertDedupe({
+      dedupe_key, idempotency_key, project_id, seq: orphan.seq,
+      event_id: orphan.event_id, created_at: now(),
+    }).catch((err: unknown) => {
+      // Another recoverer won. Harmless: the row it wrote says the same thing.
+      if (err instanceof DuplicateValueError && err.column === 'dedupe_key') return;
+      throw err;
+    });
+    return json(200, { event_id: orphan.event_id, seq: orphan.seq, duplicate: true });
   }
 
   const allocation = await allocateSeqAndInsert<void>({
     maxSeq: () => port.maxSeq(),
+    // Only the event insert is retried, and `seq` is the only unique column it
+    // touches, so a retry can never collide with its own earlier attempt.
     insert: async (seq) => {
-      // Reserve first: the dedupe row is what makes the append idempotent.
-      try {
-        await port.insertDedupe({
-          dedupe_key, idempotency_key, project_id, seq,
-          event_id: eventIdFor(seq), created_at: now(),
-        });
-      } catch (err) {
-        if (err instanceof DuplicateValueError && err.column === 'dedupe_key') {
-          // Two identical requests in flight at once. Rethrown so the allocator
-          // leaves it alone -- a higher seq does not fix a replay.
-          throw err;
-        }
-        throw err;
-      }
-      await port.insertEvent(eventRow(seq, project_id, layer, kind, principal, clean_body, now(), log));
+      await port.insertEvent(
+        eventRow(seq, project_id, layer, kind, principal, clean_body, now(), log, dedupe_key),
+      );
     },
-  }, { log, op: 'append' }).catch(async (err: unknown) => {
+  }, { log, op: 'append' });
+
+  try {
+    await port.insertDedupe({
+      dedupe_key, idempotency_key, project_id, seq: allocation.seq,
+      event_id: eventIdFor(allocation.seq), created_at: now(),
+    });
+  } catch (err) {
     if (err instanceof DuplicateValueError && err.column === 'dedupe_key') {
-      const existing = await port.findDedupe(dedupe_key);
-      if (existing) return { seq: existing.seq, result: undefined, attempts: 1, selects: 1 };
+      // A concurrent request with the SAME idempotency key beat us to the guard.
+      // Ours is the duplicate, so report the winner's seq, not our own.
+      const winner = await port.findDedupe(dedupe_key);
+      if (winner) {
+        log.warn('append.lost_dedupe_race', 'a concurrent request with the same key won the guard', {
+          project_id, idempotency_key, dedupe_key, our_seq: allocation.seq, winner_seq: winner.seq,
+        });
+        return json(200, { event_id: winner.event_id, seq: winner.seq, duplicate: true });
+      }
     }
     throw err;
-  });
+  }
 
   return json(201, {
     event_id: eventIdFor(allocation.seq), seq: allocation.seq, duplicate: false,
@@ -131,6 +163,7 @@ export async function handleAppend(
 function eventRow(
   seq: Seq, project_id: ProjectId, layer: string, kind: string,
   principal: Principal, clean_body: Record<string, unknown>, created_at: string, log: Logger,
+  dedupe_key: string,
 ): Record<string, unknown> {
   return {
     seq,
@@ -142,6 +175,7 @@ function eventRow(
     // Resolved from the token, never from the request. H4.
     actor_id: sanitizeText(principal.agent_id, { field: 'events.actor_id', max: VARCHAR_MAX, log }),
     created_at,
+    dedupe_key,
     body: JSON.stringify(clean_body),
   };
 }

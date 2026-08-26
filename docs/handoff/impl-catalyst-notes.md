@@ -638,6 +638,77 @@ on a working tree that still contains the edit.
 
 ---
 
+# The schema dry run, and the bug it caught
+
+`catalyst/testing/` — a Data Store double plus 23 tests that drive the **real** handlers
+(`handleClaim`, `handleAppend`, `handleEvents`, `handleWebhook`) and the real ZCQL builders
+through the declared schema. Only the Data Store underneath is a double.
+
+The double reproduces the behaviours the probe **measured**, not the ones I assumed: global
+case-sensitive `is_unique` with the verbatim `DUPLICATE_VALUE` payload, atomic batch inserts,
+silent varchar clamping on DDL and write, booleans stored as strings, and **non-monotonic
+`ROWID` allocation from per-shard blocks**. A fake that was merely "a map with unique keys"
+would pass code the real platform breaks, which is worse than no fake at all. It refuses to
+answer a ZCQL statement it does not recognise rather than returning `[]` and letting a typo
+read as "no rows".
+
+## It found a real bug in `append`, visible only under concurrency
+
+Twelve concurrent appends: **one succeeded, eleven failed.**
+
+The dedupe row was being written *inside* the seq retry loop. When attempt 1 lost the seq
+race, attempt 2 re-ran the whole closure and re-inserted **the same dedupe row**, colliding
+with a key it had itself written a moment earlier. Every contended append died on its own
+previous attempt.
+
+The obvious fix — hoist the dedupe insert out of the loop — is wrong in a worse way. The
+dedupe row has to record the seq the event **actually** got, and that is not known until the
+retry settles. Recording the first candidate would make a later replay return a seq belonging
+to a **different event**: silent corruption, which beats a loud failure only in the sense that
+nobody notices.
+
+So the write order is now the opposite of what I originally argued for, and for a better
+reason:
+
+**Event first, carrying its `dedupe_key`. Then the dedupe row.**
+
+- a seq collision retries the event insert alone, which touches exactly one unique column and
+  therefore cannot collide with its own earlier attempt;
+- the dedupe row is written once, with the settled seq;
+- the crash window (event written, dedupe row missing) is recoverable **without an UPDATE**,
+  because `events.dedupe_key` can be read back and the orphan's seq adopted.
+
+`events.dedupe_key` is deliberately **not** unique — the unique guard stays on
+`request_dedupe`, so the seq retry keeps exactly one column to fight over. That is the same
+rule the schema test enforced back when it made me drop the redundant `unique(event_id)`.
+
+There is also now a `lost_dedupe_race` path: if a concurrent request with the same
+idempotency key wins the guard after we have already written our event, we report **the
+winner's** seq rather than our own.
+
+I would not have found this by reading the code, and it would have surfaced on the real
+backend as "appends fail intermittently under load".
+
+## What else the dry run covers
+
+- exactly-one claim across 20 concurrent callers, and the loser told who owns it
+- two projects claiming the same task name independently (the composite key earning its keep)
+- two projects using the **same client-supplied idempotency key** without collision
+- A1 replay, A4 strict ascent, dense seq under 12 concurrent appends
+- events read back in `seq` order **while the fake's ROWIDs run backwards** — a regression to
+  `ORDER BY ROWID` visibly reorders here
+- a cursor walking the whole ledger with no gaps or repeats
+- human-layer events withheld from agents but shown to the dashboard
+- project isolation on read
+- webhook end to end: signed push lands one event, replayed delivery appends nothing (D4),
+  tampered body writes nothing (D2), unknown repo dropped with 204 and logged (D6)
+
+Two of those tests failed for test-harness reasons first (a mis-scoped fixture and passing a
+row where the API takes an array) — worth noting only because the API really does take an
+array, so the double had the honest signature and my call site was wrong.
+
+---
+
 # Blocked on the coordinator
 
 1. **Catalyst project ID** for this build — the handoff said `<paste>`. Needed for step 3.
