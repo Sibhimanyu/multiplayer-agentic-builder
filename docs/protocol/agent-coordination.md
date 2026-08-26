@@ -8,7 +8,7 @@ Version `0.2`. Supersedes `0.1`.
 |---|---|---|
 | 11 activity-shaped event types | 3 layers, agents see only 2 | `task_progress` prose is worthless to an agent and costs context. Context pollution from intermediate traces measurably degrades long-horizon agent performance. |
 | `contract_published` carried an OpenAPI payload | carries a **pointer** `{path, commit_sha, version}` | Catalyst `text` caps at 10,000 chars, silently mangles emoji, and gives no diff. Git gives all three for free. |
-| `seq` monotonic per project | monotonic ascending, gaps legal | Catalyst has no sequence primitive. `ROWID` is global-monotonic, which is strictly stronger than needed. |
+| `seq` monotonic per project | monotonic ascending, gaps legal | Catalyst has no sequence primitive. **`ROWID` is NOT usable** — corrected 2026-08-25 after a live probe showed it is allocated from per-shard blocks and runs backwards across INSERTs. Use a dedicated `seq bigint is_unique` column, globally allocated. See store-interface.md mandatory behaviour 4. |
 | "claim task only if status == open" | atomic insert against a unique column | Data Store has no transactions and no compare-and-set. Read-verify-write stays racy. |
 | overlapping file scope → dashboard warning | server-enforced lock, rejected at claim time | A warning nobody reads, discovered at merge. Detected at claim costs seconds; at merge it costs a rebase. |
 | polling 5s everywhere | see `store-interface.md` `subscribe` | Reads move off the most expensive primitive on the platform. |

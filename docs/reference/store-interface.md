@@ -189,6 +189,37 @@ Both implementations MUST satisfy all of these. `docs/how-to/acceptance-checklis
 3. **Append-only ledger.** No operation mutates or removes an existing event.
 4. **Ascending seq.** `readEvents` returns strictly ascending `seq`. Gaps are legal;
    reordering is not.
+
+   **`ROWID` MUST NOT be used as `seq`.** Corrected 2026-08-25 after a live probe: Catalyst
+   `ROWID` is allocated from per-shard blocks and is **not chronological across separate
+   INSERTs**. Measured in one table, one session: insert #1 got `...052001`, insert #2 got
+   `...044002` — lower. Within a single batched INSERT they are consecutive; across INSERTs
+   they go backwards.
+
+   This is silent event loss, not a cosmetic ordering issue: a reader that has consumed up to
+   cursor `052001` will never be delivered the event that landed at `044002`.
+
+   `CREATEDTIME` alone is not a substitute either — millisecond resolution, and every row of a
+   batch carries one identical timestamp, so ties break strict ascent.
+
+   **Required mechanism (Catalyst):** a dedicated `seq bigint is_unique` column, allocated
+   **globally**, not per project:
+
+   ```
+   candidate = SELECT MAX(seq) FROM events        -- no project filter
+   loop (bounded, 20 attempts):
+     INSERT ... seq = candidate + 1
+     on DUPLICATE_VALUE -> candidate = candidate + 1, retry
+   exhausted -> StoreBusyError
+   ```
+
+   Allocate globally and filter on read. Do **not** compute `MAX(seq) WHERE project_id = ?`
+   against a globally-unique column: two projects then derive the same candidate, and the
+   loser's retry recomputes the same value forever. Per-project gaps become large, which is
+   fine — gaps are already legal.
+
+   Same unique-constraint compare-and-set as `claimTask`, so it needs no new primitive.
+   Costs one extra SELECT per append; record that in G4.
 5. **Read-your-own-writes tolerance.** A caller that appends and receives `seq = N` may then
    read a snapshot reporting `seq < N`. That is **stale, not lost**. The caller MUST NOT
    retry the append. Implementations MUST NOT paper over this.
@@ -222,8 +253,8 @@ Callers see these, never backend-specific errors.
 |---|---|---|
 | `appendEvent` | Advanced I/O fn → Data Store INSERT | Firestore `add()` |
 | idempotency | `request_dedupe` table, `is_unique` key column | doc id = idempotency key |
-| `readEvents` | ZCQL `ORDER BY ROWID LIMIT o,300` | `orderBy('seq').limit(300)` |
-| `seq` source | `ROWID` (auto-increment bigint) | monotonic counter doc or write time |
+| `readEvents` | ZCQL `ORDER BY seq LIMIT o,300` | `orderBy('seq').limit(300)` |
+| `seq` source | dedicated `seq bigint is_unique` column, globally allocated. **Not `ROWID`** — see below | counter doc inside `runTransaction` |
 | `claimTask` | INSERT into `task_claims`, `task_id` is `is_unique` | `runTransaction` |
 | `acquireScope` | INSERT + glob check in the function | `runTransaction` |
 | `heartbeat` | Cache PUT, TTL 1h — **not** a Data Store UPDATE | field write on agent doc |
