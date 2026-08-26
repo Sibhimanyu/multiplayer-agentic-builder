@@ -83,19 +83,33 @@ export function capLimit(requested: number = LIMITS.events): CappedLimit {
  * backwards across inserts, so ordering by it silently skips events for any
  * reader holding a cursor. See store-interface.md mandatory behaviour 4.
  *
- * One row over the limit is requested so has_more is a fact rather than a guess.
+ * HAS_MORE, AND WHY IT NEEDS A SECOND QUERY SOMETIMES. The natural trick is to
+ * ask for one row more than the limit, so a full page proves there is more. That
+ * works below the cap and is impossible AT it: ZCQL rejects `LIMIT 0, 301`
+ * outright with "ZCQL CANNOT HAVE MORE THAN 300 ROWS in LIMIT" -- an error, not
+ * a clamp. Verified live; it is the reason this returns `needs_probe`.
+ *
+ * So: below 300, over-fetch by one and has_more is free. At exactly 300, the
+ * caller must issue `probeMoreAfter` -- one extra SELECT, and only when the page
+ * came back full, which is precisely when the answer matters.
  */
 export function selectEvents(
   project_id: string, since_seq: number, limit: number = LIMITS.events,
-): { query: string; cap: CappedLimit } {
+): { query: string; cap: CappedLimit; fetched: number; needs_probe: boolean } {
   const cap = capLimit(limit);
-  const probe = Math.min(cap.applied + 1, ZCQL_ROW_CAP + 1);
+  const fetched = Math.min(cap.applied + 1, ZCQL_ROW_CAP);
   const columns = ['seq', 'event_id', 'project_id', 'layer', 'kind', 'actor_type', 'actor_id', 'created_at', 'body'];
   const query =
     `SELECT ${columns.map(zqIdent).join(', ')} FROM events` +
     ` WHERE project_id = ${zqStr(project_id)} AND seq > ${zqInt(since_seq)}` +
-    ` ORDER BY seq LIMIT 0, ${zqInt(probe)}`;
-  return { query, cap };
+    ` ORDER BY seq LIMIT 0, ${zqInt(fetched)}`;
+  return { query, cap, fetched, needs_probe: fetched === cap.applied };
+}
+
+/** One row past a cursor. Answers has_more when over-fetching was not possible. */
+export function probeMoreAfter(project_id: string, seq: number): string {
+  return `SELECT seq FROM events WHERE project_id = ${zqStr(project_id)}` +
+    ` AND seq > ${zqInt(seq)} ORDER BY seq LIMIT 0, 1`;
 }
 
 /** `SELECT MAX(seq) FROM events` -- globally, no project filter. See order 0005. */

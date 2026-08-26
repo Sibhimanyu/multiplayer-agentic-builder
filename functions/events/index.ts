@@ -13,7 +13,7 @@
 import type { Event, Layer, ProjectId, Seq } from '../../shared/store/types.ts';
 import { LIMITS } from '../../shared/store/types.ts';
 import type { Logger } from '../../shared/log.ts';
-import { capLimit, selectEvents, unwrapRows } from '../../catalyst/lib/zcql.ts';
+import { capLimit, probeMoreAfter, selectEvents, unwrapRows } from '../../catalyst/lib/zcql.ts';
 import type { Principal } from '../_lib/auth.ts';
 import { requireProject } from '../_lib/auth.ts';
 import type { HttpResponse } from '../_lib/http.ts';
@@ -31,11 +31,21 @@ export async function handleEvents(
   requireProject(principal, params.project_id);
 
   const cap = capLimit(params.limit ?? LIMITS.events);
-  const { query } = selectEvents(params.project_id, params.since_seq, cap.applied);
+  const { query, needs_probe } = selectEvents(params.project_id, params.since_seq, cap.applied);
   const rows = unwrapRows<Record<string, unknown>>(await port.query(query), 'events');
 
-  const over = rows.length > cap.applied;
-  const page = over ? rows.slice(0, cap.applied) : rows;
+  const page = rows.length > cap.applied ? rows.slice(0, cap.applied) : rows;
+  let over = rows.length > cap.applied;
+
+  // At the 300 cap the over-fetch trick is unavailable, because ZCQL rejects a
+  // LIMIT above 300 rather than clamping it. One extra SELECT, and only when the
+  // page came back full.
+  if (!over && needs_probe && page.length === cap.applied && page.length > 0) {
+    const last = Number(page[page.length - 1].seq);
+    const more = unwrapRows<Record<string, unknown>>(
+      await port.query(probeMoreAfter(params.project_id, last)), 'events');
+    over = more.length > 0;
+  }
 
   if (cap.capped || over) {
     log.warn('store.events.capped', 'readEvents hit the row cap', {

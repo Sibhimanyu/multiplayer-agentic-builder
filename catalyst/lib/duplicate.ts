@@ -50,14 +50,32 @@ export function parseDuplicateColumn(message: string): string | null {
   return m ? m[1] : null;
 }
 
-/** True when a Data Store error payload is a unique-constraint violation. */
+/**
+ * True when a Data Store error is a unique-constraint violation.
+ *
+ * TWO SHAPES, because the SDK reshapes the REST payload. The REST API returns
+ *
+ *   {"status":"failure","data":{"message":"Duplicate value for ...",
+ *                               "error_code":"DUPLICATE_VALUE"}}
+ *
+ * but zcatalyst-sdk-node rejects with a PLAIN OBJECT that renames the field and
+ * drops the wrapper (see its utils/api-request.js `rejectWithContext`):
+ *
+ *   {statusCode: 400, code: "DUPLICATE_VALUE", message: "Duplicate value for ..."}
+ *
+ * Code written against the documented REST shape therefore does not match what
+ * the SDK throws. Found by deploying: the claim path returned a generic 400
+ * instead of {ok:false, owner} because `error_code` was absent. Note the message
+ * does NOT contain the literal string "DUPLICATE_VALUE" either, so matching on
+ * the message is not a fallback.
+ */
 export function isDuplicateValue(payload: unknown): boolean {
   if (payload === null || typeof payload !== 'object') return false;
   const data = (payload as { data?: unknown }).data;
   const holder = (data !== null && typeof data === 'object' ? data : payload) as {
-    error_code?: unknown;
+    error_code?: unknown; code?: unknown;
   };
-  return holder.error_code === DUPLICATE_VALUE;
+  return holder.error_code === DUPLICATE_VALUE || holder.code === DUPLICATE_VALUE;
 }
 
 /**

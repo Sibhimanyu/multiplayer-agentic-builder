@@ -44,8 +44,27 @@ export function header(req: HttpRequest, name: string): string | undefined {
   return v;
 }
 
-/** Bearer token, or null. Never falls back to a query parameter -- tokens do not belong in URLs. */
-export function bearerToken(req: HttpRequest): string | null {
+/**
+ * The agent token header.
+ *
+ * `X-Agent-Token`, NOT `Authorization`. Discovered by deploying: the Catalyst API
+ * Gateway intercepts ANY `Authorization` header and validates it as a Zoho OAuth
+ * token before the function runs. `Authorization: Bearer <agent_token>` comes
+ * back as `{"error_code":"INVALID_TOKEN","message":"invalid oauth token"}` from
+ * the platform, and any other scheme as `AUTHENTICATION_FAILURE` -- neither of
+ * which the function ever sees, so no amount of handler code can fix it.
+ *
+ * The header is therefore reserved, and the obvious design is unavailable.
+ */
+export const AGENT_TOKEN_HEADER = 'x-agent-token';
+
+export function agentToken(req: HttpRequest): string | null {
+  const direct = header(req, AGENT_TOKEN_HEADER);
+  if (direct && direct.trim().length > 0) return direct.trim();
+
+  // Accepted only so the same client works against a host that does not reserve
+  // Authorization. On Catalyst this branch is unreachable: the gateway rejects
+  // the request before the function is invoked.
   const auth = header(req, 'authorization');
   if (!auth) return null;
   const m = /^Bearer\s+(\S+)$/i.exec(auth.trim());
@@ -64,7 +83,7 @@ export function withCors(
   const out = { ...headers };
   const already = Object.keys(existing).some((k) => k.toLowerCase() === 'access-control-allow-origin');
   if (!already) out['Access-Control-Allow-Origin'] = origin;
-  out['Access-Control-Allow-Headers'] = 'Authorization, Content-Type, X-Idempotency-Key';
+  out['Access-Control-Allow-Headers'] = 'X-Agent-Token, Content-Type, X-Idempotency-Key';
   out['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS';
   return out;
 }

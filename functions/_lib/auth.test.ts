@@ -11,7 +11,7 @@ import {
   hashToken, requireMergePermission, requireProject, resolvePrincipal, tokenHashMatches,
 } from './auth.ts';
 import type { AgentRow, AuthPort, RoleRow } from './auth.ts';
-import { rejectServerOwnedFields, bearerToken, errorResponse, withCors } from './http.ts';
+import { rejectServerOwnedFields, agentToken, errorResponse, withCors } from './http.ts';
 import { HttpError } from './http.ts';
 import { StoreAuthError, StoreBusyError, StoreError, StoreOfflineError } from '../../shared/store/errors.ts';
 
@@ -196,11 +196,27 @@ describe('error mapping makes the client do the right thing', () => {
 });
 
 describe('request helpers', () => {
-  test('a bearer token is read from the Authorization header only', () => {
+  test('the agent token is read from X-Agent-Token, because Authorization is reserved', () => {
+    // Found by deploying: the Catalyst gateway validates ANY Authorization
+    // header as a Zoho OAuth token and rejects the request before the function
+    // runs. The obvious design is simply unavailable on this platform.
+    const req = { method: 'POST', path: '/claim', headers: { 'x-agent-token': TOKEN } };
+    assert.equal(agentToken(req), TOKEN);
+    assert.equal(agentToken({ ...req, headers: {} }), null);
+    assert.equal(agentToken({ ...req, headers: { 'x-agent-token': '   ' } }), null, 'blank is not a token');
+  });
+
+  test('Authorization: Bearer still works off-Catalyst, for portability', () => {
     const req = { method: 'POST', path: '/claim', headers: { authorization: `Bearer ${TOKEN}` } };
-    assert.equal(bearerToken(req), TOKEN);
-    assert.equal(bearerToken({ ...req, headers: {} }), null);
-    assert.equal(bearerToken({ ...req, headers: { authorization: TOKEN } }), null, 'must require the Bearer scheme');
+    assert.equal(agentToken(req), TOKEN);
+    assert.equal(agentToken({ ...req, headers: { authorization: TOKEN } }), null, 'must require the Bearer scheme');
+  });
+
+  test('X-Agent-Token wins when both are present', () => {
+    assert.equal(agentToken({
+      method: 'POST', path: '/claim',
+      headers: { 'x-agent-token': TOKEN, authorization: 'Bearer other' },
+    }), TOKEN);
   });
 
   test('CORS never duplicates an origin Catalyst already set', () => {

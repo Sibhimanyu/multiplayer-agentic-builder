@@ -40,6 +40,29 @@ describe('DUPLICATE_VALUE parsing', () => {
     assert.equal(parseDuplicateColumn(''), null);
   });
 
+  test('recognises the SDK reject shape, which renames error_code to code', () => {
+    // Verbatim from zcatalyst-sdk-node utils/api-request.js rejectWithContext.
+    // Missing this cost a live 400 where {ok:false, owner} was required.
+    const sdkReject = {
+      statusCode: 400,
+      code: 'DUPLICATE_VALUE',
+      message: 'Duplicate value for claim_key. Please give a different value',
+    };
+    assert.equal(isDuplicateValue(sdkReject), true);
+    const err = toDuplicateValueError(sdkReject);
+    assert.ok(err instanceof DuplicateValueError);
+    assert.equal(err.column, 'claim_key');
+  });
+
+  test('the SDK message does NOT contain the literal error code', () => {
+    // So matching on the message is not a viable fallback -- the field is the
+    // only signal.
+    assert.equal(
+      'Duplicate value for claim_key. Please give a different value'.includes('DUPLICATE_VALUE'),
+      false,
+    );
+  });
+
   test('recognises the failure payload shape', () => {
     assert.equal(isDuplicateValue(VERBATIM_PAYLOAD), true);
     assert.equal(isDuplicateValue({ status: 'failure', data: { error_code: 'INVALID_QUERY' } }), false);
