@@ -17,7 +17,8 @@
     "territory": "cd .. && scripts/territory-check.sh",
     "check": "cd .. && scripts/territory-check.sh && scripts/xcheck.sh",
     "test:conformance": "cd .. && scripts/emulator.sh 'scripts/run-tests.sh --test-concurrency=1 --test-timeout=900000 firebase/store.test.ts'",
-    "check:live-rules": "node live-rules-check.mjs"
+    "check:live-rules": "node live-rules-check.mjs",
+    "measure": "cd .. && node firebase/measure.ts"
   },
   "dependencies": {
     "firebase-admin": "^13.0.0",
