@@ -228,8 +228,10 @@ test('D5.5 check_suite completed -> ci_passed / ci_failed', () => {
   if (fail.kind === 'event') assert.equal(fail.event.kind, 'ci_failed');
 
   // A cancelled run is not a failure. A red badge for a cancelled run trains people to
-  // ignore red badges.
-  for (const conclusion of ['neutral', 'cancelled', 'skipped', 'stale', null]) {
+  // ignore red badges. `timed_out` is included per Order 0006: GitHub renders it red, so
+  // mapping it would be defensible, but only success and failure map in EITHER build and
+  // divergence on a real payload is worse than a quiet board.
+  for (const conclusion of ['neutral', 'cancelled', 'skipped', 'stale', 'timed_out', 'action_required', null]) {
     const other = mapDelivery(
       'check_suite',
       { action: 'completed', check_suite: { conclusion, head_branch: BRANCH } },

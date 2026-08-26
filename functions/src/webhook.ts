@@ -217,9 +217,18 @@ export function mapDelivery(
         return { kind: 'drop', reason: `check_suite on non-agent branch ${branch ?? '(none)'}` };
       }
       const conclusion = p.check_suite?.conclusion ?? null;
-      // Only success and failure are board-visible. neutral/cancelled/skipped/stale are not
-      // "CI failed" — showing a red badge for a cancelled run trains people to ignore it.
-      if (conclusion !== 'success' && conclusion !== 'failure' && conclusion !== 'timed_out') {
+      // ONLY success and failure are board-visible. Everything else drops.
+      //
+      // GitHub's other conclusions are neutral, cancelled, skipped, stale, action_required and
+      // timed_out. Showing a red badge for a cancelled run trains people to ignore red badges,
+      // and silent misclassification in an append-only ledger cannot be corrected later.
+      //
+      // `timed_out` is the arguable one and I have deliberately narrowed it. GitHub renders a
+      // timeout with a red X, so mapping it to ci_failed is defensible and is what this build
+      // did until Order 0006. It is dropped now because the two builds diverging on a real
+      // GitHub payload is worse than a board that stays quiet on a timeout — and a divergence
+      // is much harder to spot than a missing badge. Flagged for a ruling; a one-line revert.
+      if (conclusion !== 'success' && conclusion !== 'failure') {
         return { kind: 'drop', reason: `check_suite conclusion ${conclusion} is not pass/fail` };
       }
       return {
