@@ -22,6 +22,8 @@ Catalyst a composite-key scheme and Firestore nothing" is the finding. Averaging
 | 13 | Timestamp fidelity | `datetime` columns **reject RFC3339**, the format the protocol specifies. Only `YYYY-MM-DD HH:MM:SS` is accepted, reads return a `.mmm` suffix that is not accepted back, and **milliseconds are dropped**. Needs a codec, and the ledger stores second resolution. | Native millisecond timestamps. | probed |
 | 14 | Error shape | `zcatalyst-sdk-node` renames `error_code` to `code` and drops the documented REST wrapper, and the message does not contain the code — so code written against the documented payload silently fails to match, and message matching is not a fallback. | SDK errors carry stable structured codes. | probed |
 | 15 | Paging | ZCQL **rejects** `LIMIT 0, 301` rather than clamping, killing the over-fetch-by-one trick at exactly the default page size. `has_more` costs an extra query per full page. | `limit(n+1)` works. | probed |
+| 17 | **Service activation** | Several services require a **one-time browser session per project** before their API works at all. Stratus: `Create_Bucket` returns `OPERATION_NOT_ALLOWED` — *"User needs to be in session when accessing Stratus for the first time"* — while `Get_All_Buckets` succeeds and returns `[]`, so reads are permitted and only first-time creation is gated. There is **no `stratus` command in the CLI**, so no non-browser path exists. Documented for Slate, Signals and SmartBrowz too, so this is a platform pattern rather than one service's quirk. **Total manual gates for this route: 3** — project creation, Stratus activation, and Slate activation. | None. `firebase projects:create` then `firebase deploy`. | probed live |
+| 18 | Server-enforced file-scope locks | **Cannot be made atomic.** Without transactions, the glob-intersection check and the lock INSERT are separate operations, and `is_unique` on the lock key cannot stop two agents with *overlapping but non-identical* globs both passing the pre-check in the same instant. Mitigated by re-reading after insert and a **deterministic tie-break** (lower `lock_key` wins) so exactly one racer concludes it lost — a naive "on conflict, back off" would have both yield and **neither** hold the scope, which is worse than the race. A residual window remains that can be narrowed but not eliminated. | One `runTransaction`. Genuinely atomic. | probed live |
 | 16 | Provisioning | **No `project:create` exists.** `iac:import` needs a zip from `iac:pack`, which needs a template from an asynchronous `iac:export` that delivers to the console. The MCP has no create-project tool. Console only. Then 2 CLI commands, 18 API calls (2 failing), ~95s, zero browser steps for everything after the project itself. | One CLI command, but the project still needed a console visit, and the billing link cannot be done by any CLI. | measured |
 | 5 | Atomic append + idempotency together | Exists only because there are no transactions. `seq` allocation needs a retry loop, so the dedupe row cannot be written inside it, and the write order must be event-first-then-dedupe with orphan recovery on crash. | Nothing. `runTransaction` makes both writes atomic. | dry-run double: 12 concurrent appends, 1 passed, 11 failed |
 | 6 | Presence / heartbeat | Cannot use a durable row UPDATE — the free tier is **1,000 UPDATEs per month**, which a 20s heartbeat exhausts in 5.6 hours. Requires Cache with a TTL, where key expiry *is* the staleness signal. | A field write on the agent doc. 20,000 writes/day free. | free-tier arithmetic |
@@ -29,6 +31,19 @@ Catalyst a composite-key scheme and Firestore nothing" is the finding. Averaging
 | 8 | Durable text fidelity | `varchar` silently clamps at 255; `text` caps at 10,000; **emoji and 4-byte UTF-8 are silently stored as `?`**. Requires a sanitiser on every durable write. | Full UTF-8, 1 MiB per document. | product audit |
 | 9 | Sharing code across deploy units | Each function directory deploys independently, so `functions/_lib` must be vendored per directory at package time, with a drift guard and import-depth rewriting. | One deployable. | build |
 | 10 | Spending safety | Transparent per-operation pricing with a $5/project floor. Cannot run away. | **No spending cap by default** on Blaze. Requires a manually-set budget alert, which `firebase-tools` cannot create — Cloud Billing budgets are console-only. | build |
+
+## The largest asymmetry so far
+
+Entry 18 is bigger than the composite-key scheme in entry 2, and the difference in kind matters
+more than the difference in size.
+
+Entry 2 cost Catalyst a **naming convention** — annoying, fully solvable, provably correct once
+built. Entry 18 costs it a **residual correctness window** that can be narrowed but not closed,
+because the primitive required to close it does not exist on the platform. Firestore closes it
+with one `runTransaction`.
+
+When the final comparison is written, do not flatten "needed a workaround" and "cannot be made
+correct" into the same column.
 
 ## Corrections made against Catalyst's favour, and against it
 
