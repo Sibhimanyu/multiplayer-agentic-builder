@@ -416,6 +416,79 @@ precisely the invisible row loss the ROWID bug would have caused.
 
 ---
 
+# Step 4b — the GitHub webhook signature path (D1, D2, D3, D5, D6)
+
+`catalyst/lib/webhook.ts` + 27 tests. No project ID needed; this is pure verification and
+mapping logic, so it could be built while the ID is outstanding.
+
+## The raw body is the whole point
+
+HMAC is computed over the **raw request bytes**, never over a re-serialised object.
+`JSON.parse` followed by `JSON.stringify` does not round-trip — key order, unicode escapes
+and number formatting all shift — so signing the round-tripped form silently stops matching
+for reasons that look like a misconfigured secret.
+
+There is a test that proves this rather than asserting it: a hand-written raw body (not
+`JSON.stringify` output) carrying insignificant whitespace, a trailing zero (`2.50`) and a
+`\u00e9` escape. Round-tripped, it verifies **false**.
+
+Writing that test caught a bug in the test itself first: the original raw body *was*
+`JSON.stringify` output, so the round trip was a no-op and the test passed for the wrong
+reason. The premise is now asserted explicitly (`the round trip must actually change the
+bytes`) so it cannot silently degrade again.
+
+This is also the concrete reason the stack requires **Advanced I/O functions** — the only
+Catalyst function type that can hand you the raw body. Any JSON middleware that touches the
+body before the verifier breaks D1 permanently.
+
+## Timing-safe, and the malformed-input trap
+
+`crypto.timingSafeEqual`, never `===` — a `===` on a hex digest leaks the length of the
+matching prefix, which is enough to forge a signature one byte at a time. D3's evidence is
+"code review + test", so the test is mechanical: it reads the module source and fails if
+`timingSafeEqual` is absent or if digests are compared with `===`.
+
+The trap underneath: **`timingSafeEqual` throws on a length mismatch**, so an attacker
+sending `sha256=ab` would turn the verifier into a 500. The header is therefore shape-checked
+(`/^[0-9a-f]{64}$/i`) before any decoding, and seven malformed headers are tested to confirm
+none of them reaches the comparison.
+
+## D5 mapping, and what is deliberately NOT mapped
+
+| GitHub | Ledger kind |
+|---|---|
+| `push` | `branch_pushed` |
+| `pull_request` `opened` / `reopened` | `pr_opened` |
+| `pull_request` `synchronize` | `branch_pushed` |
+| `pull_request` `closed` **with `merged: true`** | `merged` |
+| `check_suite` `completed`, conclusion `success` / `failure` | `ci_passed` / `ci_failed` |
+
+Two deliberate non-mappings, both of which would be wrong in a way a user would notice:
+
+- **A PR closed without merging is dropped, not mapped to `merged`.** `merged` is the only
+  field distinguishing an abandon from a merge, and a board showing "merged" for an
+  abandoned PR is worse than showing nothing.
+- **An inconclusive `check_suite` is dropped, not shown as failed.** `neutral`, `cancelled`,
+  `skipped`, `stale` and `timed_out` are not verdicts. Mapping them to `ci_failed` would put
+  a red badge on a task whose CI never ran.
+
+Branch convention pinned here, since the docs require branch-to-task mapping without fixing
+a format: **`<branch_prefix>/<task_id>`**, task id is the last segment, must match
+`task_[a-z0-9][a-z0-9_-]*`. Lowercase only — the unique constraint is case-sensitive (P4).
+
+## D6: nothing throws
+
+Every unmappable case returns `{ok: false, reason}` for the caller to log and answer 204.
+A throw becomes a 500, and a 500 teaches GitHub to retry and eventually disable the hook.
+Tested with hostile payloads: no repository, a string where an object belongs, a null
+`pull_request`, an empty event name.
+
+D4's replay defence is keyed on `X-GitHub-Delivery` (`gh:<delivery_id>`), which GitHub reuses
+across retries, so a replay is absorbed by the same idempotency path as any other duplicate
+append. The end-to-end D4 assertion needs a reachable ledger and is not claimed yet.
+
+---
+
 # Blocked on the coordinator
 
 1. **Catalyst project ID** for this build — the handoff said `<paste>`. Needed for step 3.
