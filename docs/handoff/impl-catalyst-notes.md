@@ -334,6 +334,88 @@ request, not something to change unilaterally.
 
 ---
 
+# Step 3 — the nine tables, declared and constraint-tested
+
+`catalyst/schema/tables.ts` declares all nine tables from build order step 3. Declarative
+rather than clicked, so the same definitions can be typechecked, asserted against the
+platform's constraints, and replayed through `Create_Table` / `Create_Column` when a project
+ID arrives. Nothing has been created in a cloud — that still needs the project ID.
+
+`catalyst/schema/tables.test.ts` asserts the schema against the constraints rather than
+against my intentions. **It immediately caught two real defects in my own first draft:**
+
+1. **`events` had two unique columns**, `seq` and `event_id`. Two unique columns means an
+   INSERT can fail two ways and the seq allocator, which retries only on `seq`, cannot tell
+   them apart. `event_id` is minted *from* `seq`, so `unique(seq)` already implies it.
+   Dropped the redundant constraint.
+2. **`events.seq` tripped the composite-key rule** — correctly, since the rule exists to catch
+   exactly that shape. `seq` is the deliberate exception: it is globally allocated by design
+   (order 0005). Now an explicit, documented allowlist entry rather than an unstated exception.
+
+## The trap that shaped half the schema: `is_unique` is GLOBAL, not per project
+
+A unique column is unique across the whole **table**, not per project. So "one claim per task
+per project" cannot be `unique(task_id)` — two projects that both have a task called
+`task_api` would fight over one row, and the second project could never claim its own task.
+
+Every per-project uniqueness constraint is therefore a **composite key column**:
+
+| Table | Unique column | Shape |
+|---|---|---|
+| `task_claims` | `claim_key` | `<project_id>:<task_id>` |
+| `scope_locks` | `lock_key` | `<project_id>:<agent_id>:<task_id>` |
+| `tasks` | `task_key` | `<project_id>:<task_id>` |
+| `members` | `member_key` | `<project_id>:<zuid>` |
+| `roles` | `role_key` | `<project_id>:<role_slug>` |
+| `events` | `seq` | globally allocated on purpose (0005) |
+| `request_dedupe` | `idempotency_key` | uuid v4, already globally unique |
+| `agents` | `agent_id` | server-minted, already globally unique |
+| `github_links` | `repo_full_name` | `owner/repo`, already globally unique |
+
+`compositeKey()` rejects a part containing a colon, because `"a:b" + "c"` and `"a" + "b:c"`
+would otherwise produce the same key and let two different tasks collide on one claim row.
+
+This is the same class of bug as the `seq` deadlock, and it is a real G9 entry: Firestore
+needs none of this, because a transaction on a document path is naturally scoped.
+
+## Zero UPDATEs by design
+
+The free tier allows **1,000 UPDATEs per month**, so nothing is designed to be updated:
+
+- `tasks` holds the task *definition*, written once. Status, branch, PR and CI are folded
+  from the ledger and never stored — the schema test enforces that `tasks` has no `status`,
+  `claimed_by`, `branch`, `pr_url`, `pr_number`, `ci` or `updated_at` column.
+- Presence is a Cache key with a TTL, not a row. The test enforces that no table has a
+  `heartbeat` column and no table is named for presence.
+- `events` is append-only; the test rejects any column implying mutation.
+
+Steady-state UPDATE count for this system is zero.
+
+# Step 4a — the ZCQL layer
+
+`catalyst/lib/zcql.ts`. Two things here are load-bearing.
+
+**Injection.** The Data Store API takes a query *string*. There is **no parameter binding**,
+and `project_id` / `task_id` / cursor values arrive from HTTP request bodies, so the escaper
+is the entire boundary between a request and the ledger. `zqStr` doubles single quotes and
+rejects backslashes and control characters outright rather than reasoning about them.
+Identifiers are allowlisted, never escaped — an identifier that needs escaping is a bug, not
+a value. Tested with real payloads (`proj' OR '1'='1`, a `DELETE`-appending tail), asserting
+no unpaired quote survives, not merely that "a quote is present".
+
+**The 300-row cap.** `selectEvents` requests one row *over* the limit so `has_more` is a
+measured fact rather than a guess, and reports the cap to the caller instead of truncating
+silently. `ORDER BY seq`, never `ROWID` — with a test that fails if `ROWID` ever reappears in
+that statement.
+
+`unwrapRows` centralises the `{ "<table_name>": {...} }` result wrapping the probe found. A
+row keyed by the wrong table **throws rather than being skipped**: skipping it would be
+precisely the invisible row loss the ROWID bug would have caused.
+
+65 tests across this workspace, all green. Shared suite still 19/19.
+
+---
+
 # Blocked on the coordinator
 
 1. **Catalyst project ID** for this build — the handoff said `<paste>`. Needed for step 3.
