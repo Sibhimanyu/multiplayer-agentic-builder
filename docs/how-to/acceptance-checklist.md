@@ -121,6 +121,18 @@ Record real numbers. These are the point of building both.
 | G9 | Every platform constraint hit, with the workaround | written list |
 | G10 | Would you choose this again? One paragraph, written before seeing the other build's number | prose |
 
+### Equalise the region, and record that you did
+
+**Latency comparisons are invalid unless both routes are the same distance from the machine
+running them.** Firebase was deliberately placed in `asia-south1` rather than accepting a US
+multi-region default, because this machine and the Catalyst DC (`catalystserverless.in`) are both
+in India. A US default would have added roughly 200 ms to every Firebase row and **flattered
+Catalyst's figures**.
+
+Region choice is permanent on both platforms and it determines G1 and G2. State yours explicitly
+in your results file. A comparison where one route is 200 ms further away is not measuring the
+platform, it is measuring the map.
+
 ### Measurement discipline
 
 **Do not report a single-run figure as a threshold.** Contention limits are probabilistic, not
@@ -260,6 +272,28 @@ identically either way.
 The burden is on whoever substitutes: name what would change, and show that it does not. Record
 it either way. If the answer is "I am not sure whether this changes a measurement", the answer is
 no — stop and ask.
+
+## The unifying rule: unverifiable is not true
+
+Three separately-discovered rules have converged, so state the general form once.
+
+- **Missing is drift** — a guard must treat *absent* as a violation, not as "nothing to check".
+- **A permissive default is invisible until it misfires** — an allowlist needs an explicit
+  default-drop, tested with a value nobody has invented.
+- **Tooling that reports success from an unverified premise** — three real cases, all failing
+  permissively:
+  - a provisioning script concluded "the name is free" from a **failed parse**
+  - a test runner read `fail` and **ignored `cancelled`**
+  - an emulator readiness probe asked "is anything listening on 8080" rather than "is **my**
+    backend listening", so overlapping runs silently shared one backend
+
+**The general form: any check that cannot distinguish "verified true" from "could not verify"
+must fail.**
+
+Not warn, not default, not proceed. The failure mode is always the same shape — the check reports
+success, the premise was never established, and nothing surfaces until something downstream
+depends on it. Applies to guards, allowlists, readiness probes, parsers, and any script whose exit
+code is read by something else.
 
 ## Guard rule: missing is drift
 
