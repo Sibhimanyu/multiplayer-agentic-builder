@@ -23,10 +23,24 @@ MODE="dry-run"
 [ "${1:-}" = "--confirm" ] && MODE="confirm"
 [ "${1:-}" = "--dry-run" ] && MODE="dry-run"
 
+# Provisioning cost is G-data (order 0014), so it is measured rather than estimated afterwards.
+START_EPOCH="$(date +%s)"
+CLI_COMMANDS=0
+CONSOLE_STEPS=0   # steps this script CANNOT do; counted, not performed
+FAILURES=()
+
 say()  { printf '%s\n' "$*"; }
 step() { printf '\n== %s\n' "$*"; }
 run() {
-  if [ "$MODE" = "confirm" ]; then say "+ $*"; "$@"; return $?; fi
+  CLI_COMMANDS=$((CLI_COMMANDS + 1))
+  if [ "$MODE" = "confirm" ]; then
+    say "+ $*"
+    if ! "$@"; then
+      FAILURES+=("$*")
+      return 1
+    fi
+    return 0
+  fi
   say "  would run: $*"; return 0
 }
 
@@ -84,10 +98,28 @@ say "  target project and repo are both free"
 # ---- create ------------------------------------------------------------------------
 
 step "1/4  create the GCP+Firebase project (lands on Spark)"
-run firebase projects:create "$PROJECT_ID" --display-name "$DISPLAY_NAME" || {
-  say "FAIL: projects:create failed. If the ID is taken globally, set FB_PROJECT_ID and retry."
+# Project IDs are GLOBALLY unique across all of Google Cloud, not per-account, so the preferred
+# name can be taken by a stranger. Order 0014: append -1, then -2, and report the exact ID.
+CREATED_ID=""
+for suffix in "" "-1" "-2"; do
+  CANDIDATE="${PROJECT_ID}${suffix}"
+  say "  trying: $CANDIDATE"
+  if run firebase projects:create "$CANDIDATE" --display-name "$DISPLAY_NAME"; then
+    CREATED_ID="$CANDIDATE"
+    break
+  fi
+  say "  '$CANDIDATE' unavailable; trying the next suffix"
+done
+
+if [ "$MODE" = "confirm" ] && [ -z "$CREATED_ID" ]; then
+  say "FAIL: could not create the project as $PROJECT_ID, -1 or -2."
+  say "  Not inventing a fourth name: the human has to FIND this project among eight unrelated"
+  say "  ones to attach billing, so an unpredictable id is worse than stopping. Pick one and"
+  say "  pass FB_PROJECT_ID=<id>."
   exit 1
-}
+fi
+[ -z "$CREATED_ID" ] && CREATED_ID="$PROJECT_ID"   # dry-run reporting
+PROJECT_ID="$CREATED_ID"
 
 step "2/4  select it locally"
 run firebase use "$PROJECT_ID"
@@ -100,7 +132,7 @@ run bash -c "cd client && npm run build"
 run firebase deploy --only hosting --project "$PROJECT_ID"
 
 step "4/4  create the demo repo (OURS, not shared -- see order 0013)"
-run gh repo create "$REPO" --private --description "Demo target, Firebase route"
+run gh repo create "$REPO" --private --description "Demo target for the Firebase route bake-off"
 
 # ---- record ------------------------------------------------------------------------
 
@@ -115,6 +147,25 @@ if [ "$MODE" = "confirm" ]; then
   say ""
   say "recorded in $LOG"
 fi
+
+ELAPSED=$(( $(date +%s) - START_EPOCH ))
+CONSOLE_STEPS=2   # Blaze link + budget alert. Neither is automatable; see below.
+
+step "PROVISIONING COST (G-data, order 0014)"
+say "  wall clock:      ${ELAPSED}s"
+say "  CLI commands:    $CLI_COMMANDS"
+say "  console steps:   $CONSOLE_STEPS (Blaze link, budget alert -- neither automatable)"
+say "  failed commands: ${#FAILURES[@]}"
+for f in ${FAILURES+"${FAILURES[@]}"}; do say "    - $f"; done
+
+step "THE PROJECT ID -- this is the line that matters"
+say ""
+say "    ############################################################"
+say "    #  FIREBASE PROJECT ID:  $PROJECT_ID"
+say "    ############################################################"
+say ""
+say "  Order 0014: report this verbatim. The account holds eight unrelated projects and the"
+say "  human has to find THIS one in the console to attach billing."
 
 step "OUTSTANDING — a human must do this; no CLI can"
 say "  Cloud Functions need Blaze, and neither firebase-tools nor gcloud (not installed) can"
