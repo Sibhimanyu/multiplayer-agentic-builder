@@ -13,10 +13,16 @@
 import type { AgentId, ClaimResult, ProjectId, TaskId } from '../../shared/store/types.ts';
 import { DuplicateValueError } from '../../catalyst/lib/duplicate.ts';
 import { compositeKey } from '../../catalyst/schema/tables.ts';
+import type { Logger } from '../../shared/log.ts';
 import type { Principal } from '../_lib/auth.ts';
 import { requireProject } from '../_lib/auth.ts';
 import type { HttpResponse } from '../_lib/http.ts';
 import { json, rejectServerOwnedFields, requireString } from '../_lib/http.ts';
+
+export interface ClaimReleasePort extends ClaimPort {
+  /** Delete the claim row. Called only after ownership has been confirmed. */
+  deleteClaim(claim_key: string): Promise<void>;
+}
 
 export interface ClaimPort {
   /** INSERT into task_claims. Throws DuplicateValueError on claim_key collision. */
@@ -62,4 +68,41 @@ export async function handleClaim(
     // 200, not 409: losing is a normal outcome.
     return json(200, { ok: false, owner: owner.agent_id, claimed_at: owner.claimed_at } satisfies ClaimResult);
   }
+}
+
+/**
+ * Release a claim. Idempotent, and releasing a task you do NOT own is a no-op
+ * rather than an error -- store-interface.md is explicit about that.
+ *
+ * The ownership check is a read followed by a delete, which is not atomic. That is
+ * acceptable here in a way it is not for acquiring: the only race is with the
+ * owner's own concurrent release or with the reaper, and both are trying to reach
+ * the same end state. Nothing is lost if they both succeed.
+ */
+export async function handleReleaseClaim(
+  port: ClaimReleasePort, principal: Principal, body: unknown, log: Logger,
+): Promise<HttpResponse> {
+  rejectServerOwnedFields(body);
+  const project_id = requireString(body, 'project_id');
+  const task_id = requireString(body, 'task_id');
+  requireProject(principal, project_id);
+
+  const claim_key = claimKeyFor(project_id, task_id);
+  const existing = await port.findClaim(claim_key);
+
+  if (!existing) {
+    // Already gone. Idempotent by design: a retried release must not fail.
+    return json(200, { ok: true, released: false, reason: 'no_claim' });
+  }
+  if (existing.agent_id !== principal.agent_id) {
+    // A no-op, NOT an error. An agent that has lost its claim to the reaper and
+    // then tries to release it should not see a failure it cannot act on.
+    log.info('claim.release_not_owner', 'release ignored, task is owned by another agent', {
+      project_id, task_id, requested_by: principal.agent_id, owner: existing.agent_id,
+    });
+    return json(200, { ok: true, released: false, reason: 'not_owner' });
+  }
+
+  await port.deleteClaim(claim_key);
+  return json(200, { ok: true, released: true });
 }

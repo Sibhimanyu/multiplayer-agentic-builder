@@ -1238,3 +1238,64 @@ free seq, correct but expensive. The reaper had no retry, so it failed loudly. A
 made the same class of bug invisible in one place and fatal in another; the loud one is what
 got it found. Worth remembering that the append path's correctness was never evidence its
 `MAX(seq)` read worked.
+
+---
+
+# Step 7 — `catalyst/store/catalyst.ts`. Eight of ten operations working.
+
+`CoordinationStore` over the deployed function. Eight operations work against the real
+backend; `readSnapshot` and `subscribe` throw a named `NotProvisionedError`.
+
+## Why they throw instead of falling back
+
+Folding the ledger client-side would have worked. That is precisely the problem: it would
+report a latency for a read path that is **not the one under test**, and route C1's entire
+claim is about that path. A `subscribe` that fired once with an empty `Snapshot` would let A10
+pass against fabricated state, which is worse than not implementing it.
+
+`NotProvisionedError` is a distinct type rather than a generic `StoreError` so a caller can
+tell "this capability was never provisioned" from "this call failed", and
+`UNPROVISIONED_OPERATIONS` is exported so a harness reports rather than guesses. Neither
+operation makes a network call, so nothing can look like it half-worked.
+
+## Also added: `/claim/release`
+
+`releaseTask` had no endpoint. Verified live end to end:
+
+```
+claim            -> {"ok":true}
+release          -> {"ok":true,"released":true}
+release again    -> {"ok":true,"released":false,"reason":"no_claim"}   idempotent
+reclaim          -> {"ok":true}                                        F12's mechanism
+```
+
+Releasing a task you do not own is a **no-op, not an error** — an agent whose claim the reaper
+already took should not see a failure it cannot act on. The ownership read-then-delete is not
+atomic, and that is acceptable here in a way it is not for *acquiring*: the only racers are the
+owner's own concurrent release and the reaper, and both are trying to reach the same state.
+
+## The status mapping is the whole contract with the retry policy
+
+| HTTP | Becomes | Because |
+|---|---|---|
+| 401 / 403 | `StoreAuthError` | the CLI **stops**; retrying a revoked token burns quota forever |
+| 429 | `StoreBusyError` + `Retry-After` | backs off with jitter |
+| 5xx | `StoreOfflineError` | queues to the outbox, keeps working |
+| other 4xx | `StoreError` | a bad request is not a server fault |
+| transport failure | `StoreOfflineError` | decides whether the write is **queued or discarded** |
+
+Getting one of these wrong is worse than failing outright: a retried 401 loops forever, an
+un-retried 429 drops a write. 22 tests drive it through an injected `fetch`, so the mapping is
+verified without spending quota.
+
+Three wire details are asserted rather than trusted: the token is in `X-Agent-Token` and
+`Authorization` is **absent** (the gateway would eat the request), the idempotency key is a
+header not a body field, and **`agent_id` is never sent at all** — it stays in the signature
+only because the interface is shared with a backend where the caller does supply it.
+
+## What the conformance run still needs
+
+A1–A6, A12, A14, A15 are reachable now. **A7–A11 and A13 are not**: A9 needs the presence read
+through the store (available), but A10, A11 and A13 need `subscribe`/`readSnapshot`. So the
+single full run stays blocked on the Stratus gate, which is the right place for it — running
+18 of 19 and calling it a pass would misreport the bar.

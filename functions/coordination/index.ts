@@ -25,8 +25,8 @@ import {
 } from '../../catalyst/lib/zcql.ts';
 import { handleAppend } from '../append/index.ts';
 import type { AppendPort } from '../append/index.ts';
-import { handleClaim } from '../claim/index.ts';
-import type { ClaimPort } from '../claim/index.ts';
+import { handleClaim, handleReleaseClaim } from '../claim/index.ts';
+import type { ClaimPort, ClaimReleasePort } from '../claim/index.ts';
 import { handleEvents } from '../events/index.ts';
 import { handleWebhook } from '../github-webhook/index.ts';
 import type { WebhookPort } from '../github-webhook/index.ts';
@@ -195,9 +195,12 @@ export function makeAppendPort(app: CatalystApp): AppendPort {
   };
 }
 
-export function makeClaimPort(app: CatalystApp): ClaimPort {
+export function makeClaimPort(app: CatalystApp): ClaimReleasePort {
   return {
     insertClaim: (row) => insertRow(app, T.task_claims, { ...row }),
+    deleteClaim: async (claim_key) => {
+      await deleteRowsWhere(app, T.task_claims, 'claim_key', claim_key);
+    },
     findClaim: async (claim_key) => {
       const rows = unwrapRows<Record<string, unknown>>(
         await query(app, selectClaim(claim_key)), T.task_claims);
@@ -408,6 +411,10 @@ async function route(app: CatalystApp, req: HttpRequest, log: Logger): Promise<H
     if (!key) throw new HttpError(400, 'MISSING_IDEMPOTENCY_KEY', 'X-Idempotency-Key is required');
     return handleAppend(makeAppendPort(app), principal, req.body, key,
       () => new Date().toISOString(), log);
+  }
+
+  if (path === '/claim/release' && req.method === 'POST') {
+    return handleReleaseClaim(makeClaimPort(app), principal, req.body, log);
   }
 
   if (path === '/scope' && req.method === 'POST') {
