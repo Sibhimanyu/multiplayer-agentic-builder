@@ -125,8 +125,9 @@ interface CoordinationStore {
   /**
    * MUST be atomic. Exactly one concurrent caller wins.
    * Loser gets { ok:false, owner } — this is a normal outcome, not an error.
-   * Implementations: Catalyst = INSERT into a task_claims table whose task_id
-   * column is is_unique, catch the violation. Firestore = runTransaction.
+   * Implementations: Catalyst = INSERT into task_claims whose unique column is a
+   * COMPOSITE "project_id:task_id", not task_id alone -- is_unique is global to
+   * the table, see mandatory behaviour 2. Firestore = runTransaction.
    */
   claimTask(project_id: ProjectId, task_id: TaskId, agent_id: AgentId)
     : Promise<{ ok: true } | { ok: false; owner: AgentId; claimed_at: string }>;
@@ -184,8 +185,25 @@ Both implementations MUST satisfy all of these. `docs/how-to/acceptance-checklis
 
 1. **Idempotent append.** Same `idempotency_key` twice returns the same `seq` with
    `duplicate: true`, and the ledger grows by one, not two.
-2. **Exactly-one claim.** N concurrent `claimTask` calls for one task produce exactly one
-   `{ok:true}`. Verified by test, not by inspection.
+2. **Exactly-one claim, scoped per project.** N concurrent `claimTask` calls for one task
+   produce exactly one `{ok:true}`. Verified by test, not by inspection.
+
+   **Catalyst: `is_unique` is global to the TABLE, not per project.** Probed 2026-08-25.
+   A bare `unique(task_id)` therefore lets project A's claim block project B's
+   identically-named task **forever** — cross-tenant denial of service via a name collision.
+
+   Every per-project uniqueness constraint MUST be a composite key column, e.g.
+   `"proj_01:task_items_crud"`. The composite builder MUST reject any part containing the
+   separator, so `"a:b" + "c"` cannot collide with `"a" + "b:c"`.
+
+   This applies to `task_claims`, `scope_locks` and `request_dedupe`. It does **not** apply to
+   `events.seq`, which is deliberately globally allocated (behaviour 4).
+
+   Firestore needs none of this: a transaction on a document path is naturally scoped. Record
+   the asymmetry in G9.
+
+   Note this is the second defect from "unique" meaning global — the first was the `seq`
+   allocation deadlock. Treat any new `is_unique` column as global until proven otherwise.
 3. **Append-only ledger.** No operation mutates or removes an existing event.
 4. **Ascending seq.** `readEvents` returns strictly ascending `seq`. Gaps are legal;
    reordering is not.
@@ -226,12 +244,18 @@ Both implementations MUST satisfy all of these. `docs/how-to/acceptance-checklis
 6. **Scope locks are enforced server-side**, and reject with conflicts.
 7. **Staleness is derived, not stored.** `AgentPresence.stale` is computed at read time from
    `last_heartbeat_at` against a configured timeout, default 90s.
-8. **No emoji / 4-byte UTF-8 in durable text.** Catalyst Data Store silently stores these as
+8. **ZCQL has no parameter binding (Catalyst).** Probed 2026-08-25. String escaping is
+   therefore the *entire* SQL-injection boundary, and `project_id` arrives from request
+   bodies. The escaper MUST be a single audited chokepoint with tests asserting no unpaired
+   quote survives real attack payloads. Firestore has no equivalent exposure — its SDK is
+   parameterised — so this is a Catalyst-only mandatory item and a G9 entry.
+
+9. **No emoji / 4-byte UTF-8 in durable text.** Catalyst Data Store silently stores these as
    `?`. Both implementations MUST strip or reject them on write so behaviour matches.
    Shared helper: `shared/sanitize.ts`.
-9. **Cap every list.** `readEvents` at 300, presence at 100, locks at 200. Log what was
+10. **Cap every list.** `readEvents` at 300, presence at 100, locks at 200. Log what was
    dropped. Never truncate silently.
-10. **`subscribe` fires immediately** with current state before any change arrives.
+11. **`subscribe` fires immediately** with current state before any change arrives.
 
 ## Error mapping
 
@@ -255,8 +279,8 @@ Callers see these, never backend-specific errors.
 | idempotency | `request_dedupe` table, `is_unique` key column | doc id = idempotency key |
 | `readEvents` | ZCQL `ORDER BY seq LIMIT o,300` | `orderBy('seq').limit(300)` |
 | `seq` source | dedicated `seq bigint is_unique` column, globally allocated. **Not `ROWID`** — see below | counter doc inside `runTransaction` |
-| `claimTask` | INSERT into `task_claims`, `task_id` is `is_unique` | `runTransaction` |
-| `acquireScope` | INSERT + glob check in the function | `runTransaction` |
+| `claimTask` | INSERT into `task_claims`, unique on composite `project_id:task_id` | `runTransaction` |
+| `acquireScope` | INSERT + glob check in the function, composite-keyed per project | `runTransaction` |
 | `heartbeat` | Cache PUT, TTL 1h — **not** a Data Store UPDATE | field write on agent doc |
 | `readSnapshot` | signed Stratus GET, `cache-control: max-age=5`, ETag | local cache read |
 | `subscribe` | poll `readSnapshot` every 5s, adaptive backoff to 30s idle | `onSnapshot` |
