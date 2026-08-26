@@ -23,8 +23,10 @@ import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 
 import { createFirestoreStore, scopedKeyFor, type FirestoreStore } from './store.ts';
 import { CapturingLogger } from '../shared/log.ts';
+import { isRetryable, StoreBusyError } from '../shared/store/errors.ts';
+import { withRetry } from '../shared/store/retry.ts';
 import { FakeClock } from '../shared/clock.ts';
-import type { EventInput, TaskView } from '../shared/store/types.ts';
+import type { AppendResult, EventInput, TaskView } from '../shared/store/types.ts';
 
 const EMULATOR = process.env.FIRESTORE_EMULATOR_HOST;
 
@@ -39,6 +41,8 @@ if (EMULATOR) {
   const clock = new FakeClock();
   const log = new CapturingLogger();
   const stamp = Date.now().toString(36);
+  // Fixed up front so the correlation assertions can address each record by its own key.
+  const keys32 = Array.from({ length: 32 }, () => randomUUID());
 
   const progress = (n: number): EventInput => ({
     layer: 'human',
@@ -284,16 +288,76 @@ if (EMULATOR) {
     }
   });
 
-  test('32 concurrent appends still lose nothing', async () => {
-    // Past the point where the SDK's internal transaction retry is doing real work. If the
-    // counter document were going to drop a write under contention, it would be here.
-    const pid = await project('32');
+  test('32-way contention surfaces StoreBusyError — which is CORRECT, not a failure', async () => {
+    // MEASURED, and it changes a G9 note from theoretical to real. At 32 concurrent appends the
+    // single counter document at projects/{pid}/meta/ledger exhausts the SDK's internal
+    // transaction retries and the emulator returns `10 ABORTED: Transaction lock timeout`.
+    //
+    // My first version of this test asserted all 32 appends resolve. That was asserting the
+    // wrong thing. The store contract says StoreBusyError is a NORMAL, retryable outcome, not
+    // an error — so a raw appendEvent refusing under heavy contention is the adapter behaving
+    // exactly as specified. What has to be true is that the mapping is retryable and the caller
+    // recovers, and that is what this now tests.
+    const pid = await project('32_raw');
     const N = 32;
-    const results = await Promise.all(
+
+    const settled = await Promise.allSettled(
       Array.from({ length: N }, (_, i) => store.appendEvent(pid, progress(i), randomUUID())),
     );
-    assert.equal(new Set(results.map((r) => r.seq)).size, N, 'no two appends may share a seq');
+    const rejected = settled.filter((r) => r.status === 'rejected');
+
+    // Whatever did fail must have failed RETRYABLY. A StoreError here would mean the caller has
+    // no defined recovery and the append is simply lost.
+    for (const r of rejected) {
+      const err = (r as PromiseRejectedResult).reason;
+      assert.ok(
+        err instanceof StoreBusyError,
+        `contention must surface as StoreBusyError, got ${String(err)}`,
+      );
+      assert.equal(isRetryable(err), true, 'and it must be retryable');
+    }
+
+    // Nothing that RESOLVED may share a seq: partial refusal must not corrupt what did land.
+    const ok = settled
+      .filter((r) => r.status === 'fulfilled')
+      .map((r) => (r as PromiseFulfilledResult<AppendResult>).value.seq);
+    assert.equal(new Set(ok).size, ok.length, 'no two successful appends may share a seq');
+    assert.equal((await store.readEvents(pid, 0)).events.length, ok.length, 'ledger matches successes');
+
+    console.log(
+      `    [measured] 32-way contention on one counter doc: ${ok.length} landed, ` +
+        `${rejected.length} refused as StoreBusyError`,
+    );
+  });
+
+  test('32 concurrent appends ALL land once the caller honours the retry contract', async () => {
+    // The same 32, through the shared withRetry the CLI uses. This is the assertion that
+    // matters: the ceiling is real, and the documented recovery clears it.
+    const pid = await project('32_retry');
+    const N = 32;
+
+    const results = await Promise.all(
+      Array.from({ length: N }, (_, i) =>
+        withRetry(() => store.appendEvent(pid, progress(i), keys32[i]!), {
+          attempts: 8,
+          op: 'appendEvent',
+          log,
+        }).then((r) => r.value),
+      ),
+    );
+
+    assert.equal(new Set(results.map((r) => r.seq)).size, N, 'all 32 distinct seq');
     assert.equal((await store.readEvents(pid, 0)).events.length, N, 'nothing lost');
+
+    // Correlation, not count (Order 0009): each key's record must carry that key's own seq.
+    for (let i = 0; i < N; i++) {
+      const doc = await db
+        .collection('projects').doc(pid)
+        .collection('events').doc(scopedKeyFor(pid, keys32[i]!))
+        .get();
+      assert.ok(doc.exists, `key ${i} has no record`);
+      assert.equal(doc.get('seq'), results[i]!.seq, `key ${i} record must carry its own seq`);
+    }
   });
 
   test('concurrent replays of ONE key produce one event and one seq', async () => {
@@ -318,10 +382,17 @@ if (EMULATOR) {
     const pid = await project('mixed');
     await store.seedTasks(pid, [task('task_a'), task('task_b')]);
 
+    // Retry-wrapped, for the reason established above: under this much contention on one
+    // counter document a raw call may legitimately refuse with StoreBusyError, and the caller's
+    // job is to back off. Testing it unwrapped would be testing that the contract is not the
+    // contract.
+    const retried = <T>(fn: () => Promise<T>) =>
+      withRetry(fn, { attempts: 8, op: 'mixed', log }).then((r) => r.value);
+
     const work: Promise<unknown>[] = [];
-    for (let i = 0; i < 6; i++) work.push(store.appendEvent(pid, progress(i), randomUUID()));
-    for (let i = 0; i < 6; i++) work.push(store.claimTask(pid, 'task_a', `agent_race${i}`));
-    for (let i = 0; i < 6; i++) work.push(store.claimTask(pid, 'task_b', `agent_other${i}`));
+    for (let i = 0; i < 6; i++) work.push(retried(() => store.appendEvent(pid, progress(i), randomUUID())));
+    for (let i = 0; i < 6; i++) work.push(retried(() => store.claimTask(pid, 'task_a', `agent_race${i}`)));
+    for (let i = 0; i < 6; i++) work.push(retried(() => store.claimTask(pid, 'task_b', `agent_other${i}`)));
     await Promise.all(work);
 
     const { events } = await store.readEvents(pid, 0);

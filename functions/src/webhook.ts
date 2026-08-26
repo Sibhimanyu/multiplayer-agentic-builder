@@ -69,6 +69,26 @@ export function taskIdFromBranch(branch: string | null | undefined): TaskId | nu
   return normalised.startsWith('task_') ? normalised : `task_${normalised.replace(/^task_?/, '')}`;
 }
 
+/**
+ * The normative check_suite conclusion map (Order 0010, acceptance-checklist.md D5a).
+ *
+ * A Map rather than a conditional chain on purpose: the checklist pins a TABLE, so the code
+ * that implements it should be a table too. Adding a conclusion is a one-line data change and
+ * anything absent drops by construction, which is the safe default for an append-only ledger.
+ */
+const CONCLUSIVE = new Map<string, 'ci_passed' | 'ci_failed'>([
+  ['success', 'ci_passed'],
+  ['failure', 'ci_failed'],
+  // Conclusive, not inconclusive. GitHub renders a timeout with a red X.
+  ['timed_out', 'ci_failed'],
+]);
+
+/** Every conclusion GitHub can send, for an exhaustive test rather than a sampled one. */
+export const CHECK_SUITE_CONCLUSIONS = [
+  'success', 'failure', 'timed_out',
+  'neutral', 'cancelled', 'skipped', 'stale', 'action_required', null,
+] as const;
+
 export interface MapContext {
   /** Resolved from the repo full_name before mapping is attempted. */
   project_id: string;
@@ -217,19 +237,21 @@ export function mapDelivery(
         return { kind: 'drop', reason: `check_suite on non-agent branch ${branch ?? '(none)'}` };
       }
       const conclusion = p.check_suite?.conclusion ?? null;
-      // ONLY success and failure are board-visible. Everything else drops.
+      // The normative table, ruled by Order 0010 and pinned in acceptance-checklist.md.
+      // BOTH BUILDS MUST IMPLEMENT EXACTLY THIS — a divergence here is worse than a missing
+      // badge, because a divergence is far harder to notice than an absence.
       //
-      // GitHub's other conclusions are neutral, cancelled, skipped, stale, action_required and
-      // timed_out. Showing a red badge for a cancelled run trains people to ignore red badges,
-      // and silent misclassification in an append-only ledger cannot be corrected later.
+      //   success     -> ci_passed
+      //   failure     -> ci_failed
+      //   timed_out   -> ci_failed   conclusive terminal failure, rendered red by GitHub
+      //   neutral | cancelled | skipped | stale | action_required | null/absent -> drop
       //
-      // `timed_out` is the arguable one and I have deliberately narrowed it. GitHub renders a
-      // timeout with a red X, so mapping it to ci_failed is defensible and is what this build
-      // did until Order 0006. It is dropped now because the two builds diverging on a real
-      // GitHub payload is worse than a board that stays quiet on a timeout — and a divergence
-      // is much harder to spot than a missing badge. Flagged for a ruling; a one-line revert.
-      if (conclusion !== 'success' && conclusion !== 'failure') {
-        return { kind: 'drop', reason: `check_suite conclusion ${conclusion} is not pass/fail` };
+      // The rule is "conclusive failures map, everything else drops" — not "only pass/fail
+      // maps". A timeout is conclusive: dropping it leaves the board silent while the agent
+      // believes CI is still pending, which is worse than a slightly generous label. Order
+      // 0006's "inconclusive" wording was imprecise and 0010 corrected it.
+      if (!CONCLUSIVE.has(conclusion as string)) {
+        return { kind: 'drop', reason: `check_suite conclusion ${conclusion} is not conclusive` };
       }
       return {
         kind: 'event',
@@ -237,7 +259,7 @@ export function mapDelivery(
         event: {
           ...base,
           layer: 'coordination',
-          kind: conclusion === 'success' ? 'ci_passed' : 'ci_failed',
+          kind: CONCLUSIVE.get(conclusion as string)!,
           body: {
             task_id,
             pr_number: p.check_suite?.pull_requests?.[0]?.number ?? null,

@@ -6,7 +6,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac, randomUUID } from 'node:crypto';
 
-import { mapDelivery, repoKey, taskIdFromBranch, verifySignature } from './webhook.ts';
+import {
+  CHECK_SUITE_CONCLUSIONS,
+  mapDelivery,
+  repoKey,
+  taskIdFromBranch,
+  verifySignature,
+} from './webhook.ts';
 import { createMemoryStore } from '../../shared/store/memory.ts';
 
 const SECRET = 'a-webhook-secret-that-is-long-enough';
@@ -207,46 +213,113 @@ test('D5.4 pull_request closed+merged -> merged; closed unmerged -> dropped with
   if (abandoned.kind === 'drop') assert.match(abandoned.reason, /closed unmerged/);
 });
 
-test('D5.5 check_suite completed -> ci_passed / ci_failed', () => {
-  const pass = mapDelivery(
-    'check_suite',
-    {
-      action: 'completed',
-      check_suite: {
-        conclusion: 'success',
-        head_branch: BRANCH,
-        app: { name: 'GitHub Actions' },
-        pull_requests: [{ number: 42 }],
-      },
-    },
-    CTX,
-  );
-  assert.equal(pass.kind, 'event');
-  if (pass.kind === 'event') {
-    assert.equal(pass.event.kind, 'ci_passed');
-    assert.equal(pass.event.body.check_name, 'GitHub Actions');
-    assert.equal(pass.event.body.pr_number, 42);
-  }
+test('D5a check_suite conclusion mapping is EXACTLY the normative table', () => {
+  // Ruled by Order 0010 and pinned in acceptance-checklist.md. Both builds must implement this
+  // exactly; a divergence here is worse than a missing badge because it is far harder to notice.
+  //
+  // Driven off CHECK_SUITE_CONCLUSIONS so it is exhaustive over what GitHub can send rather
+  // than a sample -- if a conclusion is added to the list and not to the table, this fails.
+  const EXPECTED: Record<string, 'ci_passed' | 'ci_failed' | 'drop'> = {
+    success: 'ci_passed',
+    failure: 'ci_failed',
+    // Conclusive terminal failure, not inconclusive. GitHub renders it with a red X, and
+    // dropping it leaves the board silent while the agent believes CI is still pending.
+    timed_out: 'ci_failed',
+    neutral: 'drop',
+    cancelled: 'drop',
+    skipped: 'drop',
+    stale: 'drop',
+    action_required: 'drop',
+    null: 'drop',
+  };
 
-  const fail = mapDelivery(
-    'check_suite',
-    { action: 'completed', check_suite: { conclusion: 'failure', head_branch: BRANCH } },
-    CTX,
+  assert.equal(
+    CHECK_SUITE_CONCLUSIONS.length,
+    Object.keys(EXPECTED).length,
+    'the table must cover every conclusion the mapper knows about',
   );
-  assert.equal(fail.kind, 'event');
-  if (fail.kind === 'event') assert.equal(fail.event.kind, 'ci_failed');
 
-  // A cancelled run is not a failure. A red badge for a cancelled run trains people to
-  // ignore red badges. `timed_out` is included per Order 0006: GitHub renders it red, so
-  // mapping it would be defensible, but only success and failure map in EITHER build and
-  // divergence on a real payload is worse than a quiet board.
-  for (const conclusion of ['neutral', 'cancelled', 'skipped', 'stale', 'timed_out', 'action_required', null]) {
-    const other = mapDelivery(
+  for (const conclusion of CHECK_SUITE_CONCLUSIONS) {
+    const want = EXPECTED[String(conclusion)];
+    assert.ok(want, `no expectation declared for conclusion ${String(conclusion)}`);
+
+    const m = mapDelivery(
       'check_suite',
-      { action: 'completed', check_suite: { conclusion, head_branch: BRANCH } },
+      {
+        action: 'completed',
+        check_suite: {
+          conclusion,
+          head_branch: BRANCH,
+          app: { name: 'GitHub Actions' },
+          pull_requests: [{ number: 42 }],
+        },
+      },
       CTX,
     );
-    assert.equal(other.kind, 'drop', `conclusion ${conclusion} must not touch the board`);
+
+    if (want === 'drop') {
+      assert.equal(m.kind, 'drop', `${String(conclusion)} must drop`);
+      if (m.kind === 'drop') assert.ok(m.reason.length > 0, 'a drop must carry a reason');
+    } else {
+      assert.equal(m.kind, 'event', `${String(conclusion)} must map to ${want}`);
+      if (m.kind === 'event') {
+        assert.equal(m.event.kind, want, `${String(conclusion)} -> ${want}`);
+        // Correlation, not just count (Order 0009): the event must carry the right task and
+        // check, not merely be of the right kind.
+        assert.equal(m.event.body.task_id, 'task_items_crud');
+        assert.equal(m.event.body.pr_number, 42);
+        assert.equal(m.event.body.check_name, 'GitHub Actions');
+        assert.equal(m.event.actor_type, 'github');
+        assert.equal(m.event.layer, 'coordination');
+      }
+    }
+  }
+});
+
+test('D5a timed_out is NOT dropped — this was the ruled correction', () => {
+  // Called out separately because it is the one line Order 0010 reversed, and a regression here
+  // would be silent: the board simply stays quiet on a CI timeout.
+  const m = mapDelivery(
+    'check_suite',
+    { action: 'completed', check_suite: { conclusion: 'timed_out', head_branch: BRANCH } },
+    CTX,
+  );
+  assert.equal(m.kind, 'event');
+  if (m.kind === 'event') assert.equal(m.event.kind, 'ci_failed');
+});
+
+test('D5b pull_request closed maps to merged ONLY on strict merged === true', () => {
+  // Four assertions: true, false, undefined, null. A truthy check would let an absent field
+  // read as unmerged-but-present, and a loose check would mark an abandoned PR merged --
+  // which, in an append-only ledger, cannot be corrected afterwards.
+  const cases: { merged: unknown; expect: 'merged' | 'drop' }[] = [
+    { merged: true, expect: 'merged' },
+    { merged: false, expect: 'drop' },
+    { merged: undefined, expect: 'drop' },
+    { merged: null, expect: 'drop' },
+  ];
+
+  for (const { merged, expect } of cases) {
+    const m = mapDelivery(
+      'pull_request',
+      {
+        action: 'closed',
+        pull_request: { number: 42, merged, merge_commit_sha: 'ff00', head: { ref: BRANCH } },
+      },
+      CTX,
+    );
+    if (expect === 'drop') {
+      assert.equal(m.kind, 'drop', `merged=${String(merged)} must drop`);
+      if (m.kind === 'drop') assert.match(m.reason, /closed unmerged/);
+    } else {
+      assert.equal(m.kind, 'event', `merged=${String(merged)} must map`);
+      if (m.kind === 'event') {
+        assert.equal(m.event.kind, 'merged');
+        assert.equal(m.event.body.task_id, 'task_items_crud');
+        assert.equal(m.event.body.commit, 'ff00');
+        assert.equal(m.event.actor_type, 'github', 'only the webhook may produce `merged`');
+      }
+    }
   }
 });
 
