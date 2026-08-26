@@ -66,6 +66,8 @@ Run the same suite against all three adapters: `memory`, `catalyst`, `firebase`.
 | D3 | Comparison is timing-safe, not `===` | code review + test |
 | D4 | Replayed `X-GitHub-Delivery` appends nothing the second time | ledger count |
 | D5 | `push`, `pull_request opened/synchronize/closed`, `check_suite completed` each map to the right event kind | 5 assertions |
+| D5a | `check_suite` conclusion mapping is **exactly** the table below. Both builds identical. | 9 assertions |
+| D5b | `pull_request closed` maps to `merged` only on strict `merged === true` | 4 assertions: true/false/undefined/null |
 | D6 | Unmappable repo → logged and dropped, never a 500 | log + status code |
 
 ## E. Dashboard
@@ -117,6 +119,48 @@ Record real numbers. These are the point of building both.
 | G8 | Total build hours | honest log |
 | G9 | Every platform constraint hit, with the workaround | written list |
 | G10 | Would you choose this again? One paragraph, written before seeing the other build's number | prose |
+
+## `check_suite` conclusion mapping — normative
+
+Ruled 2026-08-25. Both builds MUST implement exactly this. A divergence here is worse than a
+missing badge, because a divergence is far harder to notice than an absence.
+
+| `conclusion` | Maps to | Reason |
+|---|---|---|
+| `success` | `ci_passed` | |
+| `failure` | `ci_failed` | |
+| **`timed_out`** | **`ci_failed`** | A timeout is a **conclusive terminal failure**, not an inconclusive one. GitHub renders it with a red X. Dropping it leaves the board silent while the agent believes CI is still pending — a worse outcome than a slightly generous label. |
+| `neutral` | drop | explicitly neutral by definition |
+| `cancelled` | drop | a human stopped it; not a code failure |
+| `skipped` | drop | did not run |
+| `stale` | drop | superseded by a newer run |
+| `action_required` | drop | needs a human, not a failure signal |
+| `null` / absent | drop | genuinely inconclusive |
+
+Order 0006 said "an inconclusive `check_suite` must not map to `ci_failed`". That wording was
+imprecise: `timed_out` is not inconclusive. The rule is **conclusive failures map, everything
+else drops.**
+
+## Composite key construction — either rule, never neither
+
+Two correct approaches. Pick one per build and be consistent. What is forbidden is
+concatenating with a separator and not policing it.
+
+**A. Separator with rejection.** `"proj_01:task_items_crud"`, and the builder rejects any part
+containing the separator, so `"a:b"+"c"` cannot collide with `"a"+"b:c"`.
+*Pro:* the stored value is human-readable, so a row is debuggable on sight.
+*Con:* the collision class exists and must be actively policed.
+
+**B. Hash each part separately, then combine the digests.** Both operands become fixed-length
+hex, so there is no separator to police and the collision class **cannot exist**.
+*Pro:* eliminates the class by construction, and the fixed length sidesteps Catalyst's
+silent `varchar` 255 clamp entirely.
+*Con:* the stored value is opaque; you cannot tell which project or task a row belongs to
+without a lookup.
+
+Either way, assert it: `scopedKey("a:b","c") !== scopedKey("a","b:c")`.
+
+This is **not** a platform asymmetry — both approaches are available to both builds.
 
 ## Testing rule: assert correlation, not count
 
