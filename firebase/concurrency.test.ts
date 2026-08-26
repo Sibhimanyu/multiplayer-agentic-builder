@@ -434,6 +434,33 @@ if (EMULATOR) {
     }
   });
 
+  test('the adapter contention retry completes under a FakeClock rather than hanging', async () => {
+    // Regression test for a latent HANG, not a failure.
+    //
+    // withContentionRetry backs off with a real setTimeout. It originally used the injected
+    // Clock, and the conformance harness injects a FakeClock whose sleep() resolves only on
+    // advance() -- so the first time contention actually fired, the run would hang forever
+    // waiting for a tick nobody was going to send. Contention fires only under load, so this
+    // would have presented as a load-dependent stuck run: no assertion, nothing to read.
+    //
+    // This clock is a FakeClock and is never advanced. If the backoff ever goes back through
+    // it, this test hangs and the suite times out instead of passing.
+    const pid = await project('fakeclock');
+    const N = 24;
+
+    const results = await Promise.all(
+      Array.from({ length: N }, (_, i) => store.appendEvent(pid, progress(i), randomUUID())),
+    );
+
+    assert.equal(new Set(results.map((r) => r.seq)).size, N, 'all appends distinct');
+    assert.equal((await store.readEvents(pid, 0)).events.length, N, 'nothing lost');
+
+    // If the adapter did back off at least once, say so -- it means the path under test was
+    // genuinely exercised rather than trivially skipped.
+    const backoffs = log.withCode('store.tx.contended').length;
+    console.log(`    [measured] adapter absorbed ${backoffs} contention backoff(s) under FakeClock`);
+  });
+
   test('the only error-level log lines are exhausted retries, never anything unexpected', async () => {
     // A lost claim and a duplicate append are NORMAL outcomes, and contention that produces
     // error-level noise teaches operators to ignore the error log.

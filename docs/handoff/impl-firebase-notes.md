@@ -491,6 +491,35 @@ observes the raw behaviour.
 The general shape: **if a guarantee is in your contract, absorb the platform's noise below the
 seam rather than exporting it to every caller and to the shared suite.**
 
+### 24b. An injected clock is not a general "make waiting fake" seam
+
+Found by probing, immediately after writing 23, and it is the worst-shaped defect of the
+session even though it never fired: a **latent load-dependent hang**.
+
+`withContentionRetry` backed off through the injected `Clock`. The conformance harness injects
+a `FakeClock`, whose `sleep()` resolves only on `advance()` — and nothing advances it during a
+transaction. So the first time contention actually fired under the shared suite, the run would
+hang forever waiting for a tick nobody was going to send.
+
+It passed 63/63 immediately before I found it, because contention happened not to occur that
+run. That is what makes it worse than an intermittent failure: an intermittent test at least
+produces an assertion to read. This would have produced a stuck process, under load, with no
+output — and the obvious next move would have been to raise the test timeout.
+
+The confusion was mine and it is worth naming precisely. The clock is injected so that
+**staleness derivation is testable** (A9 needs 90 seconds to pass in a millisecond). It is not
+a seam for "all waiting in this file". A production backoff must use real time regardless of
+what clock the tests hand it; the two concerns share a word and nothing else.
+
+Fixed with a real `setTimeout`, plus a regression test that forces 24-way contention under a
+FakeClock that is never advanced — if the backoff ever routes through the injected clock again,
+that test hangs and the suite times out instead of passing.
+
+Method note: **the test that would have caught this is the test that only fails under
+contention**, which is exactly the test I could not rely on. Probing `FakeClock.sleep()`
+directly in four lines found it in seconds. When a guarantee depends on a component's
+behaviour, check the component rather than waiting for the integration to disagree.
+
 ### 24. `node --test` parallelises FILES, and a shared emulator cannot take it
 
 The last of the intermittency, and it had nothing to do with the adapter at all.

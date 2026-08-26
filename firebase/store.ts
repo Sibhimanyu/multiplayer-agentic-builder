@@ -238,7 +238,6 @@ export function mapFirestoreError(err: unknown, op: string): StoreError {
 async function withContentionRetry<T>(
   op: string,
   attempts: number,
-  clock: Clock,
   log: Logger,
   fn: () => Promise<T>,
 ): Promise<T> {
@@ -260,7 +259,18 @@ async function withContentionRetry<T>(
         attempt: attempt + 1,
         wait_ms: wait,
       });
-      await clock.sleep(wait);
+      // REAL time, deliberately not this.clock.
+      //
+      // The injected Clock exists so staleness derivation (A9) and timestamps are testable. It
+      // is NOT a general "make waiting fake" seam: FakeClock.sleep() resolves only on
+      // advance(), so backing off through it would hang forever the first time contention
+      // fired under the conformance harness — and it fires only under load, so it would have
+      // presented as a load-dependent HANG rather than a failure. Strictly worse than an
+      // intermittent test: nothing to read, no assertion, just a stuck run.
+      //
+      // Caught by probing FakeClock directly rather than by a test, because the test that
+      // would have caught it is the one that only fails under contention.
+      await new Promise<void>((resolve) => setTimeout(resolve, wait));
       last = mapped;
     }
   }
@@ -389,9 +399,7 @@ export class FirestoreStore implements CoordinationStore {
    * a property of the adapter rather than something six places have to remember.
    */
   private tx<T>(op: string, body: (tx: Transaction) => Promise<T>): Promise<T> {
-    return withContentionRetry(op, this.tx_attempts, this.clock, this.log, () =>
-      this.db.runTransaction(body),
-    );
+    return withContentionRetry(op, this.tx_attempts, this.log, () => this.db.runTransaction(body));
   }
 
   // ---- setup (not one of the ten) ----------------------------------------------------
