@@ -29,6 +29,8 @@ Run the same suite against all three adapters: `memory`, `catalyst`, `firebase`.
 | A13 | Snapshot reporting `seq < last_written_seq` does **not** trigger a re-append | assertion |
 | A14 | Revoked token → `StoreAuthError`, and the CLI stops rather than retrying | assertion |
 | A15 | Rate-limited backend → `StoreBusyError` and jittered backoff, no tight loop | assertion |
+| A16 | **Human-layer event withheld from an agent-audience read, against the REAL backend.** Append `task_progress`, read as an agent, assert absent; then append a coordination-layer event and assert present. Both halves required — absence alone cannot distinguish a working filter from a failed write. | assertion, live |
+| A17 | An unprovisioned operation throws `NotProvisionedError`, not `StoreError`, and makes **no network call** | assertion + no-request spy |
 
 ## B. CLI
 
@@ -272,6 +274,36 @@ identically either way.
 The burden is on whoever substitutes: name what would change, and show that it does not. Record
 it either way. If the answer is "I am not sure whether this changes a measurement", the answer is
 no — stop and ask.
+
+## Verifying the parts is not verifying the whole
+
+Found late and worth stating: three things had been separately verified — the endpoints via
+`curl`, the status→error mapping via an injected fetch, and the adapter against the real
+service. Only the first two had actually run. **The adapter had never been exercised against the
+live backend at all**, and it was being reported as done on the strength of the other two.
+
+The middle one passing says nothing about the third. This is the mirror of the retry-loop rule:
+that one says a working path is not evidence its sub-operations work; this one says working
+sub-operations are not evidence the path works. **Both directions need their own test.**
+
+## An assertion that cannot tell success from a specific failure is not an assertion
+
+The worked example, found by accident and now a permanent test. An "emoji is stripped" check
+failed on an empty string. Not a bug: the check appended a **human-layer** `task_progress` event
+and read it back through an **agent-audience** read, which correctly withheld it.
+
+So *the filter working* and *the write failing* produced the **identical observation**.
+
+Two fixes came out of it, and the second is the important one:
+
+1. The emoji check now uses a coordination-layer kind, so it can read its own write back.
+2. **"Human-layer event withheld from an agent" is now A16, asserted against the real backend.**
+
+That second point closes a real gap. The protocol calls that exclusion its most important rule —
+the thing that keeps agents coherent over a long session — and **nothing had verified it live
+until an accident did.** A16 requires both halves: assert the human-layer event is absent *and*
+that a coordination-layer event is present, because absence alone cannot distinguish a working
+filter from a broken write.
 
 ## The unifying rule: unverifiable is not true
 
