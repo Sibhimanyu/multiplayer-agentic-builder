@@ -118,7 +118,39 @@ function capList<T>(
   return out;
 }
 
-/** sha256 hex. Deterministic, always a legal Firestore document id. */
+/**
+ * Scope a client-supplied idempotency key to its project, then hash it.
+ *
+ * Mandatory behaviour 1a: the idempotency key comes from the CLIENT, so "it is a uuid v4, it is
+ * already unique" is not a safe assumption. Two callers in two projects can send the same key,
+ * deliberately or by copying a script.
+ *
+ * The document path already contains the project, so a raw-key document id could not collide
+ * across projects — and that was the trap. `event_id` was derived from the same unscoped hash,
+ * so two projects using one key produced the SAME event_id: two distinct events, one identity.
+ * Anything keying on event_id across projects — an audit view, a log correlation, a client-side
+ * dedupe cache — would conflate two tenants' events. Caught by
+ * firebase/concurrency.test.ts, not by reading the code.
+ *
+ * The parts are hashed SEPARATELY and then combined, rather than concatenated with a separator.
+ * Catalyst has to build `"<project>:<key>"` and police a separator inside either part, because
+ * `"a:b" + "c"` collides with `"a" + "b:c"`. Hashing each part first makes both operands
+ * fixed-length hex, so there is no separator to get wrong and no rule to enforce. Same
+ * guarantee, one fewer class of bug — and it is available to either build, so this is a key
+ * construction note rather than a platform asymmetry.
+ */
+export const scopedKeyFor = (project_id: ProjectId, idempotency_key: string): string => {
+  const p = createHash('sha256').update(project_id, 'utf8').digest('hex');
+  const k = createHash('sha256').update(idempotency_key, 'utf8').digest('hex');
+  return createHash('sha256').update(`${p}/${k}`, 'utf8').digest('hex');
+};
+
+/**
+ * sha256 hex of a raw string. Deterministic, always a legal Firestore document id.
+ *
+ * Kept exported for tests. Callers inside the adapter use scopedKeyFor: an unscoped id is
+ * exactly the bug above.
+ */
 export const docIdFor = (key: string): string =>
   createHash('sha256').update(key, 'utf8').digest('hex');
 
@@ -370,7 +402,7 @@ export class FirestoreStore implements CoordinationStore {
     input: EventInput,
     idempotency_key: string,
   ): Promise<AppendPlan> {
-    const id = docIdFor(idempotency_key);
+    const id = scopedKeyFor(pid, idempotency_key);
     const eventRef = this.eventsRef(pid).doc(id);
 
     const existing = await tx.get(eventRef);
@@ -415,6 +447,7 @@ export class FirestoreStore implements CoordinationStore {
     const taskSnap = taskId ? await tx.get(this.tasksRef(pid).doc(taskId)) : null;
 
     const event: Event = {
+      // Derived from the PROJECT-SCOPED hash, so event_id is unique across projects.
       event_id: `evt_${id.slice(0, 12)}`,
       project_id: pid,
       seq,

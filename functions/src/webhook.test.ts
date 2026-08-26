@@ -126,6 +126,15 @@ test('D4 a replayed X-GitHub-Delivery appends nothing the second time', async ()
   const { events } = await store.readEvents(pid, 0);
   const pushes = events.filter((e) => e.kind === 'branch_pushed');
   assert.equal(pushes.length, 1, 'the ledger must contain exactly one branch_pushed');
+
+  // Order 0009: correlate, do not count. "The count held at one" also passes if the replay
+  // REPLACED the original with an identical-looking event, or if the surviving event belongs to
+  // a different delivery. So assert this is the ORIGINAL, by identity and by content.
+  assert.equal(pushes[0]!.seq, first!.seq, 'the surviving event is the one first appended');
+  assert.equal(pushes[0]!.event_id, first!.event_id, 'same event_id, not a look-alike');
+  assert.equal(pushes[0]!.body.commit, payload.after, 'and it still carries the original commit');
+  assert.equal(pushes[0]!.body.branch, 'agent/backend/task-items-crud');
+  assert.equal(pushes[0]!.actor_type, 'github');
 });
 
 // ---- D5 -------------------------------------------------------------------------------
