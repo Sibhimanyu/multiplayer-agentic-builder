@@ -388,6 +388,48 @@ exist. Worse, my own branch had **zero commits** at the point Order 0002 told me
 whole build was working-tree only, and a rebase would have destroyed it. Committing first was
 what made the order safe to execute at all.
 
+
+---
+
+## G9 asymmetries — guarantees Catalyst paid for and Firestore did not
+
+Orders 0005 and 0006 are explicit that these must be recorded on **both** sides and not
+normalised away. They are the clearest thing this exercise has produced so far, because in each
+case the *requirement is identical* and only the cost differs. I did not discover any of them —
+the Catalyst workspace probed them — and that is worth stating plainly: three of the four are
+spec bugs that only surfaced because someone ran the thing against a real backend.
+
+| Guarantee | What Catalyst had to build | What Firestore cost |
+|---|---|---|
+| Atomic claim, scoped per project | Composite key columns (`"proj_01:task_items_crud"`) plus a builder that rejects a separator inside any part, because `is_unique` is **table-global** — a bare `unique(task_id)` lets project A's claim block project B's identically-named task forever | **Nothing.** A transaction on a document path is naturally scoped: `projects/{pid}/claims/{task_id}` cannot collide across projects because the path already contains the project. |
+| Injection safety | ZCQL has **no parameter binding at all**. With `project_id` arriving from request bodies, one hand-written escaper is the entire injection boundary, and it needs its own audited chokepoint and tests asserting no unpaired quote survives | **Nothing.** The SDK is parameterised; there is no query string to escape. There is no equivalent exposure to test. |
+| Strictly ascending `seq` | A dedicated `seq bigint is_unique` column allocated **globally**, with insert-retry-on-`DUPLICATE_VALUE` and increment-don't-re-read, after `ROWID` turned out to run *backwards* across inserts | A counter document read and incremented inside the same `runTransaction` as the append. One mechanism, no retry loop, gap-free. |
+| Running the conformance suite | A5 needs 301 events ≈ 602 INSERTs against a **5,000/month** free-tier budget — about **8 runs a month** before A5 alone exhausts it, so A5 must be excluded from routine real-backend runs | 602 writes against **20,000/day**. Effectively unlimited; the full suite runs freely on every change. |
+
+Two of these deserve more than a table row.
+
+**The `ROWID` finding is the most serious defect anyone has found, on either build.** It was
+not an ordering nit: a reader that had consumed up to cursor `052001` would never be delivered
+an event that landed at `044002`. That ships as an intermittent "the frontend agent never saw
+the contract" bug, reproducing about one time in three and looking exactly like a network
+fault. Firestore's counter-doc approach was never exposed to it — not because I was careful,
+but because `runTransaction` exists.
+
+**The suite-cost asymmetry is a fairness problem, not just a cost one.** If one build can run
+its full conformance suite on every change and the other can afford it eight times a month,
+the two are not being developed under the same conditions however identical the file is. Worth
+weighing when reading any "both builds pass the same suite" claim, including mine.
+
+### And one place where Firestore's cost is the higher one
+
+For balance, because the table above is one-sided and a one-sided table is usually an
+incomplete one. Firestore's free tier is metered in **writes per day**, and presence is a
+write. A 20-second heartbeat spends 65% of the daily budget on three agents doing nothing.
+Catalyst's constraint here is worse in kind (1,000 durable UPDATEs per *month*, which no
+interval survives, forcing presence into Cache with a TTL) — but Firestore's is the one that
+looks affordable right up until you do the arithmetic, and nothing in the platform warns you.
+See G9.3.
+
 ---
 
 ## G7 — lines of code in the adapter
