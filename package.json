@@ -7,10 +7,22 @@
   "scripts": {
     "test": "node --test \"shared/**/*.test.ts\"",
     "test:memory": "node --test shared/store/memory.test.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:shared": "node --test \"shared/**/*.test.ts\"",
+    "test:firebase": "scripts/emulator.sh 'node --test --test-timeout=600000 shared/store/firebase.test.ts'",
+    "test:webhook": "node --test --test-timeout=60000 functions/src/webhook.test.ts",
+    "test:cli": "node --test --test-timeout=180000 cli/outbox.test.ts cli/blackboard.test.ts cli/client.test.ts",
+    "test:emulator": "scripts/emulator.sh 'node --test --test-timeout=600000 shared/store/firebase.test.ts functions/src/api.test.ts functions/src/reaper.test.ts'",
+    "test:all": "npm run test:shared && npm run test:webhook && npm run test:cli && npm run test:emulator",
+    "typecheck:firebase": "tsc --noEmit -p tsconfig.firebase.json",
+    "build:functions": "cd functions && tsc -p tsconfig.json",
+    "build:client": "cd client && npm run build"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0"
   }
 }

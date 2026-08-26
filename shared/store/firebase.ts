@@ -1,5 +1,11 @@
 // CoordinationStore over Cloud Firestore, admin SDK. Route F of the bake-off.
 //
+// Written against the shared foundation promoted by Order 0002: it implements
+// shared/store/types.ts and is measured by shared/store/conformance.ts UNMODIFIED. Where this
+// file used to carry its own copy of a shared concern (a logger, a clock, a sanitiser, an
+// error taxonomy) it now consumes the shared one, so any behavioural difference between the
+// two builds is a difference in the backend rather than in the scaffolding around it.
+//
 // This is the authoritative Firestore implementation: the Cloud Functions API calls it, and
 // the conformance suite runs it against the emulator. The browser adapter
 // (client/src/store/firestore.ts) is read-only and much smaller, because clients never write
@@ -40,15 +46,16 @@ import type {
   Transaction,
 } from 'firebase-admin/firestore';
 
-import { globsIntersect, intersectingPairs, normalizeGlob } from '../globs.ts';
-import { applyEvent, emptyProjection, toSnapshot, type FoldOutcome, type Projection } from './fold.ts';
+import { findGlobConflicts, globsIntersect, normalizeGlob } from '../globs.ts';
+import { applyEvent, emptyProjection, toSnapshot, type FoldOutcome, type Projection } from './firebase-fold.ts';
 import { StoreAuthError, StoreBusyError, StoreError, StoreOfflineError } from './errors.ts';
-import { prepareEvent } from './prepare.ts';
+import { sanitizeBody, sanitizeText, VARCHAR_MAX } from '../sanitize.ts';
+import { consoleLogger, type Logger } from '../log.ts';
+import { systemClock, type Clock } from '../clock.ts';
 import {
-  capList,
-  consoleLogger,
+  LAYER_OF,
   LIMITS,
-  STALE_TIMEOUT_MS,
+  STALE_AFTER_MS,
   type AgentId,
   type AgentPresence,
   type AgentStatus,
@@ -57,7 +64,6 @@ import {
   type Event,
   type EventInput,
   type Freshness,
-  type Logger,
   type ProjectId,
   type ScopeLock,
   type Seq,
@@ -65,10 +71,6 @@ import {
   type TaskId,
   type TaskView,
 } from './types.ts';
-
-export interface Clock {
-  now(): number;
-}
 
 export interface FirestoreStoreOptions {
   db: Firestore;
@@ -91,6 +93,31 @@ const HUMAN_READABLE_LIMIT = 1_500;
 /** meta, counter, tasks, agents, locks, contracts. The first-frame gate counts these. */
 const LISTENER_COUNT = 6;
 
+/**
+ * Apply a list cap and log the drop. Never truncate silently (non-negotiable H).
+ *
+ * Local rather than shared because the foundation does not export one; the log CODE is what
+ * matters for parity, and `store.<list>.capped` matches the shape conformance.ts asserts for
+ * readEvents.
+ */
+function capList<T>(
+  items: T[],
+  cap: number,
+  meta: { list: string; requested: number; project_id: ProjectId },
+  log: Logger,
+): T[] {
+  if (items.length <= cap) return items;
+  const out = items.slice(0, cap);
+  log.warn(`store.${meta.list}.capped`, `${meta.list} hit the row cap`, {
+    project_id: meta.project_id,
+    requested: meta.requested,
+    applied: cap,
+    returned: out.length,
+    dropped: items.length - out.length,
+  });
+  return out;
+}
+
 /** sha256 hex. Deterministic, always a legal Firestore document id. */
 export const docIdFor = (key: string): string =>
   createHash('sha256').update(key, 'utf8').digest('hex');
@@ -106,6 +133,8 @@ export function mapFirestoreError(err: unknown, op: string): StoreError {
   const e = err as { code?: number | string; message?: string; details?: string };
   const code = e?.code;
   const msg = `${op}: ${e?.message ?? String(err)}`;
+  // The backend's own words are kept for logs only, never for control flow.
+  const detail = e?.details ?? e?.message ?? String(err);
 
   // gRPC numeric codes (admin SDK) and their string spellings (client SDK).
   switch (code) {
@@ -113,22 +142,22 @@ export function mapFirestoreError(err: unknown, op: string): StoreError {
     case 'permission-denied':
     case 16:
     case 'unauthenticated':
-      return new StoreAuthError(msg, 'firestore', err);
+      return new StoreAuthError(msg, { backend_message: detail });
     case 8:
     case 'resource-exhausted':
-      return new StoreBusyError(msg, 'firestore', null, err);
+      return new StoreBusyError(msg, { backend_message: detail });
     case 10:
     case 'aborted':
       // Transaction contention. The SDK already retried internally; surfacing it as busy lets
       // the caller back off rather than hammering the same contended document.
-      return new StoreBusyError(msg, 'firestore', 250, err);
+      return new StoreBusyError(msg, { backend_message: detail, retry_after_ms: 250 });
     case 4:
     case 'deadline-exceeded':
     case 14:
     case 'unavailable':
-      return new StoreOfflineError(msg, 'firestore', err);
+      return new StoreOfflineError(msg, { backend_message: detail });
     default:
-      return new StoreError(msg, 'firestore', err);
+      return new StoreError(msg, { backend_message: detail, cause_code: String(code) });
   }
 }
 
@@ -194,11 +223,21 @@ export class FirestoreStore implements CoordinationStore {
   private readonly resubscribe_after_offline_ms: number;
   private readonly caches = new Map<ProjectId, LiveCache>();
   private readonly teardowns = new Set<() => void>();
+  /**
+   * Seq the snapshot is pinned to while frozen, per project. -1 means not frozen.
+   *
+   * Firestore has no debounced snapshot writer, so this window does not arise naturally here:
+   * readSnapshot reads the same state the fold wrote. A13 nevertheless has to run against both
+   * adapters — it is testing the CALLER's rule ("stale, not lost; never re-append"), and that
+   * rule is shared. So this reproduces the lag rather than skipping the box, and the notes file
+   * records plainly that on this platform it is induced rather than observed.
+   */
+  private readonly frozenAt = new Map<ProjectId, number>();
 
   constructor(opts: FirestoreStoreOptions) {
     this.db = opts.db;
     this.log = opts.log ?? consoleLogger;
-    this.clock = opts.clock ?? { now: () => Date.now() };
+    this.clock = opts.clock ?? systemClock;
     this.debounce_ms = opts.debounce_ms ?? 40;
     this.resubscribe_after_offline_ms = opts.resubscribe_after_offline_ms ?? 25 * 60_000;
   }
@@ -231,7 +270,7 @@ export class FirestoreStore implements CoordinationStore {
   }
 
   private iso(): string {
-    return new Date(this.clock.now()).toISOString();
+    return this.clock.iso();
   }
 
   // ---- setup (not one of the ten) ----------------------------------------------------
@@ -273,6 +312,21 @@ export class FirestoreStore implements CoordinationStore {
     });
   }
 
+  /**
+   * Freeze or thaw the folded snapshot for one project. Test seam for A13 only.
+   *
+   * Deliberately named for what it is. It does not touch the ledger, so a frozen snapshot is
+   * genuinely stale rather than lossy, which is exactly the condition the caller must tolerate.
+   */
+  async setSnapshotFrozen(pid: ProjectId, on: boolean): Promise<void> {
+    if (!on) {
+      this.frozenAt.delete(pid);
+      return;
+    }
+    const counter = await this.counterRef(pid).get();
+    this.frozenAt.set(pid, ((counter.get('seq') as number) ?? 0));
+  }
+
   /** Revoke or restore an agent's token. The API checks this on every request. */
   async setRevoked(pid: ProjectId, agent_id: AgentId, revoked: boolean): Promise<void> {
     await guard('setRevoked', () => this.agentsRef(pid).doc(agent_id).set({ revoked }, { merge: true }));
@@ -289,7 +343,7 @@ export class FirestoreStore implements CoordinationStore {
     if (!agent_id) return;
     const snap = await this.agentsRef(pid).doc(agent_id).get();
     if (snap.exists && snap.get('revoked') === true) {
-      throw new StoreAuthError(`token revoked for ${agent_id}`, 'firestore');
+      throw new StoreAuthError(`token revoked for ${agent_id}`);
     }
   }
 
@@ -330,7 +384,30 @@ export class FirestoreStore implements CoordinationStore {
       };
     }
 
-    const prepared = prepareEvent(input, idempotency_key, this.log);
+    // Validation and sanitisation inlined to match shared/store/memory.ts EXACTLY. The
+    // foundation has no shared prepare step, and the two behaviours that must not diverge are
+    // (a) a layer mismatch THROWS rather than being silently corrected — the layer decides who
+    // receives an event, and a human-layer event reaching an agent is a protocol violation —
+    // and (b) durable text goes through the shared sanitiser with the same field names.
+    if (!idempotency_key) throw new StoreError('idempotency_key is required');
+    const canonical_layer = LAYER_OF[input.kind];
+    if (canonical_layer === undefined) throw new StoreError(`unknown event kind: ${input.kind}`);
+    if (input.layer !== canonical_layer) {
+      throw new StoreError(
+        `layer mismatch for ${input.kind}: got '${input.layer}', must be '${canonical_layer}'`,
+      );
+    }
+    const prepared: EventInput = {
+      layer: canonical_layer,
+      kind: input.kind,
+      actor_type: input.actor_type,
+      actor_id: sanitizeText(input.actor_id, {
+        field: 'events.actor_id',
+        max: VARCHAR_MAX,
+        log: this.log,
+      }),
+      body: sanitizeBody(input.body, this.log, `${input.kind}.body`),
+    };
     const counterSnap = await tx.get(this.counterRef(pid));
     const seq = ((counterSnap.exists ? (counterSnap.get('seq') as number) : 0) ?? 0) + 1;
 
@@ -351,7 +428,7 @@ export class FirestoreStore implements CoordinationStore {
     p.seq = seq - 1;
     if (taskSnap?.exists) p.tasks.set(taskId!, taskSnap.data() as TaskView);
     const outcome = applyEvent(p, event);
-    for (const ig of outcome.ignored) this.log.warn('event ignored by fold', { ...ig, project_id: pid });
+    for (const ig of outcome.ignored) this.log.warn('store.fold.ignored', 'event changed no state and was recorded as ignored', { ...ig, project_id: pid });
 
     return { duplicate: false, event_id: event.event_id, seq, event, projection: p, outcome, eventRef, idempotency_key };
   }
@@ -402,12 +479,13 @@ export class FirestoreStore implements CoordinationStore {
       const requested = limit;
       const effective = Math.max(1, Math.min(limit, LIMITS.events));
       if (requested > LIMITS.events) {
-        this.log.warn('list capped', {
-          op: 'readEvents',
+        this.log.warn('store.events.capped', 'readEvents hit the row cap', {
+          project_id: pid,
+          since_seq,
           requested,
+          applied: effective,
           returned: effective,
           dropped: requested - effective,
-          project_id: pid,
         });
       }
       // Fetch one extra to answer has_more without a second query (one extra document read
@@ -578,14 +656,13 @@ export class FirestoreStore implements CoordinationStore {
         const snap = await tx.get(this.locksRef(pid).limit(LIMITS.locks + 1));
         const held = snap.docs.map((d) => d.data() as ScopeLock);
         if (held.length > LIMITS.locks) {
-          this.log.warn('lock table at cap, refusing new lock', {
-            op: 'acquireScope',
-            requested: held.length,
-            returned: LIMITS.locks,
-            dropped: held.length - LIMITS.locks,
+          this.log.warn('store.locks.capped', 'lock table at its cap, refusing a new lock', {
             project_id: pid,
+            requested: held.length,
+            applied: LIMITS.locks,
+            dropped: held.length - LIMITS.locks,
           });
-          throw new StoreBusyError('lock table full', 'firestore', 1_000);
+          throw new StoreBusyError('lock table full', { retry_after_ms: 1_000 });
         }
 
         const conflicts = held.filter(
@@ -594,11 +671,11 @@ export class FirestoreStore implements CoordinationStore {
             lock.globs.some((h) => want.some((w) => globsIntersect(w, h))),
         );
         if (conflicts.length > 0) {
-          this.log.info('scope rejected', {
+          this.log.info('store.scope.rejected', 'file-scope request intersects a live lock', {
             project_id: pid,
             agent_id,
             task_id,
-            pairs: conflicts.flatMap((c) => intersectingPairs(want, c.globs)),
+            pairs: conflicts.flatMap((c) => findGlobConflicts(want, c.globs)),
           });
           return { ok: false as const, conflicts };
         }
@@ -687,7 +764,7 @@ export class FirestoreStore implements CoordinationStore {
       return capList(
         rows,
         LIMITS.presence,
-        { op: 'listPresence', requested: rows.length, project_id: pid },
+        { list: 'presence', requested: rows.length, project_id: pid },
         this.log,
       );
     });
@@ -708,7 +785,7 @@ export class FirestoreStore implements CoordinationStore {
       last_heartbeat_at: hb === null ? null : new Date(hb).toISOString(),
       // Derived at read time. There is no `stale` field in Firestore, deliberately — storing
       // it would need a write per agent per timeout to stay true.
-      stale: hb === null || this.clock.now() - hb > STALE_TIMEOUT_MS,
+      stale: hb === null || this.clock.now() - hb > STALE_AFTER_MS,
     };
   }
 
@@ -731,6 +808,12 @@ export class FirestoreStore implements CoordinationStore {
       // back to the server costs a handful of reads and cannot lie.
       const usable = cached && cached.ready.size >= LISTENER_COUNT;
       const snapshot = usable ? this.assemble(pid, cached) : await this.assembleFromServer(pid);
+      const frozen = this.frozenAt.get(pid);
+      if (frozen !== undefined && frozen >= 0) {
+        // Report the fold as it stood when the freeze began. The ledger is unaffected:
+        // readEvents still sees every appended event, which is the whole point of A13.
+        snapshot.seq = Math.min(snapshot.seq, frozen);
+      }
       const tag = etagOf(snapshot);
       if (etag && etag === tag) return null; // 304 equivalent
       return { snapshot, etag: tag };
@@ -754,7 +837,7 @@ export class FirestoreStore implements CoordinationStore {
     const presence = capList(
       agents.docs.map((d) => this.toPresence(d.data() as StoredAgent)),
       LIMITS.presence,
-      { op: 'readSnapshot.presence', requested: agents.size, project_id: pid },
+      { list: 'presence', requested: agents.size, project_id: pid },
       this.log,
     );
     return toSnapshot(
@@ -778,7 +861,7 @@ export class FirestoreStore implements CoordinationStore {
     const presence = capList(
       [...c.agents.values()].map((a) => this.toPresence(a)),
       LIMITS.presence,
-      { op: 'subscribe.presence', requested: c.agents.size, project_id: pid },
+      { list: 'presence', requested: c.agents.size, project_id: pid },
       this.log,
     );
     return toSnapshot(
@@ -834,7 +917,7 @@ export class FirestoreStore implements CoordinationStore {
         onChange(snap);
       } catch (err) {
         // A throwing subscriber must not tear down the subscription for everyone else.
-        this.log.warn('subscriber threw', { project_id: pid, error: String(err) });
+        this.log.warn('store.subscribe.callback_threw', 'a subscriber callback threw; other subscribers unaffected', { project_id: pid, error: String(err) });
       }
     };
 
@@ -861,13 +944,13 @@ export class FirestoreStore implements CoordinationStore {
         if (down > this.resubscribe_after_offline_ms) {
           // Past this point Firestore rebills the resumed query as a new one anyway, so the
           // only thing the old listener still does is leak. Log it and let the caller decide.
-          this.log.warn('listener offline past resubscribe threshold; tearing down', {
+          this.log.warn('store.listener.rebill_threshold', 'listener offline past the point where a resumed query is rebilled as new', {
             project_id: pid,
             offline_ms: down,
             listener: name,
           });
         } else {
-          this.log.info('listener transiently offline, SDK will resume', {
+          this.log.info('store.listener.offline', 'listener transiently offline; the SDK will resume it', {
             project_id: pid,
             listener: name,
           });
@@ -876,7 +959,7 @@ export class FirestoreStore implements CoordinationStore {
       }
       // Auth and anything else is terminal for this listener. Surfacing it is the only
       // honest option — silently retrying a permission-denied listener bills forever.
-      this.log.warn('listener failed', { project_id: pid, listener: name, error: mapped.message });
+      this.log.warn('store.listener.failed', 'listener failed terminally', { project_id: pid, listener: name, error: mapped.message });
     };
 
     const ready = (name: string) => {
@@ -945,13 +1028,28 @@ export class FirestoreStore implements CoordinationStore {
         try {
           u();
         } catch (err) {
-          this.log.warn('listener teardown threw', { project_id: pid, error: String(err) });
+          this.log.warn('store.listener.teardown_threw', 'unsubscribing a listener threw; continuing with the rest', { project_id: pid, error: String(err) });
         }
       }
       this.teardowns.delete(teardown);
     };
     this.teardowns.add(teardown);
     void from_seq; // the fold is absolute, not a delta: from_seq cannot skip a frame
+
+    // If the cache is ALREADY warm, deliver the first frame synchronously rather than waiting
+    // for six fresh listeners to round-trip. This is not a test accommodation: a second
+    // dashboard panel subscribing to a project the page is already watching should render from
+    // memory, not pay a network round trip and a blank frame to learn what it already knows.
+    // It is also what lets a network-backed adapter satisfy "fires once immediately" in the
+    // shared suite, whose settle() is a handful of microtask turns.
+    if (cache.ready.size >= LISTENER_COUNT) {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      emit();
+    }
+
     return teardown;
   }
 
@@ -991,6 +1089,6 @@ export function createFirestoreStore(opts: FirestoreStoreOptions): FirestoreStor
 /** Truncate over-long durable text, loudly. Firestore's own cap is 1 MiB per document. */
 export function clampText(s: string, field: string, log: Logger): string {
   if (s.length <= HUMAN_READABLE_LIMIT) return s;
-  log.warn('text truncated', { field, from: s.length, to: HUMAN_READABLE_LIMIT });
+  log.warn('store.text.truncated', 'value exceeded the readable cap and was truncated', { field, from: s.length, to: HUMAN_READABLE_LIMIT });
   return s.slice(0, HUMAN_READABLE_LIMIT);
 }

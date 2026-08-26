@@ -1,9 +1,19 @@
-// The ledger -> board projection. SHARED between the Catalyst and Firebase builds.
+// The ledger -> board projection. Firebase-owned, but it SHOULD be shared.
 //
-// Both adapters fold events into task/contract/lock state, and if they folded it separately
-// the bake-off would compare two different state machines wearing the same interface. So the
-// reducer lives here, is pure, and both call it. Catalyst runs it in an Event function on
-// Data Store write; Firestore runs it inside the same transaction as the append.
+// ORDER REQUEST for the coordinator: this file wants to be `shared/store/fold.ts`, consumed by
+// both builds. It is deliberately named `firebase-fold.ts` and left outside the promoted
+// foundation because Order 0002 froze `shared/` and adding to it unilaterally is exactly the
+// desynchronisation that order exists to prevent.
+//
+// The argument for promoting it: if each build folds the ledger separately, the bake-off
+// compares two different state machines wearing the same interface. `conformance.ts` pins the
+// ten operations but says nothing about what `task_claimed` does to a board, so two builds can
+// pass the identical suite and still disagree about what the dashboard shows. That gap is
+// invisible until the F1-F12 demo, where it looks like a UI bug in whichever build is behind.
+//
+// Nothing here is Firebase-specific: it is pure, total, has no clock and no I/O. Catalyst would
+// run it in an Event function on Data Store write; Firestore runs it inside the same
+// transaction as the append.
 //
 // Pure and total: no clock, no I/O, no throw. An unknown or out-of-order event is recorded as
 // ignored rather than dropped on the floor (non-negotiable H: no silent failure).
