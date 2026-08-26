@@ -515,10 +515,36 @@ Fixed with a real `setTimeout`, plus a regression test that forces 24-way conten
 FakeClock that is never advanced — if the backoff ever routes through the injected clock again,
 that test hangs and the suite times out instead of passing.
 
+**The prediction was then confirmed by the very next run, on the pre-fix code.** I had already
+found and fixed it by probing, but a serialised run of the previous commit was still in flight,
+and it reproduced the symptom exactly:
+
+```
+✖ 32 concurrent appends ALL land once the caller honours the retry contract (900002.887542ms)
+  'test timed out after 900000ms'
+✖ concurrent claims and appends together do not corrupt either (900003.336ms)
+  'test timed out after 900000ms'
+
+ℹ pass 61   ℹ fail 0   ℹ cancelled 2      duration_ms 2098379
+```
+
+Note the shape, because it is the whole point. **`fail 0`.** Two tests `cancelled`, thirty-five
+minutes of wall clock, and a summary line that does not say "failure" anywhere. The two counts
+that would make someone look — pass and fail — both read fine. And the stated reason is *test
+timed out*, whose obvious remedy is to raise the timeout, which would have buried this
+permanently under a green suite.
+
 Method note: **the test that would have caught this is the test that only fails under
 contention**, which is exactly the test I could not rely on. Probing `FakeClock.sleep()`
-directly in four lines found it in seconds. When a guarantee depends on a component's
-behaviour, check the component rather than waiting for the integration to disagree.
+directly, in four lines, found it in seconds:
+
+```
+after 200ms real time, FakeClock.sleep(50) resolved: false
+```
+
+When a guarantee depends on a component's behaviour, check the **component** rather than
+waiting for the integration to disagree with you. The integration took thirty-five minutes to
+say something less useful.
 
 ### 24. `node --test` parallelises FILES, and a shared emulator cannot take it
 
