@@ -10,20 +10,25 @@ on `impl/catalyst`.** I have not read that branch.
 
 ## Status summary
 
-**139 tests, 138 pass, 0 fail, 1 honest skip.** `npm test` runs all of it; `npm run typecheck`
-is clean across the root, `functions/` and `client/`, and both builds produce artifacts.
+**Rebased onto the shared foundation per Order 0002.** `shared/` is byte-identical to
+`origin/zoho-catalyst-app-builder`; my own `memory.ts` and my own section-A suite are deleted.
+The adapter is measured by `shared/store/conformance.ts` **unmodified**.
 
 | Suite | Result |
 |---|---|
-| `shared/store/memory.conformance.test.ts` | 18/18 |
-| `shared/store/firestore.conformance.test.ts` (emulator) | 17 pass + 1 skip |
+| `npm test` — the SHARED gate | 24 pass, 1 skip, 0 fail |
+| `npm run test:firebase` — their suite, my adapter | **15/15** |
 | `functions/src/api.test.ts` (emulator) | 18/18 |
 | `functions/src/reaper.test.ts` (emulator) | 9/9 |
 | `functions/src/webhook.test.ts` | 17/17 |
-| `cli/outbox.test.ts` | 20/20 |
-| `cli/blackboard.test.ts` (real git) | 14/14 |
-| `cli/client.test.ts` | 17/17 |
-| `shared/store/republish.test.ts` | 8/8 |
+| `cli/outbox.test.ts` + `blackboard.test.ts` + `client.test.ts` | 51/51 |
+| `shared/store/firebase-errors.test.ts` | 5/5 |
+
+Typecheck clean in both scopes: `tsconfig.json` (shared) and `tsconfig.firebase.json`
+(cli + functions). Client builds.
+
+A2 ran at the **full 50 rounds of 20 concurrent claims — 1,000 transactions** — in 222 s
+against the emulator.
 
 | Section | State |
 |---|---|
@@ -56,7 +61,22 @@ Where a number would be different in the cloud, it says so.
 
 ---
 
-## A13: the one skipped box, and why it is a skip and not a pass
+## A13: it now PASSES, and the earlier note about skipping it is superseded
+
+**Superseded by Order 0002.** The shared harness contract requires every adapter to provide
+`faults.freezeSnapshot`, so A13 runs against Firestore rather than being skipped, and it passes.
+
+That is the better outcome and I was wrong to reach for a skip first. A13 is testing the
+CALLER's rule — "stale, not lost; never re-append" — and that rule is shared, so it should be
+asserted against both adapters even though only one of them exhibits the window naturally.
+`FirestoreStore.setSnapshotFrozen` pins the reported snapshot seq without touching the ledger,
+so a frozen snapshot is genuinely stale rather than lossy, which is exactly the condition under
+test. Recorded plainly: **on this platform the lag is induced, not observed.**
+
+The paragraphs below are kept because the underlying platform fact is still true and still
+worth knowing.
+
+### The original note (still accurate as a platform fact)
 
 A13 asks that a snapshot reporting `seq < last_written_seq` does not trigger a re-append.
 
@@ -66,21 +86,13 @@ at `N - 1`.
 
 On Firestore **the window does not exist**. `readSnapshot` reads the same listener cache the
 fold wrote, inside the same transaction boundary, so `seq` cannot trail the ledger. There is no
-way to make the adapter exhibit the condition, so the emulator run reports:
+way to make the adapter exhibit the condition naturally.
 
-```
-﹣ A13 ... # A13 skipped on firestore: Firestore has no debounced snapshot publication to lag
-```
-
-The caller-side rule is still tested, because the CLI shares it across both builds — see
-`decideRepublish` in `shared/store/republish.test.ts`, which also proves there is no input for
-which the caller republishes.
-
-I want to be explicit that this started as a **false green**. The first version of the
-conformance harness returned `null` for a missing capability and let the test `return` early,
-which node reports as a PASS. A13 read green against Firestore for a test that never ran. That
-is exactly the failure mode the checklist warns about, so `needCap` now throws a `SkipTest` that
-`withTarget` converts into a real `t.skip(reason)`.
+Worth recording as a process lesson regardless: in my own (now deleted) harness this started as
+a **false green** — a missing capability returned `null` and the test `return`ed early, which
+node reports as a PASS. A13 read green for a test that never ran. A checklist box that is green
+because its assertion never executed is worse than a red one, and the shared harness avoids the
+whole category by making the capability mandatory rather than optional.
 
 ---
 
@@ -290,30 +302,93 @@ append, so the state is already correct when the transaction commits. A trigger 
 second writer of the same state, running after the fact, with its own retry semantics and its
 own bill — to produce something that is already right.
 
+
+### 15. An in-process conformance suite cannot time a network adapter
+
+Found by adopting the shared foundation. `conformance.ts` settles with four `setImmediate`
+turns, which is exactly right for the memory adapter and structurally impossible for a
+network one: six Firestore listeners cannot complete an initial load in four microtasks.
+
+A10 and A11 were the two that broke, and they broke for different reasons.
+
+**A10 "fires once immediately".** Fixed in the adapter, not the test: `subscribe` now delivers
+the first frame **synchronously when the listener cache is already warm**. That is not a test
+accommodation — a second dashboard panel subscribing to a project the page is already watching
+should render from memory rather than pay a round trip and show a blank frame to learn what it
+already knows. The harness keeps one warm subscription open and awaits convergence after each
+seed, so "warm" is true by the time a test subscribes.
+
+**A11 "must not be fed while its link is down".** Gating store METHOD calls is not enough. An
+`onSnapshot` stream is already open by the time `setOffline` fires and it keeps delivering, so
+a subscriber would go on being fed while its own reads failed — which is not what a dropped link
+looks like. The harness now suspends *delivery* too, buffers the newest frame, and on restore
+delivers either the buffer or current state. The fallback matters: without it a reconnecting
+subscriber stays blind until something else happens to be written, which on an idle project is
+hours, and "stayed blind" is precisely what A11 exists to catch.
+
+Neither fix touched `conformance.ts`. The general lesson is that a shared suite for two
+platforms needs a settle primitive the harness can define, because "has it arrived yet" is a
+question only the adapter can answer.
+
+### 16. Two builds can pass the identical suite and still disagree about the board
+
+Raised as an order request rather than fixed unilaterally.
+
+`conformance.ts` pins the ten operations. It says nothing about what `task_claimed` does to a
+`TaskView`. So the fold — the ledger-to-board projection — is unpinned, and two builds can be
+100% green on the same file while disagreeing about what the dashboard shows. That gap does not
+surface until F1–F12, where it looks like a UI bug in whichever build is behind.
+
+My fold is `shared/store/firebase-fold.ts`, deliberately named as mine and left outside the
+promoted foundation because Order 0002 froze `shared/`. Nothing in it is Firebase-specific.
+**It should be promoted to `shared/store/fold.ts`.**
+
+### 17. The shared glob engine normalises an unsupported pattern instead of refusing it
+
+Also raised rather than worked around. `shared/globs.ts` `normalizeGlob` treats a negation or
+brace pattern as a literal, so a scope lock on one protects nothing and `acquireScope` still
+returns `ok: true`. That is a silent failure, which non-negotiable H forbids.
+
+I validate in my own API layer so the Firebase build is safe, but **the two builds will diverge
+on this input** until the check moves into `shared/globs.ts`. Recording it here because a
+divergence I introduced deliberately is still a divergence, and the comparison has to know.
+
+### 18. Push discipline is a real failure mode, and I hit it
+
+Order 0004 names this session. I committed the entire build — adapter, CLI, functions, dashboard
+wiring — and ended the turn without pushing, leaving 23 further uncommitted paths behind.
+
+Not a platform constraint, but it belongs in an honest log: the coordinator's only view of this
+workspace is the pushed branch, so unpushed work is indistinguishable from work that does not
+exist. Worse, my own branch had **zero commits** at the point Order 0002 told me to rebase — the
+whole build was working-tree only, and a rebase would have destroyed it. Committing first was
+what made the order safe to execute at all.
+
 ---
 
 ## G7 — lines of code in the adapter
 
 Measured two ways, because the raw `wc -l` is dominated by comments in this codebase.
 
-| File | `wc -l` | code only |
-|---|---|---|
-| **`shared/store/firestore.ts`** (the adapter) | **941** | **711** |
-| `shared/store/memory.ts` (the control) | 545 | 423 |
-| `client/src/store/firestore.ts` (browser, read-only) | 358 | 241 |
-| `firestore.rules` | 134 | 63 |
-
-Shared, written once and reused by both builds:
+Re-measured after the Order 0002 adoption. The adapter grew slightly: it lost its private
+prepare/logger/clock helpers to the shared foundation but gained the inlined validation needed
+to match `memory.ts` byte-for-byte, plus the snapshot-freeze seam A13 requires.
 
 | File | code only |
 |---|---|
-| `shared/store/types.ts` | 215 |
-| `shared/store/fold.ts` | 179 |
-| `shared/globs.ts` | 95 |
-| `shared/sanitize.ts` | 56 |
-| `shared/store/errors.ts` | 41 |
-| `shared/store/prepare.ts` | 39 |
-| `shared/store/retry.ts` | 33 |
+| **`shared/store/firebase.ts`** (the adapter) | **794** |
+| `shared/store/firebase-fold.ts` (mine; should be shared — see G9.16) | 179 |
+| `client/src/store/firestore.ts` (browser, read-only) | 241 |
+| `firestore.rules` | 63 |
+
+The number to compare against Catalyst is **794**, and it must be read alongside the shared
+foundation both builds now consume rather than on its own — a comparison of adapter size in
+isolation flatters whichever build pushed more logic into shared code. That is exactly what
+Order 0002 changed: the scaffolding is no longer part of either build's number.
+
+The shared foundation (`shared/store/types.ts`, `memory.ts`, `conformance.ts`, `errors.ts`,
+`retry.ts`, `sanitize.ts`, `globs.ts`, `clock.ts`, `log.ts`) is written once by the other
+workspace and consumed unchanged here, so it belongs to neither build's count.
 
 CLI and functions:
 
