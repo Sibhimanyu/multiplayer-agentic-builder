@@ -12,10 +12,11 @@ import { deleteApp, initializeApp, type App } from 'firebase-admin/app';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 
 import { reapAll, reapProject } from './reaper.ts';
-import { createFirestoreStore, type FirestoreStore } from '../../shared/store/firestore.ts';
-import { FakeClock } from '../../shared/store/memory.ts';
-import { makeTask } from '../../shared/store/conformance.ts';
-import { CLAIM_TIMEOUT_MS, type Logger } from '../../shared/store/types.ts';
+import { createFirestoreStore, type FirestoreStore } from '../../shared/store/firebase.ts';
+import { FakeClock } from '../../shared/clock.ts';
+
+import { CLAIM_TIMEOUT_MS, type TaskView } from '../../shared/store/types.ts';
+import { CapturingLogger } from '../../shared/log.ts';
 
 assert.ok(
   process.env.FIRESTORE_EMULATOR_HOST,
@@ -29,11 +30,28 @@ let clock: FakeClock;
 let pid: string;
 let run = 0;
 
-const lines: string[] = [];
-const log: Logger = {
-  info: (m, meta) => lines.push(`info ${m} ${JSON.stringify(meta ?? {})}`),
-  warn: (m, meta) => lines.push(`warn ${m} ${JSON.stringify(meta ?? {})}`),
-};
+const log = new CapturingLogger();
+
+/** A seeded task row. The shared conformance suite does not export a builder. */
+function makeTask(task_id: string, over: Partial<TaskView> = {}): TaskView {
+  return {
+    task_id,
+    title: `task ${task_id}`,
+    kind: 'backend',
+    status: 'open',
+    claimed_by: null,
+    branch: null,
+    pr_url: null,
+    pr_number: null,
+    ci: null,
+    depends_on: [],
+    blocked_by: null,
+    blocked_reason: null,
+    file_scope: [],
+    updated_at: '2026-08-25T09:00:00.000Z',
+    ...over,
+  };
+}
 
 const AGENT_FE = 'agent_fe000001';
 const AGENT_BE = 'agent_be000002';
@@ -49,7 +67,7 @@ after(async () => {
 });
 
 beforeEach(async () => {
-  lines.length = 0;
+  log.clear();
   clock = new FakeClock();
   pid = `proj_reap_${run++}_${Date.now().toString(36)}`;
   store = createFirestoreStore({ db, log, clock, debounce_ms: 0 });
@@ -131,7 +149,7 @@ test('a revoked agent loses its claim immediately, without waiting out the timeo
   // task for fifteen more minutes helps nobody.
   const r = await reapProject(db, store, pid, log, { now, claim_timeout_ms: CLAIM_TIMEOUT_MS });
   assert.equal(r.released.length, 1);
-  assert.ok(lines.some((l) => l.includes('owner revoked')), 'the reason must be recorded');
+  assert.ok(log.lines.some((l) => JSON.stringify(l).includes('owner revoked')), 'the reason must be recorded');
 });
 
 test('an agent that claimed but never heartbeated is reaped on claim age', async () => {
@@ -149,7 +167,7 @@ test('an agent that claimed but never heartbeated is reaped on claim age', async
     claim_timeout_ms: CLAIM_TIMEOUT_MS,
   });
   assert.equal(late.released.length, 1, 'past the timeout it goes');
-  assert.ok(lines.some((l) => l.includes('never heartbeated')));
+  assert.ok(log.lines.some((l) => JSON.stringify(l).includes('never heartbeated')));
 });
 
 test('a claim held by an agent with no presence document is reported, not guessed at', async () => {
@@ -163,7 +181,7 @@ test('a claim held by an agent with no presence document is reported, not guesse
   assert.equal(r.released.length, 0, 'an inconsistency is not a stale agent; do not guess');
   assert.equal(r.kept.length, 1);
   assert.match(r.kept[0]!.reason, /no presence document/);
-  assert.ok(lines.some((l) => l.includes('claim held by unknown agent')), 'and it must be logged');
+  assert.ok(log.lines.some((l) => JSON.stringify(l).includes('unknown agent')), 'and it must be logged');
 });
 
 test('the reaper is idempotent within a minute and does not double-append', async () => {

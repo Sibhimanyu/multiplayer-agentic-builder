@@ -33,11 +33,21 @@ import { appendOutbox, drain, isConnected, readCursor, type OutboxRecord } from 
 import { ApiClient, connectWithInvite, type WhoAmI } from './client.ts';
 import { materialise, publishToBlackboard } from './blackboard.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
-import { LAYER_OF, type Event, type EventKind, type Logger } from '../shared/store/types.ts';
+import { LAYER_OF, type Event, type EventKind } from '../shared/store/types.ts';
+import type { Logger } from '../shared/log.ts';
 
+/**
+ * Human-facing logger. Diagnostics go to stderr so stdout stays parseable — `builder status`
+ * is read by people and by scripts, and interleaving log lines into it would break both.
+ *
+ * The machine-readable `code` is dropped from the rendered line on purpose: a person reading a
+ * terminal wants the sentence, and the code is there for the structured sinks.
+ */
 const log: Logger = {
-  info: (msg, meta) => console.error(`  ${msg}${meta ? ` ${fmt(meta)}` : ''}`),
-  warn: (msg, meta) => console.error(`! ${msg}${meta ? ` ${fmt(meta)}` : ''}`),
+  debug: () => {},
+  info: (_code, msg, fields) => console.error(`  ${msg}${fields ? ` ${fmt(fields)}` : ''}`),
+  warn: (_code, msg, fields) => console.error(`! ${msg}${fields ? ` ${fmt(fields)}` : ''}`),
+  error: (_code, msg, fields) => console.error(`! ${msg}${fields ? ` ${fmt(fields)}` : ''}`),
 };
 const fmt = (m: Record<string, unknown>): string =>
   Object.entries(m)
@@ -77,7 +87,7 @@ async function readToken(root: string): Promise<string> {
 async function cmdConnect(root: string, invite: string): Promise<number> {
   const cfg = await loadConfig(root);
   if (!cfg.api_base) {
-    log.warn('BUILDER_API_URL is not set; nothing to connect to');
+    log.warn('cli.builder_api_url_is', 'BUILDER_API_URL is not set; nothing to connect to');
     return 1;
   }
 
@@ -110,7 +120,7 @@ async function cmdConnect(root: string, invite: string): Promise<number> {
 
 async function cmdStatus(root: string): Promise<number> {
   if (!(await isConnected(root))) {
-    log.warn('not connected: run `builder connect <invite>` first');
+    log.warn('cli.not_connected_run_builder', 'not connected: run `builder connect <invite>` first');
     return 2;
   }
   const cfg = await loadConfig(root);
@@ -185,7 +195,7 @@ async function countPending(root: string): Promise<{ lines: number; spooled: num
 
 async function cmdClaim(root: string, task_id: string): Promise<number> {
   if (!(await isConnected(root))) {
-    log.warn('not connected: run `builder connect <invite>` first');
+    log.warn('cli.not_connected_run_builder', 'not connected: run `builder connect <invite>` first');
     return 2;
   }
   const cfg = await loadConfig(root);
@@ -232,7 +242,7 @@ async function cmdClaim(root: string, task_id: string): Promise<number> {
 
 async function cmdReport(root: string, message: string): Promise<number> {
   if (!(await isConnected(root))) {
-    log.warn('not connected: run `builder connect <invite>` first');
+    log.warn('cli.not_connected_run_builder', 'not connected: run `builder connect <invite>` first');
     return 2;
   }
   const state = await readState(root, log);
@@ -267,7 +277,7 @@ async function cmdReport(root: string, message: string): Promise<number> {
  */
 async function cmdStart(root: string): Promise<number> {
   if (!(await isConnected(root))) {
-    log.warn('not connected: run `builder connect <invite>` first');
+    log.warn('cli.not_connected_run_builder', 'not connected: run `builder connect <invite>` first');
     return 2;
   }
   const cfg = await loadConfig(root);
@@ -304,7 +314,7 @@ async function cmdStart(root: string): Promise<number> {
     } catch (err) {
       if (err instanceof StoreAuthError) {
         // A14: STOP. Do not retry a revoked token.
-        log.warn('token revoked or rejected; stopping', { error: err.message });
+        log.warn('cli.token_revoked_or_rejected', 'token revoked or rejected; stopping', { error: err.message });
         return 1;
       }
       throw err;
@@ -319,7 +329,7 @@ async function cmdStart(root: string): Promise<number> {
         // Belt to the API's braces. The API already filters the human layer, but this file
         // writes the agent's context and a leak here is the one that actually hurts (B8).
         if (LAYER_OF[e.kind] === 'human') {
-          log.warn('human-layer event reached the CLI; not delivering', { kind: e.kind, seq: e.seq });
+          log.warn('cli.human_layer_event_reached', 'human-layer event reached the CLI; not delivering', { kind: e.kind, seq: e.seq });
           advanced = Math.max(advanced, e.seq);
           continue;
         }
@@ -333,11 +343,11 @@ async function cmdStart(root: string): Promise<number> {
       offline = false;
     } catch (err) {
       if (err instanceof StoreAuthError) {
-        log.warn('token revoked or rejected; stopping', { error: err.message });
+        log.warn('cli.token_revoked_or_rejected', 'token revoked or rejected; stopping', { error: err.message });
         return 1;
       }
       if (err instanceof StoreOfflineError) {
-        if (!offline) log.info('offline; the agent keeps working and the outbox keeps growing', {});
+        if (!offline) log.info('cli.offline_the_agent_keeps', 'offline; the agent keeps working and the outbox keeps growing', {});
         offline = true;
       } else {
         throw err;
@@ -382,11 +392,11 @@ function makePublisher(client: ApiClient, root: string, cfg: Config, logger: Log
       if (!source) {
         // Not publishable, and never will be. Reported loudly; the caller's cursor still
         // advances so one malformed line does not wedge the queue forever.
-        logger.warn('contract event names no file; cannot publish', { kind, key: rec.idempotency_key });
+        logger.warn('cli.contract_event_names_no', 'contract event names no file; cannot publish', { kind, key: rec.idempotency_key });
         return { seq: 0, duplicate: true };
       }
       if (!cfg.repo) {
-        throw new StoreOfflineError('BUILDER_REPO is not set; cannot publish to the blackboard', 'firestore');
+        throw new StoreOfflineError('BUILDER_REPO is not set; cannot publish to the blackboard');
       }
 
       const published = await publishToBlackboard(
@@ -550,7 +560,7 @@ export async function main(argv: string[]): Promise<number> {
     case 'connect': {
       const invite = rest[0];
       if (!invite) {
-        log.warn('usage: builder connect <invite>');
+        log.warn('cli.usage_builder_connect_invite', 'usage: builder connect <invite>');
         return 1;
       }
       return cmdConnect(root, invite);
@@ -560,7 +570,7 @@ export async function main(argv: string[]): Promise<number> {
     case 'claim': {
       const task = rest[0];
       if (!task) {
-        log.warn('usage: builder claim <task_id>');
+        log.warn('cli.usage_builder_claim_task', 'usage: builder claim <task_id>');
         return 1;
       }
       return cmdClaim(root, task);
@@ -568,7 +578,7 @@ export async function main(argv: string[]): Promise<number> {
     case 'report': {
       const message = rest.join(' ').trim();
       if (!message) {
-        log.warn('usage: builder report "<message>"');
+        log.warn('cli.usage_builder_report_message', 'usage: builder report "<message>"');
         return 1;
       }
       return cmdReport(root, message);
@@ -581,7 +591,7 @@ export async function main(argv: string[]): Promise<number> {
       out(USAGE);
       return 0;
     default:
-      log.warn(`unknown command: ${cmd}`);
+      log.warn('cli.unknown_command', `unknown command: ${cmd}`);
       out(USAGE);
       return 1;
   }
@@ -594,10 +604,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     .catch((err) => {
       // Named at the top level: an unexpected throw prints its type, not a bare stack.
       if (err instanceof StoreAuthError) {
-        log.warn('authentication failed; not retrying', { error: err.message });
+        log.warn('cli.authentication_failed_not_retrying', 'authentication failed; not retrying', { error: err.message });
         process.exit(1);
       }
-      log.warn(`${(err as Error).name ?? 'Error'}: ${(err as Error).message}`);
+      log.warn('cli.unhandled', `${(err as Error).name ?? 'Error'}: ${(err as Error).message}`);
       process.exit(1);
     });
 }

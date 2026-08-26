@@ -16,10 +16,31 @@ import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 
 import { handleApi, statusFor, type ApiDeps, type ApiRequest } from './api.ts';
 import { AGENT_APPENDABLE, hashToken, mintToken, resolveAgent, ROLE_PACKS } from './authority.ts';
-import { createFirestoreStore, type FirestoreStore } from '../../shared/store/firestore.ts';
+import { createFirestoreStore, type FirestoreStore } from '../../shared/store/firebase.ts';
 import { StoreAuthError } from '../../shared/store/errors.ts';
-import { makeTask } from '../../shared/store/conformance.ts';
-import { LAYER_OF, type Logger } from '../../shared/store/types.ts';
+import { LAYER_OF, type TaskView } from '../../shared/store/types.ts';
+import { CapturingLogger } from '../../shared/log.ts';
+
+/** A seeded task row. The shared suite has its own; this is for the tests it does not own. */
+function makeTask(task_id: string, over: Partial<TaskView> = {}): TaskView {
+  return {
+    task_id,
+    title: `task ${task_id}`,
+    kind: 'backend',
+    status: 'open',
+    claimed_by: null,
+    branch: null,
+    pr_url: null,
+    pr_number: null,
+    ci: null,
+    depends_on: [],
+    blocked_by: null,
+    blocked_reason: null,
+    file_scope: [],
+    updated_at: '2026-08-25T09:00:00.000Z',
+    ...over,
+  };
+}
 
 assert.ok(
   process.env.FIRESTORE_EMULATOR_HOST,
@@ -31,11 +52,7 @@ let app: App;
 let db: Firestore;
 let store: FirestoreStore;
 let deps: ApiDeps;
-const logs: string[] = [];
-const log: Logger = {
-  info: (m, meta) => logs.push(`info ${m} ${JSON.stringify(meta ?? {})}`),
-  warn: (m, meta) => logs.push(`warn ${m} ${JSON.stringify(meta ?? {})}`),
-};
+const log = new CapturingLogger();
 
 const PID = `proj_api_${Date.now().toString(36)}`;
 let backendToken = '';
@@ -347,7 +364,7 @@ test('B8 GET /events withholds the human layer from the agent feed', async () =>
 // ---- error mapping ---------------------------------------------------------------------
 
 test('statusFor never maps a known condition to 500', () => {
-  assert.equal(statusFor(new StoreAuthError('x', 'firestore')).status, 401);
+  assert.equal(statusFor(new StoreAuthError('x')).status, 401);
   // Only a genuinely unknown throw becomes 500, and it leaks nothing.
   const unknown = statusFor(new TypeError('cannot read properties of undefined'));
   assert.equal(unknown.status, 500);

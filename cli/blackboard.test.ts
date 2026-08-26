@@ -21,9 +21,9 @@ import {
   pathFor,
   publishToBlackboard,
 } from './blackboard.ts';
-import type { Logger } from '../shared/store/types.ts';
+import type { Logger } from '../shared/log.ts';
 
-const silent: Logger = { info: () => {}, warn: () => {} };
+const silent: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 const REPO = 'zoho-cat/inventory-tracker';
 
 /** A bare remote plus N clones, so push rejection is a real race and not a simulation. */
@@ -172,10 +172,12 @@ test('C4 a push rejection triggers pull --rebase and succeeds within 3 attempts'
   const srcB = await writeContract(b, 'orders-api', 1, 'name: orders-api\nversion: 1\n');
   let sawRejection = false;
   const logger: Logger = {
-    info: (m) => {
+    debug: () => {},
+    info: (_code, m) => {
       if (m.includes('push rejected')) sawRejection = true;
     },
     warn: () => {},
+    error: () => {},
   };
 
   const res = await publishToBlackboard(

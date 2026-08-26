@@ -18,7 +18,8 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
 import { LAYOUT } from './agentic.ts';
-import { LAYER_OF, type EventKind, type Logger } from '../shared/store/types.ts';
+import { LAYER_OF, type EventKind } from '../shared/store/types.ts';
+import type { Logger } from '../shared/log.ts';
 
 /** POSIX guarantees a single O_APPEND write is not interleaved only below one page. */
 export const SPOOL_THRESHOLD_BYTES = 4096;
@@ -45,13 +46,13 @@ export async function readCursor(root: string, rel: string, log: Logger): Promis
     const raw = await fs.readFile(path.join(root, rel), 'utf8');
     const n = Number(raw.trim());
     if (!Number.isFinite(n) || n < 0) {
-      log.warn('cursor file is not a non-negative number, resetting to 0', { file: rel, raw });
+      log.warn('cli.cursor_file_is_not', 'cursor file is not a non-negative number, resetting to 0', { file: rel, raw });
       return 0;
     }
     return n;
   } catch (err) {
     const e = err as { code?: string };
-    if (e.code !== 'ENOENT') log.warn('cursor unreadable, resetting to 0', { file: rel, error: String(err) });
+    if (e.code !== 'ENOENT') log.warn('cli.cursor_unreadable_resetting_to', 'cursor unreadable, resetting to 0', { file: rel, error: String(err) });
     return 0;
   }
 }
@@ -89,7 +90,7 @@ export async function readPending(root: string, log: Logger): Promise<OutboxReco
     if (cursor > buf.byteLength) {
       // The outbox shrank. Either it was truncated by hand or replaced. Re-reading from zero
       // is safe (idempotency keys dedupe) and losing the tail is not.
-      log.warn('outbox cursor is past EOF, re-reading from the start', {
+      log.warn('cli.outbox_cursor_is_past', 'outbox cursor is past EOF, re-reading from the start', {
         cursor,
         size: buf.byteLength,
       });
@@ -116,7 +117,7 @@ export async function readPending(root: string, log: Logger): Promise<OutboxReco
     } catch {
       // A malformed line must not block every line behind it, and must not be silently
       // skipped either. Reported, and the drain continues past it.
-      log.warn('outbox line is not valid JSON, skipping it', {
+      log.warn('cli.outbox_line_is_not', 'outbox line is not valid JSON, skipping it', {
         offset: lineOffset,
         preview: text.slice(0, 120),
       });
@@ -125,7 +126,7 @@ export async function readPending(root: string, log: Logger): Promise<OutboxReco
 
     const kind = parsed.kind;
     if (typeof kind !== 'string' || !(kind in LAYER_OF)) {
-      log.warn('outbox line has an unknown kind, skipping it', { offset: lineOffset, kind: String(kind) });
+      log.warn('cli.outbox_line_has_an', 'outbox line has an unknown kind, skipping it', { offset: lineOffset, kind: String(kind) });
       continue;
     }
 
@@ -154,7 +155,7 @@ export async function readPending(root: string, log: Logger): Promise<OutboxReco
     // never observe a partial file.
     if (name.startsWith('.tmp-')) continue;
     if (!name.endsWith('.json')) {
-      log.warn('unexpected file in the outbox spool, ignoring', { file: name });
+      log.warn('cli.unexpected_file_in_the', 'unexpected file in the outbox spool, ignoring', { file: name });
       continue;
     }
     const abs = path.join(spoolDir, name);
@@ -162,7 +163,7 @@ export async function readPending(root: string, log: Logger): Promise<OutboxReco
       const [stat, text] = await Promise.all([fs.stat(abs), fs.readFile(abs, 'utf8')]);
       spooled.push({ file: name, mtime: stat.mtimeMs, text });
     } catch (err) {
-      log.warn('spool file unreadable, leaving it in place', { file: name, error: String(err) });
+      log.warn('cli.spool_file_unreadable_leaving', 'spool file unreadable, leaving it in place', { file: name, error: String(err) });
     }
   }
   spooled.sort((a, b) => a.mtime - b.mtime || a.file.localeCompare(b.file));
@@ -172,12 +173,12 @@ export async function readPending(root: string, log: Logger): Promise<OutboxReco
     try {
       parsed = JSON.parse(s.text) as Record<string, unknown>;
     } catch {
-      log.warn('spool file is not valid JSON, leaving it in place', { file: s.file });
+      log.warn('cli.spool_file_is_not', 'spool file is not valid JSON, leaving it in place', { file: s.file });
       continue;
     }
     const kind = parsed.kind;
     if (typeof kind !== 'string' || !(kind in LAYER_OF)) {
-      log.warn('spool file has an unknown kind, leaving it in place', { file: s.file, kind: String(kind) });
+      log.warn('cli.spool_file_has_an', 'spool file has an unknown kind, leaving it in place', { file: s.file, kind: String(kind) });
       continue;
     }
     out.push({
@@ -259,7 +260,7 @@ export async function drain(
       // the drain here rather than skipping ahead — skipping would publish out of order and
       // leave a hole the cursor cannot represent.
       opts.onOffline?.(err);
-      log.info('drain stopped, will resume', {
+      log.info('cli.drain_stopped_will_resume', 'drain stopped, will resume', {
         reason: String(err),
         remaining: pending.length - published - duplicates,
       });
@@ -304,7 +305,7 @@ export async function appendOutbox(
     await fs.writeFile(tmp, line, 'utf8');
     // rename() on one filesystem is atomic, so a reader never sees a partial file.
     await fs.rename(tmp, final);
-    log.info('outbox payload spooled', { bytes, file: `${id}.json`, kind: event.kind });
+    log.info('cli.outbox_payload_spooled', 'outbox payload spooled', { bytes, file: `${id}.json`, kind: event.kind });
     return { target: 'spool', bytes, file: `${id}.json` };
   }
 

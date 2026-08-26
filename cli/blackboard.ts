@@ -16,7 +16,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import type { Logger } from '../shared/store/types.ts';
+import type { Logger } from '../shared/log.ts';
 
 export const BLACKBOARD_BRANCH = 'agentic/blackboard';
 
@@ -207,7 +207,7 @@ export async function publishToBlackboard(
       // Idempotent republish, e.g. an outbox re-drain after a crash. Return the commit that
       // already holds it rather than making an empty one.
       const sha = (await run(['rev-parse', 'HEAD'], wt)).stdout.trim();
-      log.info('blackboard fact already published, reusing pointer', { path: target, commit_sha: sha });
+      log.info('cli.blackboard_fact_already_published', 'blackboard fact already published, reusing pointer', { path: target, commit_sha: sha });
       return {
         path: target,
         commit_sha: sha,
@@ -241,7 +241,7 @@ export async function publishToBlackboard(
       if (!/^[0-9a-f]{40}$/.test(sha)) {
         throw new BlackboardError('rev-parse did not return a 40-hex sha', sha);
       }
-      log.info('blackboard fact published', { path: target, commit_sha: sha, attempts });
+      log.info('cli.blackboard_fact_published', 'blackboard fact published', { path: target, commit_sha: sha, attempts });
       return { path: target, commit_sha: sha, cdn_url: cdnUrl(opts.repo, sha, target), attempts, unchanged: false };
     }
 
@@ -257,7 +257,7 @@ export async function publishToBlackboard(
     // which races two first-publishes; a sequential test would never have hit it.
     const refExists = /reference already exists|cannot lock ref|stale info/i.test(lastErr);
     if (refExists) {
-      log.info('blackboard branch was created concurrently, restarting against it', {
+      log.info('cli.blackboard_branch_was_created', 'blackboard branch was created concurrently, restarting against it', {
         attempt: attempts,
         path: target,
       });
@@ -269,7 +269,7 @@ export async function publishToBlackboard(
 
     // C4: somebody else pushed first, on a branch we share history with. Rebase and retry.
     // Because it is one file per fact, this cannot conflict — the entire reason for the rule.
-    log.info('blackboard push rejected, rebasing', { attempt: attempts, path: target });
+    log.info('cli.blackboard_push_rejected_rebasing', 'blackboard push rejected, rebasing', { attempt: attempts, path: target });
     const rebase = await run(['pull', '--rebase', remote, BLACKBOARD_BRANCH], wt);
     if (rebase.code !== 0) {
       await run(['rebase', '--abort'], wt);
@@ -282,7 +282,7 @@ export async function publishToBlackboard(
     const retry = await run(['push', remote, `HEAD:${BLACKBOARD_BRANCH}`], wt);
     if (retry.code === 0) {
       const sha = (await run(['rev-parse', 'HEAD'], wt)).stdout.trim();
-      log.info('blackboard fact published after rebase', { path: target, commit_sha: sha, attempts });
+      log.info('cli.blackboard_fact_published_after', 'blackboard fact published after rebase', { path: target, commit_sha: sha, attempts });
       return { path: target, commit_sha: sha, cdn_url: cdnUrl(opts.repo, sha, target), attempts, unchanged: false };
     }
     lastErr = (retry.stderr || retry.stdout).trim();
@@ -344,7 +344,7 @@ async function prepareWorktree(
   // This is racy by nature — another agent may be doing the same thing right now — and that is
   // handled at the push, not here. Trying to win the race with a lock would mean inventing a
   // distributed lock to create a git branch, when git already arbitrates it for us.
-  log.info('blackboard branch does not exist on the remote, creating it', { branch: BLACKBOARD_BRANCH });
+  log.info('cli.blackboard_branch_does_not', 'blackboard branch does not exist on the remote, creating it', { branch: BLACKBOARD_BRANCH });
   const add = await run(['worktree', 'add', '--detach', wt, 'HEAD'], root);
   if (add.code !== 0) throw new BlackboardError('could not create the blackboard worktree', add.stderr.trim());
   const orphan = await run(['checkout', '--orphan', BLACKBOARD_BRANCH], wt);
@@ -394,6 +394,6 @@ export async function materialise(
   const tmp = `${abs}.tmp`;
   await fs.writeFile(tmp, text, 'utf8');
   await fs.rename(tmp, abs);
-  log.info('materialised published fact', { path: pointer.path, local: rel, bytes: text.length });
+  log.info('cli.materialised_published_fact', 'materialised published fact', { path: pointer.path, local: rel, bytes: text.length });
   return rel;
 }

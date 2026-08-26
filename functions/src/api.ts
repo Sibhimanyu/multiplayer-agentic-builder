@@ -24,10 +24,9 @@ import {
   PermissionError,
 } from './authority.ts';
 import { StoreAuthError, StoreBusyError, StoreError, StoreOfflineError } from '../../shared/store/errors.ts';
-import { GlobSyntaxError } from '../../shared/globs.ts';
-import { StoreValidationError } from '../../shared/store/prepare.ts';
-import { LAYER_OF, type EventKind, type Logger } from '../../shared/store/types.ts';
-import type { FirestoreStore } from '../../shared/store/firestore.ts';
+import { LAYER_OF, type EventKind } from '../../shared/store/types.ts';
+import type { Logger } from '../../shared/log.ts';
+import type { FirestoreStore } from '../../shared/store/firebase.ts';
 import type { Firestore } from 'firebase-admin/firestore';
 
 export interface ApiRequest {
@@ -51,6 +50,53 @@ export interface ApiDeps {
 }
 
 const json = (status: number, body: Record<string, unknown>): ApiResponse => ({ status, body });
+
+/**
+ * A malformed request, as distinct from a backend failure.
+ *
+ * Its own type rather than a StoreError, because the shared taxonomy is deliberately about
+ * BACKEND conditions and a bad glob from a client is not one of those. Mapping it to a
+ * StoreError would make it look retryable to anything reading the seam.
+ */
+export class RequestError extends Error {
+  readonly status: number;
+  readonly code: string;
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.name = 'RequestError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
+/**
+ * Reject glob syntax the shared intersection engine does not understand.
+ *
+ * ORDER REQUEST for the coordinator: `shared/globs.ts` `normalizeGlob` currently NORMALISES an
+ * unsupported pattern rather than refusing it, so a lock on `!(vendor)/**` is treated as a
+ * literal directory named `!(vendor)`. That lock protects nothing and `acquireScope` returns
+ * ok:true — a silent failure, which non-negotiable H forbids. Validating here keeps the
+ * Firebase API safe without editing frozen shared code, but the two builds will DIVERGE on
+ * this input until the check moves into `shared/globs.ts`. Flagging rather than working around
+ * it silently, per the orders protocol.
+ */
+const UNSUPPORTED_GLOB = /[{}!()+@|]/;
+
+function validateGlobs(globs: string[]): void {
+  for (const g of globs) {
+    if (g.trim() === '') throw new RequestError(400, 'invalid_glob', 'a glob may not be empty');
+    if (UNSUPPORTED_GLOB.test(g)) {
+      throw new RequestError(
+        400,
+        'invalid_glob',
+        `unsupported glob "${g}": brace expansion, negation and extglob are not supported`,
+      );
+    }
+    if (g.includes('..')) {
+      throw new RequestError(400, 'invalid_glob', `unsafe glob "${g}": must not contain ".."`);
+    }
+  }
+}
 
 /** Body field readers that never throw on a malformed body. */
 const obj = (b: unknown): Record<string, unknown> =>
@@ -77,7 +123,7 @@ function rejectForgedIdentity(body: unknown, id: Identity, log: Logger): ApiResp
     if (b[field] === undefined) continue;
     // An echo of the caller's own agent_id is still refused. Accepting it "because it matches"
     // is how the field becomes load-bearing, and then trusted.
-    log.warn('client-supplied identity field refused', {
+    log.warn('fn.client_supplied_identity_field', 'client-supplied identity field refused', {
       field,
       sent: String(b[field]),
       resolved_agent: id.agent_id,
@@ -98,10 +144,7 @@ export function statusFor(err: unknown): ApiResponse {
   if (err instanceof PermissionError) {
     return json(403, { error: 'forbidden', permission: err.permission, detail: err.message });
   }
-  if (err instanceof StoreValidationError) return json(400, { error: 'invalid_event', detail: err.message });
-  if (err instanceof GlobSyntaxError) {
-    return json(400, { error: 'invalid_glob', glob: err.glob, detail: err.message });
-  }
+  if (err instanceof RequestError) return json(err.status, { error: err.code, detail: err.message });
   if (err instanceof StoreBusyError) {
     return json(429, { error: 'busy', retry_after_ms: err.retry_after_ms, detail: err.message });
   }
@@ -171,6 +214,7 @@ export async function handleApi(req: ApiRequest, deps: ApiDeps): Promise<ApiResp
         const globs = strArray(req.body, 'globs');
         if (!task_id) return json(400, { error: 'missing_task_id' });
         if (globs.length === 0) return json(400, { error: 'missing_globs' });
+        validateGlobs(globs);
         const r = await store.acquireScope(id.project_id, id.agent_id, task_id, globs);
         return json(200, { ...r });
       }
@@ -212,7 +256,7 @@ export async function handleApi(req: ApiRequest, deps: ApiDeps): Promise<ApiResp
         const events = r.events.filter((e) => LAYER_OF[e.kind] !== 'human');
         const dropped = r.events.length - events.length;
         if (dropped > 0) {
-          log.info('human-layer events withheld from agent feed', {
+          log.info('fn.human_layer_events_withheld', 'human-layer events withheld from agent feed', {
             project_id: id.project_id,
             agent_id: id.agent_id,
             dropped,
@@ -240,7 +284,7 @@ export async function handleApi(req: ApiRequest, deps: ApiDeps): Promise<ApiResp
     if (res.status >= 500) {
       // Only the genuinely unexpected is logged as an error. A lost claim, a scope conflict
       // and a revoked token are all normal and must not pollute the error log.
-      log.warn('api error', { route, error: String(err) });
+      log.warn('fn.api_error', 'api error', { route, error: String(err) });
     }
     return res;
   }
@@ -275,16 +319,16 @@ async function connect(req: ApiRequest, deps: ApiDeps): Promise<ApiResponse> {
   try {
     const result = await deps.db.runTransaction(async (tx) => {
       const invite = await tx.get(inviteRef);
-      if (!invite.exists) throw new StoreAuthError('invite already consumed', 'firestore');
+      if (!invite.exists) throw new StoreAuthError('invite already consumed');
       const data = invite.data() as {
         role_slug?: string;
         member_label?: string;
         expires_at_ms?: number;
         consumed?: boolean;
       };
-      if (data.consumed === true) throw new StoreAuthError('invite already consumed', 'firestore');
+      if (data.consumed === true) throw new StoreAuthError('invite already consumed');
       if (typeof data.expires_at_ms === 'number' && data.expires_at_ms < deps.now()) {
-        throw new StoreAuthError('invite expired', 'firestore');
+        throw new StoreAuthError('invite expired');
       }
       const role_slug = data.role_slug ?? '';
       const member_label = data.member_label ?? 'unknown';

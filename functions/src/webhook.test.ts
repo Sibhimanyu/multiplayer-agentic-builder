@@ -8,7 +8,6 @@ import { createHmac, randomUUID } from 'node:crypto';
 
 import { mapDelivery, repoKey, taskIdFromBranch, verifySignature } from './webhook.ts';
 import { createMemoryStore } from '../../shared/store/memory.ts';
-import { makeTask } from '../../shared/store/conformance.ts';
 
 const SECRET = 'a-webhook-secret-that-is-long-enough';
 const sign = (raw: Buffer | string, secret = SECRET) =>
@@ -100,7 +99,8 @@ test('D3b timing-safe comparison still returns false for a same-length near-miss
 test('D4 a replayed X-GitHub-Delivery appends nothing the second time', async () => {
   const store = createMemoryStore();
   const pid = 'proj_inventory';
-  store.seed(pid, { tasks: [makeTask('task_items_crud')] });
+  store.createProject(pid, 'Inventory Tracker', 'example/inventory-tracker');
+  store.addTask(pid, { task_id: 'task_items_crud', title: 'CRUD handlers', kind: 'backend' });
 
   const delivery_id = randomUUID();
   const payload = {
@@ -126,7 +126,6 @@ test('D4 a replayed X-GitHub-Delivery appends nothing the second time', async ()
   const { events } = await store.readEvents(pid, 0);
   const pushes = events.filter((e) => e.kind === 'branch_pushed');
   assert.equal(pushes.length, 1, 'the ledger must contain exactly one branch_pushed');
-  await store.close();
 });
 
 // ---- D5 -------------------------------------------------------------------------------

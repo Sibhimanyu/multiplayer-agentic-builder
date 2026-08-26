@@ -15,9 +15,9 @@ import {
   StoreError,
   StoreOfflineError,
 } from '../shared/store/errors.ts';
-import type { Logger } from '../shared/store/types.ts';
+import type { Logger } from '../shared/log.ts';
 
-const silent: Logger = { info: () => {}, warn: () => {} };
+const silent: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 
 /** A fetch that returns queued responses and records what was asked for. */
 function stub(

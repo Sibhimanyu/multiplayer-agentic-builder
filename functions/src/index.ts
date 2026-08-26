@@ -17,11 +17,11 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { defineSecret } from 'firebase-functions/params';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
-import { createFirestoreStore } from '../../shared/store/firestore.ts';
+import { createFirestoreStore } from '../../shared/store/firebase.ts';
 import { handleApi, statusFor } from './api.ts';
 import { mapDelivery, repoKey, verifySignature } from './webhook.ts';
 import { reapAll } from './reaper.ts';
-import { consoleLogger } from '../../shared/store/types.ts';
+import { consoleLogger } from '../../shared/log.ts';
 
 // Region pinned: an unpinned function defaults to us-central1 and a later change silently
 // creates a SECOND function rather than moving the first.
@@ -64,7 +64,7 @@ export const githubWebhook = onRequest(
     if (!raw) {
       // Fail closed. Without the raw bytes there is no way to verify, and verifying a
       // re-serialised body would be security theatre.
-      log.warn('webhook rejected: no rawBody available', {});
+      log.warn('fn.webhook_rejected_no_rawbody', 'webhook rejected: no rawBody available', {});
       res.status(400).json({ error: 'raw_body_unavailable' });
       return;
     }
@@ -75,7 +75,7 @@ export const githubWebhook = onRequest(
       GITHUB_WEBHOOK_SECRET.value(),
     );
     if (!verdict.ok) {
-      log.warn('webhook signature rejected', { reason: verdict.reason });
+      log.warn('fn.webhook_signature_rejected', 'webhook signature rejected', { reason: verdict.reason });
       res.status(401).json({ error: verdict.reason });
       return;
     }
@@ -94,14 +94,14 @@ export const githubWebhook = onRequest(
     } catch {
       // Signature verified but the body is not JSON. Acknowledge and drop: retrying will not
       // make it parse.
-      log.warn('webhook body verified but unparseable', { delivery_id, event_name });
+      log.warn('fn.webhook_body_verified_but', 'webhook body verified but unparseable', { delivery_id, event_name });
       res.status(200).json({ ok: true, dropped: 'unparseable_json' });
       return;
     }
 
     const full_name = (payload as { repository?: { full_name?: string } })?.repository?.full_name;
     if (!full_name) {
-      log.warn('webhook has no repository.full_name', { delivery_id, event_name });
+      log.warn('fn.webhook_has_no_repository', 'webhook has no repository.full_name', { delivery_id, event_name });
       res.status(200).json({ ok: true, dropped: 'no_repository' });
       return;
     }
@@ -110,14 +110,14 @@ export const githubWebhook = onRequest(
     const mapping = await db.collection('repos').doc(repoKey(full_name)).get();
     const project_id = mapping.exists ? (mapping.get('project_id') as string) : null;
     if (!project_id) {
-      log.warn('webhook for unmapped repo, dropped', { delivery_id, event_name, repo: full_name });
+      log.warn('fn.webhook_for_unmapped_repo', 'webhook for unmapped repo, dropped', { delivery_id, event_name, repo: full_name });
       res.status(200).json({ ok: true, dropped: 'unmapped_repo', repo: full_name });
       return;
     }
 
     const mapped = mapDelivery(event_name, payload, { project_id, delivery_id });
     if (mapped.kind === 'drop') {
-      log.info('webhook delivery dropped', {
+      log.info('fn.webhook_delivery_dropped', 'webhook delivery dropped', {
         delivery_id,
         event_name,
         project_id,
@@ -136,7 +136,7 @@ export const githubWebhook = onRequest(
       const mappedErr = statusFor(err);
       // Here a 5xx IS correct: the delivery was valid and we failed to record it, so we want
       // GitHub to retry.
-      log.warn('webhook append failed', { delivery_id, project_id, error: String(err) });
+      log.warn('fn.webhook_append_failed', 'webhook append failed', { delivery_id, project_id, error: String(err) });
       res.status(mappedErr.status >= 500 ? 503 : mappedErr.status).json(mappedErr.body);
     }
   },
@@ -195,5 +195,5 @@ export const api = onRequest({ cors: true }, async (req, res) => {
 export const reapClaims = onSchedule('every 5 minutes', async () => {
   const results = await reapAll(db, store, log, { claim_timeout_ms: 15 * 60_000 });
   const released = results.reduce((n, r) => n + r.released.length, 0);
-  log.info('reaper run complete', { projects: results.length, released });
+  log.info('fn.reaper_run_complete', 'reaper run complete', { projects: results.length, released });
 });

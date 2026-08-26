@@ -14,12 +14,12 @@ import {
   StoreOfflineError,
 } from '../shared/store/errors.ts';
 import { withRetry } from '../shared/store/retry.ts';
+import type { Logger } from '../shared/log.ts';
 import type {
   AgentStatus,
   Event,
   EventKind,
   Freshness,
-  Logger,
   ScopeLock,
   Seq,
   Snapshot,
@@ -85,7 +85,7 @@ export class ApiClient {
       // Named: an abort is a timeout, anything else is a transport failure. Both are "offline",
       // which is a normal condition the CLI queues through, not a crash.
       const reason = (err as Error)?.name === 'AbortError' ? 'request timed out' : String(err);
-      throw new StoreOfflineError(`${method} ${path}: ${reason}`, 'firestore', err);
+      throw new StoreOfflineError(`${method} ${path}: ${reason}`, { backend_message: String(err) });
     } finally {
       clearTimeout(timer);
     }
@@ -99,7 +99,7 @@ export class ApiClient {
         data = JSON.parse(text);
       } catch {
         // A non-JSON body from a 5xx is an infrastructure page, not an API response.
-        if (res.ok) throw new StoreError(`${method} ${path}: response was not JSON`, 'firestore');
+        if (res.ok) throw new StoreError(`${method} ${path}: response was not JSON`, { backend_message: text.slice(0, 200) });
       }
     }
 
@@ -111,35 +111,44 @@ export class ApiClient {
       case 403:
         // Terminal. The caller must STOP, not retry: a revoked token retried in a loop is a
         // billable request per attempt against a project with no spending cap.
-        throw new StoreAuthError(`${method} ${path}: ${detail}`, 'firestore');
+        throw new StoreAuthError(`${method} ${path}: ${detail}`, { backend_message: detail });
       case 429: {
         const hint = Number((data as { retry_after_ms?: number })?.retry_after_ms ?? NaN);
         const header = Number(res.headers.get('retry-after')) * 1000;
         const retry = Number.isFinite(hint) ? hint : Number.isFinite(header) ? header : null;
-        throw new StoreBusyError(`${method} ${path}: ${detail}`, 'firestore', retry);
+        throw new StoreBusyError(`${method} ${path}: ${detail}`, {
+          backend_message: detail,
+          ...(retry === null ? {} : { retry_after_ms: retry }),
+        });
       }
       case 502:
       case 503:
       case 504:
-        throw new StoreOfflineError(`${method} ${path}: ${detail}`, 'firestore');
+        throw new StoreOfflineError(`${method} ${path}: ${detail}`, { backend_message: detail });
       default:
         // 400 and 404 are caller bugs. Named and thrown, never retried — retrying a malformed
         // request just sends it again.
-        throw new StoreError(`${method} ${path}: ${res.status} ${detail}`, 'firestore');
+        throw new StoreError(`${method} ${path}: ${res.status} ${detail}`, {
+          backend_message: detail,
+          cause_code: String(res.status),
+        });
     }
   }
 
-  /** Retryable wrapper. Only busy and offline are retried; auth is terminal. */
-  private retry<T>(fn: () => Promise<T>): Promise<T> {
-    return withRetry(fn, {
-      attempts: 4,
-      onWait: ({ attempt, delay_ms, reason }) =>
-        this.opts.log.info('retrying after backoff', { attempt, delay_ms, reason }),
-    });
+  /**
+   * Retryable wrapper. Only busy and offline are retried; auth is terminal.
+   *
+   * The shared withRetry returns { value, outcome } and emits its own `retry.backoff` /
+   * `retry.abandoned` lines, so there is no logging to add here — and adding any would mean
+   * two builds reporting the same backoff differently.
+   */
+  private async retry<T>(fn: () => Promise<T>, op: string): Promise<T> {
+    const { value } = await withRetry(fn, { attempts: 4, log: this.opts.log, op });
+    return value;
   }
 
   whoami(): Promise<WhoAmI> {
-    return this.retry(async () => (await this.request<WhoAmI>('GET', '/whoami')).data);
+    return this.retry(async () => (await this.request<WhoAmI>('GET', '/whoami')).data, 'whoami');
   }
 
   appendEvent(
@@ -154,7 +163,7 @@ export class ApiClient {
         { kind, body, idempotency_key },
       );
       return r.data;
-    });
+    }, 'appendEvent');
   }
 
   claimTask(
@@ -171,13 +180,13 @@ export class ApiClient {
       return r.data.ok
         ? { ok: true }
         : { ok: false, owner: r.data.owner ?? 'unknown', claimed_at: r.data.claimed_at ?? '' };
-    });
+    }, 'claimTask');
   }
 
   releaseTask(task_id: TaskId): Promise<void> {
     return this.retry(async () => {
       await this.request('POST', '/release', { task_id });
-    });
+    }, 'releaseTask');
   }
 
   acquireScope(
@@ -190,19 +199,19 @@ export class ApiClient {
         globs,
       });
       return r.data.ok ? { ok: true } : { ok: false, conflicts: r.data.conflicts ?? [] };
-    });
+    }, 'acquireScope');
   }
 
   releaseScope(): Promise<void> {
     return this.retry(async () => {
       await this.request('DELETE', '/scope');
-    });
+    }, 'releaseScope');
   }
 
   heartbeat(status: AgentStatus, current_task: TaskId | null, branch: string | null): Promise<void> {
     return this.retry(async () => {
       await this.request('POST', '/heartbeat', { status, current_task, branch });
-    });
+    }, 'heartbeat');
   }
 
   readEvents(since_seq: Seq): Promise<{ events: Event[]; next_cursor: Seq; has_more: boolean }> {
@@ -212,7 +221,7 @@ export class ApiClient {
         `/events?since_seq=${encodeURIComponent(String(since_seq))}`,
       );
       return r.data;
-    });
+    }, 'readEvents');
   }
 
   readSnapshot(etag?: string): Promise<{ snapshot: Snapshot; etag: string } | null> {
@@ -225,7 +234,7 @@ export class ApiClient {
       );
       if (r.status === 304) return null;
       return r.data;
-    });
+    }, 'readSnapshot');
   }
 }
 
@@ -241,15 +250,15 @@ export async function connectWithInvite(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ invite, harness }),
   }).catch((err) => {
-    throw new StoreOfflineError(`connect: ${String(err)}`, 'firestore', err);
+    throw new StoreOfflineError(`connect: ${String(err)}`, { backend_message: String(err) });
   });
 
   const text = await res.text();
   const data = text === '' ? {} : (JSON.parse(text) as Record<string, unknown>);
   if (!res.ok) {
     const detail = String(data.detail ?? data.error ?? res.status);
-    if (res.status === 401) throw new StoreAuthError(`connect refused: ${detail}`, 'firestore');
-    throw new StoreError(`connect failed: ${detail}`, 'firestore');
+    if (res.status === 401) throw new StoreAuthError(`connect refused: ${detail}`, { backend_message: detail });
+    throw new StoreError(`connect failed: ${detail}`, { backend_message: detail });
   }
   return data as never;
 }

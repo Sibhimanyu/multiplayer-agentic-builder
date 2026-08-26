@@ -9,8 +9,9 @@
 // gone, it never touches a claim younger than the timeout regardless of heartbeat, and it
 // reports every claim it examined and declined.
 
-import { CLAIM_TIMEOUT_MS, type Logger, type ProjectId } from '../../shared/store/types.ts';
-import type { FirestoreStore } from '../../shared/store/firestore.ts';
+import { CLAIM_TIMEOUT_MS, type ProjectId } from '../../shared/store/types.ts';
+import type { Logger } from '../../shared/log.ts';
+import type { FirestoreStore } from '../../shared/store/firebase.ts';
 import type { Firestore } from 'firebase-admin/firestore';
 
 export interface ReapResult {
@@ -75,7 +76,7 @@ export async function reapProject(
       // A claim by an agent with no presence document at all. This is not a stale agent, it is
       // an inconsistency, and guessing is worse than reporting it.
       result.kept.push({ task_id, agent_id, reason: 'no presence document for the owning agent' });
-      log.warn('claim held by unknown agent', { project_id, task_id, agent_id });
+      log.warn('fn.claim_held_by_unknown', 'claim held by unknown agent', { project_id, task_id, agent_id });
       continue;
     }
 
@@ -99,7 +100,7 @@ export async function reapProject(
     }
   }
 
-  log.info('reap complete', {
+  log.info('fn.reap_complete', 'reap complete', {
     project_id,
     examined: result.examined,
     released: result.released.length,
@@ -132,12 +133,12 @@ async function release(
       return;
     }
     result.released.push({ task_id, agent_id, silent_ms });
-    log.info('claim reaped', { project_id, task_id, agent_id, silent_ms, reason });
+    log.info('fn.claim_reaped', 'claim reaped', { project_id, task_id, agent_id, silent_ms, reason });
   } catch (err) {
     // One failed release must not abandon the rest of the table. Named, logged, and recorded
     // as kept so the count still adds up.
     result.kept.push({ task_id, agent_id, reason: `release failed: ${String(err)}` });
-    log.warn('reap failed for one claim', { project_id, task_id, agent_id, error: String(err) });
+    log.warn('fn.reap_failed_for_one', 'reap failed for one claim', { project_id, task_id, agent_id, error: String(err) });
   }
 }
 
@@ -154,7 +155,7 @@ export async function reapAll(
     try {
       out.push(await reapProject(db, store, p.id, log, opts));
     } catch (err) {
-      log.warn('reap failed for one project', { project_id: p.id, error: String(err) });
+      log.warn('fn.reap_failed_for_one', 'reap failed for one project', { project_id: p.id, error: String(err) });
     }
   }
   return out;

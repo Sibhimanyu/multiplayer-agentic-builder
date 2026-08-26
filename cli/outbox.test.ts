@@ -20,17 +20,40 @@ import {
   type OutboxRecord,
 } from './outbox.ts';
 import { StoreOfflineError } from '../shared/store/errors.ts';
-import { makeTask } from '../shared/store/conformance.ts';
-import type { Logger } from '../shared/store/types.ts';
+import type { Logger } from '../shared/log.ts';
+import type { TaskView } from '../shared/store/types.ts';
 
-const silent: Logger = { info: () => {}, warn: () => {} };
+/** A seeded task row. The shared suite has its own; this is for the tests it does not own. */
+function makeTask(task_id: string, over: Partial<TaskView> = {}): TaskView {
+  return {
+    task_id,
+    title: `task ${task_id}`,
+    kind: 'backend',
+    status: 'open',
+    claimed_by: null,
+    branch: null,
+    pr_url: null,
+    pr_number: null,
+    ci: null,
+    depends_on: [],
+    blocked_by: null,
+    blocked_reason: null,
+    file_scope: [],
+    updated_at: '2026-08-25T09:00:00.000Z',
+    ...over,
+  };
+}
+
+const silent: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 function recorder(): { log: Logger; lines: string[] } {
   const lines: string[] = [];
   return {
     lines,
     log: {
-      info: (m, meta) => lines.push(`info ${m} ${JSON.stringify(meta ?? {})}`),
-      warn: (m, meta) => lines.push(`warn ${m} ${JSON.stringify(meta ?? {})}`),
+      debug: (c, m, f) => lines.push(`debug ${c} ${m} ${JSON.stringify(f ?? {})}`),
+      info: (c, m, f) => lines.push(`info ${c} ${m} ${JSON.stringify(f ?? {})}`),
+      warn: (c, m, f) => lines.push(`warn ${c} ${m} ${JSON.stringify(f ?? {})}`),
+      error: (c, m, f) => lines.push(`error ${c} ${m} ${JSON.stringify(f ?? {})}`),
     },
   };
 }
@@ -234,7 +257,7 @@ test('B6 killing the CLI mid-publish re-sends and produces no duplicate in the l
   // First run dies after the third publish, BEFORE its cursor write would have landed.
   let count = 0;
   const dying = async (rec: OutboxRecord) => {
-    if (count++ === 3) throw new StoreOfflineError('killed mid-publish', 'test');
+    if (count++ === 3) throw new StoreOfflineError('killed mid-publish');
     return publish(rec);
   };
   const first = await drain(root, dying, silent);
@@ -292,7 +315,7 @@ test('B6c a crash BEFORE the cursor write re-sends, and the store dedupes it', a
 test('B7 with the network down the outbox grows and the cursor does not move', async () => {
   const root = await connected();
   const offline = async (): Promise<{ seq: number; duplicate: boolean }> => {
-    throw new StoreOfflineError('backend unreachable', 'test');
+    throw new StoreOfflineError('backend unreachable');
   };
 
   await appendOutbox(root, { kind: 'task_progress', body: { n: 1 } }, silent);

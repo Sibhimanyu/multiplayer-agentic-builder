@@ -99,18 +99,18 @@ export function bearerToken(authorization: string | undefined): string | null {
  */
 export async function resolveAgent(db: Firestore, authorization: string | undefined): Promise<Identity> {
   const token = bearerToken(authorization);
-  if (!token) throw new StoreAuthError('missing or malformed Authorization header', 'firestore');
+  if (!token) throw new StoreAuthError('missing or malformed Authorization header');
 
   const digest = hashToken(token);
   // Collection-group query: one lookup regardless of how many projects exist. The token hash
   // is the document id, so this is a point read, not a scan.
   const matches = await db.collectionGroup('agents').where('token_sha256', '==', digest).limit(2).get();
 
-  if (matches.empty) throw new StoreAuthError('unknown agent token', 'firestore');
+  if (matches.empty) throw new StoreAuthError('unknown agent token');
   if (matches.size > 1) {
     // Two agents sharing a token hash means either a sha256 collision or a bug in connect.
     // Both are refusals, not something to pick a winner from.
-    throw new StoreAuthError('ambiguous agent token', 'firestore');
+    throw new StoreAuthError('ambiguous agent token');
   }
 
   const doc = matches.docs[0]!;
@@ -126,13 +126,13 @@ export async function resolveAgent(db: Firestore, authorization: string | undefi
   // Re-verify in constant time. The query already matched, but comparing again means a future
   // change to the query (a range, a prefix) cannot silently loosen authentication.
   if (!data.token_sha256 || !sameDigest(data.token_sha256, digest)) {
-    throw new StoreAuthError('token digest mismatch', 'firestore');
+    throw new StoreAuthError('token digest mismatch');
   }
-  if (data.revoked === true) throw new StoreAuthError('agent token revoked', 'firestore');
+  if (data.revoked === true) throw new StoreAuthError('agent token revoked');
 
   // projects/{pid}/agents/{agent_id} -> the parent of the parent is the project document.
   const project_id = doc.ref.parent.parent?.id;
-  if (!project_id) throw new StoreAuthError('agent document is not under a project', 'firestore');
+  if (!project_id) throw new StoreAuthError('agent document is not under a project');
 
   const role_slug = data.role_slug ?? '';
   const pack = ROLE_PACKS[role_slug];

@@ -17,8 +17,10 @@ import { constants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { sanitizeText } from '../shared/sanitize.ts';
-import { PROTOCOL_VERSION, type Logger, type TaskView } from '../shared/store/types.ts';
+import { sanitizeText, VARCHAR_MAX } from '../shared/sanitize.ts';
+import { nullLogger } from '../shared/log.ts';
+import { PROTOCOL_VERSION, type TaskView } from '../shared/store/types.ts';
+import type { Logger } from '../shared/log.ts';
 
 export interface RolePack {
   role_slug: string;
@@ -203,7 +205,7 @@ export function renderCurrentTask(task: TaskView | null): string {
     ].join('\n');
   }
   const lines = [
-    `# ${sanitizeText(task.title).text}`,
+    `# ${sanitizeText(task.title, { field: 'task.title', max: VARCHAR_MAX, log: nullLogger })}`,
     '',
     `task_id: ${task.task_id}`,
     `kind:    ${task.kind}`,
@@ -211,7 +213,7 @@ export function renderCurrentTask(task: TaskView | null): string {
     '',
     '## Description',
     '',
-    sanitizeText(task.description ?? '(none supplied)').text,
+    sanitizeText(task.description ?? '(none supplied)', { field: 'task.description', log: nullLogger }),
     '',
     '## File scope',
     '',
@@ -227,7 +229,7 @@ export function renderCurrentTask(task: TaskView | null): string {
       '',
       '## Blocked',
       '',
-      `Blocked by ${task.blocked_by}: ${sanitizeText(task.blocked_reason ?? '').text}`,
+      `Blocked by ${task.blocked_by}: ${sanitizeText(task.blocked_reason ?? '', { field: 'task.blocked_reason', log: nullLogger })}`,
     );
   }
   return lines.join('\n');
@@ -258,9 +260,9 @@ export async function writeAgenticTree(
     JSON.stringify(
       {
         project_id: opts.project.project_id,
-        name: sanitizeText(opts.project.name).text,
+        name: sanitizeText(opts.project.name, { field: 'project.name', max: VARCHAR_MAX, log }),
         repo_url: opts.project.repo_url,
-        brief: sanitizeText(opts.project.brief).text,
+        brief: sanitizeText(opts.project.brief, { field: 'project.brief', log }),
         protocol_version: opts.project.protocol_version,
       },
       null,
@@ -284,7 +286,7 @@ export async function writeAgenticTree(
   // agent_id and cursors, which legitimately differ between two runs of anything.
   await writeFile(root, LAYOUT.state, JSON.stringify(opts.state, null, 2));
 
-  log.info('agentic tree written', { root, files: written.length });
+  log.info('cli.agentic_tree_written', 'agentic tree written', { root, files: written.length });
   return written;
 }
 
@@ -330,7 +332,7 @@ export async function readState(root: string, log: Logger): Promise<CliState> {
     if (e.code !== 'ENOENT') {
       // A corrupt state file loses cursor position, which means re-delivery, not loss —
       // appendEvent is idempotent. Worth a loud warning, not a crash.
-      log.warn('state.json unreadable, starting from zero', { path: abs, error: String(err) });
+      log.warn('cli.state_json_unreadable_starting', 'state.json unreadable, starting from zero', { path: abs, error: String(err) });
     }
     return { agent_id: '', last_seen_seq: 0, last_written_seq: 0 };
   }
@@ -379,7 +381,7 @@ export async function appendInbox(
   if (bytes > 4096) {
     // An inbox line over one page is not guaranteed atomic. Contract CONTENT never goes here
     // (only a pointer plus a local path), so this should be unreachable — say so if it is not.
-    log.warn('inbox line exceeds 4 KiB; atomicity is not guaranteed', {
+    log.warn('cli.inbox_line_exceeds_4', 'inbox line exceeds 4 KiB; atomicity is not guaranteed', {
       bytes,
       kind: String(line.kind),
     });
