@@ -1,0 +1,5 @@
+{
+  "//": "Typecheck for this workspace's own code. The root tsconfig.json includes only shared/** and is frozen to this workspace by order 0002, so this extends it rather than editing it. Run: npx tsc --noEmit -p tsconfig.catalyst.json",
+  "extends": "./tsconfig.json",
+  "include": ["catalyst/**/*.ts", "functions/**/*.ts", "shared/**/*.ts"]
+}

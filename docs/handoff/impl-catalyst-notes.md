@@ -270,6 +270,70 @@ notes file.
 
 ---
 
+# Step 4a — `seq` allocation (order 0005)
+
+`ROWID` is out; a dedicated `seq bigint is_unique` column allocated **globally** is in.
+Built in `catalyst/lib/seq.ts`, tested in `catalyst/lib/seq.test.ts`, 10 tests, no cloud and
+no project ID required.
+
+## The correction the coordinator caught
+
+My proposal read `MAX(seq)` **for the project**. Against a globally-unique column that
+deadlocks, and I had not seen it: project A holds seq 6; project B computes
+`MAX(seq WHERE project_id = B)` = 5, tries 6, gets `DUPLICATE_VALUE`, recomputes its own max
+— still 5 — and tries 6 forever. Allocation is now global with no project filter, and the
+filter moved to the read path. There is a named regression test for exactly this
+(`REGRESSION: a project whose own max lags the global max does not spin`).
+
+Second rule, same shape: on collision the candidate is **incremented, never re-read**.
+Re-reading `MAX` after a collision reintroduces the spin under contention — every racer
+re-reads the same value and re-collides. Incrementing walks each racer up its own ladder, so
+N concurrent appends settle in N attempts worst case. Test: 20 concurrent allocators against
+one unique index produce 20 distinct seqs, densely filling 101–120, nothing lost.
+
+## `DUPLICATE_VALUE` is parsed, not pattern-matched loosely
+
+`catalyst/lib/duplicate.ts` pulls the column name out of the message, because three unique
+columns collide for three unrelated reasons:
+
+| Column | Meaning | Correct response |
+|---|---|---|
+| `seq` | another append raced us | increment the candidate, retry |
+| `idempotency_key` | the caller replayed | return the ORIGINAL seq, append nothing |
+| `task_id` | another agent won the claim | `{ok: false, owner}` |
+
+A catch-all that treated any `DUPLICATE_VALUE` as "someone else won" would answer a replayed
+append with a fabricated claim loss. When the message does not parse, `column` is `null` and
+the error is **rethrown rather than assumed to be `seq`** — a Catalyst message-format change
+must surface loudly, not silently mis-route a retry into a duplicate event.
+
+## Cost, for G4
+
+**One extra SELECT per append**, always exactly one — asserted in the tests, not estimated.
+Contention costs additional INSERT attempts but never additional SELECTs. Exhaustion at 20
+attempts raises `StoreBusyError`, which is retryable, so the CLI backs off rather than
+spinning.
+
+## A frozen-file constraint hit while doing this
+
+`package.json` is part of the shared foundation and frozen by order 0002. Its test script is
+`node --test "shared/**/*.test.ts"`, which does not match this workspace's own tests, and
+`tsconfig.json` includes only `shared/**`.
+
+Not edited. Added `tsconfig.catalyst.json` instead — a **new** file, not a change to a shared
+one — and this workspace's tests run explicitly:
+
+```
+npm test                                        # shared suite, 19/19
+node --test "catalyst/**/*.test.ts"             # this workspace, 15/15
+npx tsc --noEmit -p tsconfig.catalyst.json      # both trees
+```
+
+If the coordinator would rather the root scripts covered both trees, that is an order
+request, not something to change unilaterally.
+
+---
+
 # Blocked on the coordinator
 
 1. **Catalyst project ID** for this build — the handoff said `<paste>`. Needed for step 3.
