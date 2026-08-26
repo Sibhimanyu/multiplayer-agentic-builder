@@ -342,7 +342,46 @@ Callers see these, never backend-specific errors.
 | Agent token revoked | `StoreAuthError` — caller must stop, not retry |
 | Backend rate limited | `StoreBusyError` — caller retries with jittered backoff |
 | Backend unreachable | `StoreOfflineError` — caller queues to outbox, keeps working |
+| Operation unavailable by **configuration**, not failure | **`NotProvisionedError`** — a distinct type, never a generic `StoreError` |
 | Anything else | `StoreError` with the backend message attached |
+
+### `NotProvisionedError` — required, and distinct
+
+An operation that cannot work because a resource was never provisioned MUST throw
+`NotProvisionedError`, not `StoreError`. A caller has to be able to tell **"never provisioned"**
+from **"the call failed"**, because those need opposite responses: one is a setup gate to
+surface to a human, the other is a retry or a bug hunt. Collapsing them makes a gate look like a
+defect and sends whoever is debugging in the wrong direction.
+
+Two requirements that come with it:
+
+- **Export `UNPROVISIONED_OPERATIONS`**, so a harness can *report* which operations are
+  unavailable rather than discovering it by throwing. Discovery-by-exception means partial
+  execution before the failure.
+- **An unprovisioned operation makes no network call at all**, so nothing can appear to have
+  half-worked.
+
+This is an interface concept, not a platform workaround, so it lives in `shared/`. It applies to
+any route with a provisioning gate — Catalyst's Stratus bucket, and Firebase's Cloud Function
+while Blaze is unattached.
+
+### Verify the error mapping through an injected transport
+
+The status→error mapping **is** the contract with the retry policy, and getting one case wrong is
+worse than failing outright: a retried 401 loops forever, an un-retried 429 drops a write.
+
+Required mapping:
+
+| Condition | Error | Caller behaviour |
+|---|---|---|
+| 401 / 403 | `StoreAuthError` | **stop**, never retry |
+| 429 | `StoreBusyError` | retry, honour `Retry-After` |
+| 5xx, transport failure | `StoreOfflineError` | **queue**, never discard |
+| other 4xx | `StoreError` | surface |
+
+**Test it through an injected fetch, not against the live backend.** It costs zero quota, and it
+covers cases — a 429 with a `Retry-After`, a mid-flight transport drop — that are impractical to
+provoke on demand against a real service.
 
 ## Implementations
 
