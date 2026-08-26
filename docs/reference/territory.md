@@ -48,14 +48,30 @@ avoidable.
 ## Verifying you are in bounds
 
 ```bash
-git diff --stat origin/zoho-catalyst-app-builder HEAD -- \
-  docs shared package.json tsconfig.json \
-  client/src/components.tsx client/src/tokens.css \
+FROZEN=(docs shared package.json tsconfig.json
+  client/src/components.tsx client/src/tokens.css
   client/index.html client/tsconfig.json client/src/store/types.ts
+  ':(exclude)docs/handoff/impl-*-notes.md')
+
+MB=$(git merge-base origin/zoho-catalyst-app-builder HEAD)
+git diff --stat "$MB" HEAD -- "${FROZEN[@]}"      # empty = in bounds
+git rev-list --count HEAD..origin/zoho-catalyst-app-builder   # >0 = needs rebase
 ```
 
-Empty output means you are in bounds. Anything listed is a violation — revert it and raise an
-order request instead.
+Empty diff means you are in bounds. Anything listed is a violation — revert it and raise an
+order request.
+
+**Two bugs in the version first published here, both mine, both found by a build running it:**
+
+1. It globbed all of `docs/`, so it flagged `docs/handoff/impl-<platform>-notes.md` — which
+   this file's own table lists as **per-build**. The check contradicted the table it was meant
+   to enforce. Fixed with the `:(exclude)` pathspec.
+2. It diffed against the shared **tip**, which conflates two entirely different conditions:
+   *you modified a frozen file* (a violation, revert it) and *the shared branch moved ahead of
+   you* (not a violation, just rebase). Diffing from the **merge-base** shows only what your
+   branch actually touched, regardless of how far the shared branch has moved. The
+   `rev-list --count` line reports "behind" separately, because the two need different
+   responses.
 
 ## Verify cross-branch invariants by RUNNING, not by reading
 
@@ -68,10 +84,21 @@ other — was **invisible from within a single branch** and only appeared when t
 was run in both places.
 
 ```bash
-git worktree add /tmp/xcheck origin/<other-branch>
+REF=${XCHECK_REF:-origin/zoho-catalyst-app-builder}       # the SHARED branch, not the other build
+git worktree add /tmp/xcheck "$REF"
 ( cd /tmp/xcheck && npm install --silent && npm test )    # count it, don't read it
 git worktree remove /tmp/xcheck --force
 ```
+
+**Compare against the SHARED branch, not the other build's.** Better than the direct
+comparison first published here, for a reason that stands on its own: the shared branch is the
+normative source for root `package.json` and `tsconfig.json`, and both builds are frozen to it,
+so matching it proves the two builds match **each other transitively**. It also sidesteps the
+question of whether one build may touch the other's branch at all. Override with `XCHECK_REF`
+if a direct comparison is ever wanted.
+
+**An absent or unparseable count must FAIL, not pass.** Missing is drift — a guard that goes
+quiet when its input disappears is broken in the direction that matters.
 
 A throwaway worktree is cheap. Reasoning that two files are identical is not evidence that two
 commands produce the same result; the second one is what the claim actually asserts.

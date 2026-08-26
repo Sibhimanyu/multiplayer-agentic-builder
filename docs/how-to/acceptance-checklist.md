@@ -121,6 +121,29 @@ Record real numbers. These are the point of building both.
 | G9 | Every platform constraint hit, with the workaround | written list |
 | G10 | Would you choose this again? One paragraph, written before seeing the other build's number | prose |
 
+### Measurement discipline
+
+**Do not report a single-run figure as a threshold.** Contention limits are probabilistic, not
+cliffs. "The ceiling is 32 concurrent" is one run; the honest form is "refusal becomes probable
+above roughly a dozen concurrent appends, and the documented retry clears it" plus the observed
+distribution across N runs.
+
+Anyone quoting a hard number has measured once. Report the shape and the recovery.
+
+**An intermittent test is worse than a failing one.** A failing test is information. A test that
+is red under load and green otherwise converts an open question into noise, and it will be
+re-run until it passes and then trusted. Same failure as asserting count instead of
+correlation: it cannot reliably distinguish the bug from the fix.
+
+If a test's outcome depends on load, either assert the property that holds under **all** loads,
+or pin the load. Never both leave it variable and treat a green run as evidence.
+
+**Assert the contract, not your expectation of it.** A retryable refusal under contention is
+the contract working. Asserting "all N succeed" against a store whose interface defines
+`StoreBusyError` as a normal outcome is asserting that the contract is not the contract. Assert
+instead: whatever refuses refuses **retryably**, nothing that landed shares a `seq`, and the
+same N all land when driven through the shared retry helper with per-key correlation.
+
 ## `check_suite` conclusion mapping — normative
 
 Ruled 2026-08-25. Both builds MUST implement exactly this. A divergence here is worse than a

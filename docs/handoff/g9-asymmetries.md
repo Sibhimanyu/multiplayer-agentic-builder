@@ -13,7 +13,7 @@ Catalyst a composite-key scheme and Firestore nothing" is the finding. Averaging
 
 | # | Guarantee | Catalyst cost | Firebase cost | Found by |
 |---|---|---|---|---|
-| 1 | Monotonic `seq` | `ROWID` is allocated from per-shard blocks and runs **backwards** across INSERTs. Needs a dedicated `seq bigint is_unique` column, globally allocated, with a bounded CAS retry loop. | A counter doc inside `runTransaction`. First-class. | live probe: insert #1 `…052001`, insert #2 `…044002` |
+| 1 | Monotonic `seq` | `ROWID` is allocated from per-shard blocks and runs **backwards** across INSERTs. Needs a dedicated `seq bigint is_unique` column, globally allocated, with a bounded CAS retry loop. | A counter doc inside `runTransaction`. First-class — but **not free at concurrency**: see measured note below. | live probe: insert #1 `…052001`, insert #2 `…044002` |
 | 2 | Per-project uniqueness | `is_unique` is global to the **table**. Every per-project constraint becomes a composite key column, with a builder that rejects the separator inside any part. Applies to `task_claims`, `scope_locks`, `request_dedupe`. | Nothing. A transaction on a document path is naturally scoped. | live probe |
 | 3 | Injection safety | ZCQL has **no parameter binding**. With `project_id` arriving from request bodies, the escaper is the entire injection boundary — one audited chokepoint, tested against real payloads. | Nothing. The SDK is parameterised. | live probe |
 | 4 | Running the conformance suite | A5 needs 301 events ≈ 602 INSERTs per run against a 5,000/month free INSERT budget: **~8 runs per month**. A5 excluded from routine real-backend runs. | 602 writes against 20,000/**day**. Effectively unlimited. | free-tier arithmetic |
@@ -23,6 +23,20 @@ Catalyst a composite-key scheme and Firestore nothing" is the finding. Averaging
 | 8 | Durable text fidelity | `varchar` silently clamps at 255; `text` caps at 10,000; **emoji and 4-byte UTF-8 are silently stored as `?`**. Requires a sanitiser on every durable write. | Full UTF-8, 1 MiB per document. | product audit |
 | 9 | Sharing code across deploy units | Each function directory deploys independently, so `functions/_lib` must be vendored per directory at package time, with a drift guard and import-depth rewriting. | One deployable. | build |
 | 10 | Spending safety | Transparent per-operation pricing with a $5/project floor. Cannot run away. | **No spending cap by default** on Blaze. Requires a manually-set budget alert, which `firebase-tools` cannot create — Cloud Billing budgets are console-only. | build |
+
+## Measured, not theoretical — entry 1
+
+Firebase's single counter document has a real contention ceiling. At 32-way concurrent append
+the emulator returned `10 ABORTED: Transaction lock timeout` on
+`projects/{pid}/meta/ledger`. **Intermittently** — the next run landed all 32 with no refusals.
+
+This does not break the contract. `ABORTED` maps to `StoreBusyError`, which the interface
+defines as a normal retryable outcome, and all 32 land when driven through the shared retry
+helper. But it means the two platforms converge more than entry 1 first suggested: Catalyst
+pays with an explicit CAS retry loop it had to design, Firebase pays with an implicit one it
+gets from the SDK. **Both need a retry; only one had to think about it.**
+
+Record it as a distribution, never as a cliff. See "Measurement discipline" in the checklist.
 
 ## Severity trend worth noting
 
