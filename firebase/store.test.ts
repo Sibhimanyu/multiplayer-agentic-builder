@@ -15,12 +15,12 @@ import assert from 'node:assert/strict';
 import { deleteApp, initializeApp, type App } from 'firebase-admin/app';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 
-import { registerConformanceSuite, type StoreHarness } from './conformance.ts';
-import { createFirestoreStore, type FirestoreStore } from './firebase.ts';
-import { StoreBusyError, StoreOfflineError } from './errors.ts';
-import { CapturingLogger } from '../log.ts';
-import { FakeClock } from '../clock.ts';
-import type { AgentId, CoordinationStore, EventInput, ProjectId, Snapshot } from './types.ts';
+import { registerConformanceSuite, type StoreHarness } from '../shared/store/conformance.ts';
+import { createFirestoreStore, type FirestoreStore } from './store.ts';
+import { StoreBusyError, StoreOfflineError } from '../shared/store/errors.ts';
+import { CapturingLogger } from '../shared/log.ts';
+import { FakeClock } from '../shared/clock.ts';
+import type { AgentId, CoordinationStore, EventInput, ProjectId, Snapshot } from '../shared/store/types.ts';
 import { startTcpCutter, type TcpCutter } from './testing/tcp-cutter.ts';
 
 const EMULATOR = process.env.FIRESTORE_EMULATOR_HOST;

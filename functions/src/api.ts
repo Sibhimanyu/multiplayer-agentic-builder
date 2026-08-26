@@ -26,7 +26,7 @@ import {
 import { StoreAuthError, StoreBusyError, StoreError, StoreOfflineError } from '../../shared/store/errors.ts';
 import { LAYER_OF, type EventKind } from '../../shared/store/types.ts';
 import type { Logger } from '../../shared/log.ts';
-import type { FirestoreStore } from '../../shared/store/firebase.ts';
+import type { FirestoreStore } from '../../firebase/store.ts';
 import type { Firestore } from 'firebase-admin/firestore';
 
 export interface ApiRequest {

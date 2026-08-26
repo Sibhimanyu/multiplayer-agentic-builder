@@ -18,8 +18,8 @@
 // Pure and total: no clock, no I/O, no throw. An unknown or out-of-order event is recorded as
 // ignored rather than dropped on the floor (non-negotiable H: no silent failure).
 
-import type { ContractPointer, Event, ScopeLock, Snapshot, TaskStatus, TaskView } from './types.ts';
-import { LAYER_OF } from './types.ts';
+import type { ContractPointer, Event, ScopeLock, Snapshot, TaskStatus, TaskView } from '../shared/store/types.ts';
+import { LAYER_OF } from '../shared/store/types.ts';
 
 /** The mutable projection an adapter persists. Everything here is derivable from the ledger. */
 export interface Projection {

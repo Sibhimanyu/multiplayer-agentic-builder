@@ -11,7 +11,7 @@
 
 import { CLAIM_TIMEOUT_MS, type ProjectId } from '../../shared/store/types.ts';
 import type { Logger } from '../../shared/log.ts';
-import type { FirestoreStore } from '../../shared/store/firebase.ts';
+import type { FirestoreStore } from '../../firebase/store.ts';
 import type { Firestore } from 'firebase-admin/firestore';
 
 export interface ReapResult {

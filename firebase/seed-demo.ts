@@ -13,7 +13,7 @@
 import { deleteApp, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 
-import { createFirestoreStore } from '../shared/store/firebase.ts';
+import { createFirestoreStore } from './store.ts';
 import { consoleLogger } from '../shared/log.ts';
 import { systemClock } from '../shared/clock.ts';
 import type { TaskView } from '../shared/store/types.ts';

@@ -46,12 +46,12 @@ import type {
   Transaction,
 } from 'firebase-admin/firestore';
 
-import { findGlobConflicts, globsIntersect, normalizeGlob } from '../globs.ts';
-import { applyEvent, emptyProjection, toSnapshot, type FoldOutcome, type Projection } from './firebase-fold.ts';
-import { StoreAuthError, StoreBusyError, StoreError, StoreOfflineError } from './errors.ts';
-import { sanitizeBody, sanitizeText, VARCHAR_MAX } from '../sanitize.ts';
-import { consoleLogger, type Logger } from '../log.ts';
-import { systemClock, type Clock } from '../clock.ts';
+import { findGlobConflicts, globsIntersect, normalizeGlob } from '../shared/globs.ts';
+import { applyEvent, emptyProjection, toSnapshot, type FoldOutcome, type Projection } from './fold.ts';
+import { StoreAuthError, StoreBusyError, StoreError, StoreOfflineError } from '../shared/store/errors.ts';
+import { sanitizeBody, sanitizeText, VARCHAR_MAX } from '../shared/sanitize.ts';
+import { consoleLogger, type Logger } from '../shared/log.ts';
+import { systemClock, type Clock } from '../shared/clock.ts';
 import {
   LAYER_OF,
   LIMITS,
@@ -70,7 +70,7 @@ import {
   type Snapshot,
   type TaskId,
   type TaskView,
-} from './types.ts';
+} from '../shared/store/types.ts';
 
 export interface FirestoreStoreOptions {
   db: Firestore;

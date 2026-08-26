@@ -17,7 +17,7 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { defineSecret } from 'firebase-functions/params';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
-import { createFirestoreStore } from '../../shared/store/firebase.ts';
+import { createFirestoreStore } from '../../firebase/store.ts';
 import { handleApi, statusFor } from './api.ts';
 import { mapDelivery, repoKey, verifySignature } from './webhook.ts';
 import { reapAll } from './reaper.ts';

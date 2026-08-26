@@ -13,14 +13,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { mapFirestoreError } from './firebase.ts';
+import { mapFirestoreError } from './store.ts';
 import {
   StoreAuthError,
   StoreBusyError,
   StoreError,
   StoreOfflineError,
   isRetryable,
-} from './errors.ts';
+} from '../shared/store/errors.ts';
 
 /** gRPC status codes the admin SDK throws, and the string spellings the web SDK uses. */
 const CASES: { code: number | string; expect: new (...a: never[]) => Error; why: string }[] = [

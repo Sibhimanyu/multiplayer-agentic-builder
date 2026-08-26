@@ -12,7 +12,7 @@ import { deleteApp, initializeApp, type App } from 'firebase-admin/app';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 
 import { reapAll, reapProject } from './reaper.ts';
-import { createFirestoreStore, type FirestoreStore } from '../../shared/store/firebase.ts';
+import { createFirestoreStore, type FirestoreStore } from '../../firebase/store.ts';
 import { FakeClock } from '../../shared/clock.ts';
 
 import { CLAIM_TIMEOUT_MS, type TaskView } from '../../shared/store/types.ts';

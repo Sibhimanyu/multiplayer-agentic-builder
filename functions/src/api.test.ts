@@ -16,7 +16,7 @@ import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 
 import { handleApi, statusFor, type ApiDeps, type ApiRequest } from './api.ts';
 import { AGENT_APPENDABLE, hashToken, mintToken, resolveAgent, ROLE_PACKS } from './authority.ts';
-import { createFirestoreStore, type FirestoreStore } from '../../shared/store/firebase.ts';
+import { createFirestoreStore, type FirestoreStore } from '../../firebase/store.ts';
 import { StoreAuthError } from '../../shared/store/errors.ts';
 import { LAYER_OF, type TaskView } from '../../shared/store/types.ts';
 import { CapturingLogger } from '../../shared/log.ts';
