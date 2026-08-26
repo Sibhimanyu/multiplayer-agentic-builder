@@ -546,6 +546,32 @@ When a guarantee depends on a component's behaviour, check the **component** rat
 waiting for the integration to disagree with you. The integration took thirty-five minutes to
 say something less useful.
 
+### 24c. `fail 0` is not "no problems", and now the gate says so
+
+Acted on rather than merely noted, because the near-miss above turned on it.
+
+`node --test` does exit non-zero on a cancelled test, so a bare `npm test` would have caught
+it. But the number a human reads — in CI output, in a summary comment, in a pasted screenshot —
+is `fail`. `fail 0` alongside `cancelled 2` is a summary that reads as success to anyone
+skimming, and skimming is the normal case.
+
+`scripts/run-tests.sh` now wraps every suite in this build and fails loudly on `cancelled > 0`
+and `todo > 0`, printing all six counts on one line:
+
+```
+run-tests: tests=51 pass=51 fail=0 cancelled=0 skipped=0 todo=0
+run-tests: OK
+```
+
+Its message for a cancelled test names the trap explicitly: *do not raise the timeout without
+first establishing what is not finishing.* That is the move that would have buried the hang.
+
+One honest correction while writing it. I also added a balance check (`pass + fail + cancelled
++ skipped + todo == tests`) believing it was what caught the hang — it is not. 61 + 0 + 2 does
+balance to 63. What catches a hang is checking `cancelled` directly. The balance check is kept
+for a different failure, a test landing in no bucket at all, and the script says so rather than
+being credited with a catch it would have missed.
+
 ### 24. `node --test` parallelises FILES, and a shared emulator cannot take it
 
 The last of the intermittency, and it had nothing to do with the adapter at all.
