@@ -21,7 +21,11 @@ function clearVendored(): void {
   }
 }
 
-after(() => { clearVendored(); });
+// Leave the tree in sync rather than empty. These tests deliberately delete and
+// corrupt the copies, and a suite that exits having wiped them makes the very
+// next `--check` fail on drift it caused itself -- a confusing red build that
+// says nothing about the code under test.
+after(() => { syncLib(); });
 
 describe('_lib vendoring', () => {
   test('sources are the non-test .ts files in functions/_lib', () => {

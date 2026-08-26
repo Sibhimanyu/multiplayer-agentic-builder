@@ -709,6 +709,35 @@ array, so the double had the honest signature and my call site was wrong.
 
 ---
 
+# Order 0008 — confirmed against the split mandatory behaviour 1
+
+`store-interface.md` now splits behaviour 1 into 1a (the key is client-supplied, scope it per
+project) and 1b (the record must store the seq the event ACTUALLY received). Both were
+already implemented — 1a as `dedupe_key = <project_id>:<idempotency_key>`, 1b as the
+event-first write order — but 1b was only covered implicitly, so it now has two named tests:
+
+- **every dedupe row records the seq its event actually received.** Twelve concurrent
+  appends, then for each dedupe row assert an event exists at that seq *and* carries the same
+  `dedupe_key`. Not merely "some event at that seq" — that weaker check would pass while the
+  rows were cross-wired.
+- **a replay after contention returns the settled seq, not a candidate.** Warm the ledger so
+  allocation starts contended, append, replay, assert the replayed seq belongs to a real
+  event carrying the right key.
+
+## A self-inflicted drift alarm, and what it says about the guard
+
+Running the suite immediately after a rebase made `sync-lib --check` fail on twelve missing
+copies. Not a real drift: `sync-lib.test.ts` deliberately deletes and corrupts the vendored
+copies, and its cleanup left the tree empty. The very next `--check` then reported drift it
+had caused itself.
+
+Harmless but bad ergonomics — a red build that says nothing about the code under test. The
+cleanup now re-syncs instead of clearing, so the tree is left valid. Worth recording because
+the guard behaved *correctly*: the copies genuinely were missing, and "missing" is drift. The
+defect was in the test's housekeeping, not the check.
+
+---
+
 # Blocked on the coordinator
 
 1. **Catalyst project ID** for this build — the handoff said `<paste>`. Needed for step 3.

@@ -219,6 +219,46 @@ describe('dry run: appending', () => {
     assert.deepEqual(seqs, Array.from({ length: 12 }, (_u, i) => i + 1));
   });
 
+  test('MB1b: every dedupe row records the seq its event ACTUALLY received', async () => {
+    // Under contention the first seq candidate is often NOT the one the event
+    // ends up with. If the dedupe row recorded the candidate, a later replay
+    // would return a seq belonging to a different event -- silent corruption.
+    const { db, log } = build();
+    const port = appendPort(db);
+    await Promise.all(Array.from({ length: 12 }, (_u, i) =>
+      handleAppend(port, principal(), body, `mb1b-${i}`, now, log)));
+
+    const events = db.allRows('events');
+    const dedupes = db.allRows('request_dedupe');
+    assert.equal(dedupes.length, events.length);
+
+    for (const d of dedupes) {
+      const event = events.find((e) => Number(e.seq) === Number(d.seq));
+      assert.ok(event, `dedupe row ${d.dedupe_key} points at seq ${d.seq}, which no event has`);
+      // ...and it is THAT request's event, not merely some event at that seq.
+      assert.equal(event.dedupe_key, d.dedupe_key,
+        'the dedupe row points at an event produced by a different request');
+      assert.equal(event.event_id, d.event_id);
+    }
+  });
+
+  test('MB1b: a replay after contention returns the settled seq, not a candidate', async () => {
+    const { db, log } = build();
+    const port = appendPort(db);
+    // Fill some seqs so the next allocation starts contended.
+    await Promise.all(Array.from({ length: 6 }, (_u, i) =>
+      handleAppend(port, principal(), body, `warm-${i}`, now, log)));
+
+    const first = await handleAppend(port, principal(), body, 'replay-me', now, log);
+    const replay = await handleAppend(port, principal(), body, 'replay-me', now, log);
+
+    assert.equal((replay.body as { duplicate: boolean }).duplicate, true);
+    assert.equal((replay.body as { seq: number }).seq, (first.body as { seq: number }).seq);
+    const event = db.allRows('events').find((e) => Number(e.seq) === (replay.body as { seq: number }).seq);
+    assert.ok(event, 'the replayed seq must belong to a real event');
+    assert.equal(event.dedupe_key, dedupeKeyFor(PROJECT, 'replay-me'));
+  });
+
   test('THE CROSS-TENANT CASE: two projects may use the SAME client-supplied key', async () => {
     // The bug the corrected mandatory behaviour 2 caught. A bare
     // unique(idempotency_key) would make the second append return the first
