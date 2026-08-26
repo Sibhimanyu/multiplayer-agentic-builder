@@ -24,6 +24,7 @@
 import { initializeApp, type FirebaseApp, type FirebaseOptions } from 'firebase/app';
 import {
   collection,
+  connectFirestoreEmulator,
   doc,
   getFirestore,
   limit,
@@ -70,6 +71,14 @@ export interface FirestoreStoreOptions {
   /** Coalescing window. One transaction settles six collections; render one frame, not six. */
   debounce_ms?: number;
   app?: FirebaseApp;
+  /**
+   * Point the dashboard at a local Firestore emulator, e.g. "127.0.0.1:8080".
+   *
+   * This is what makes checklist section E verifiable without a deployed project: the board can
+   * be run against seeded emulator data and screenshotted. Read from VITE_FIRESTORE_EMULATOR,
+   * which is never set in a production build.
+   */
+  emulator?: string;
 }
 
 class BrowserFirestoreStore implements CoordinationStore {
@@ -89,6 +98,17 @@ class BrowserFirestoreStore implements CoordinationStore {
     const app = opts.app ?? initializeApp(opts.config);
     this.db = getFirestore(app);
     this.debounce_ms = opts.debounce_ms ?? 40;
+
+    if (opts.emulator) {
+      const [host, port] = opts.emulator.split(':');
+      // Loud, not silent. A dashboard quietly talking to an emulator while someone believes
+      // they are looking at production is a worse failure than not connecting at all.
+      console.warn(
+        `[store] EMULATOR MODE — connected to ${opts.emulator}, not to project ` +
+          `"${opts.config.projectId}". Nothing here is real data.`,
+      );
+      connectFirestoreEmulator(this.db, host || '127.0.0.1', Number(port ?? 8080));
+    }
   }
 
   subscribe(project_id: ProjectId, from_seq: Seq, onChange: (s: Snapshot) => void): () => void {
@@ -298,7 +318,11 @@ class BrowserFirestoreStore implements CoordinationStore {
  * bundle is correct and not a leak.
  */
 export function configFromEnv(env: Record<string, string | undefined>): FirebaseOptions {
-  const required = ['VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_PROJECT_ID', 'VITE_FIREBASE_APP_ID'];
+  // Against the emulator only the project id is meaningful: there is no credential to check,
+  // and demanding a real apiKey would mean you could not run the board locally without one.
+  const required = env.VITE_FIRESTORE_EMULATOR
+    ? ['VITE_FIREBASE_PROJECT_ID']
+    : ['VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_PROJECT_ID', 'VITE_FIREBASE_APP_ID'];
   const missing = required.filter((k) => !env[k]);
   if (missing.length > 0) {
     // Fail loudly at startup rather than rendering an empty board that looks like "no tasks
@@ -309,16 +333,21 @@ export function configFromEnv(env: Record<string, string | undefined>): Firebase
     );
   }
   return {
-    apiKey: env.VITE_FIREBASE_API_KEY!,
+    apiKey: env.VITE_FIREBASE_API_KEY ?? 'emulator-no-key',
     authDomain: env.VITE_FIREBASE_AUTH_DOMAIN ?? `${env.VITE_FIREBASE_PROJECT_ID}.firebaseapp.com`,
     projectId: env.VITE_FIREBASE_PROJECT_ID!,
     storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET,
     messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-    appId: env.VITE_FIREBASE_APP_ID!,
+    appId: env.VITE_FIREBASE_APP_ID ?? 'emulator-no-app-id',
   };
 }
 
 export function createFirestoreStore(opts?: Partial<FirestoreStoreOptions>): CoordinationStore {
-  const config = opts?.config ?? configFromEnv(import.meta.env as unknown as Record<string, string>);
-  return new BrowserFirestoreStore({ ...opts, config });
+  const env = import.meta.env as unknown as Record<string, string | undefined>;
+  const config = opts?.config ?? configFromEnv(env);
+  return new BrowserFirestoreStore({
+    ...opts,
+    config,
+    emulator: opts?.emulator ?? env.VITE_FIRESTORE_EMULATOR,
+  });
 }

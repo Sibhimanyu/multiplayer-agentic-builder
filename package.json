@@ -16,7 +16,9 @@
     "test:all": "npm run test:shared && npm run test:webhook && npm run test:cli && npm run test:emulator",
     "typecheck:firebase": "tsc --noEmit -p tsconfig.firebase.json",
     "build:functions": "cd functions && tsc -p tsconfig.json",
-    "build:client": "cd client && npm run build"
+    "build:client": "cd client && npm run build",
+    "seed:demo": "scripts/emulator.sh 'node scripts/seed-demo.ts'",
+    "emulator:up": "scripts/emulator-up.sh"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

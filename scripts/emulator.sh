@@ -69,6 +69,14 @@ find_jdk() {
 find_jdk
 echo "scripts/emulator.sh: java $(jdk_major "$(command -v java)") from ${JAVA_HOME:-PATH}" >&2
 
+# Sourced by scripts/emulator-up.sh purely for the JDK discovery above. When that is all the
+# caller wants, hand the emulator over in the foreground and stop here.
+if [ -n "${BAKEOFF_DISCOVER_ONLY:-}" ]; then
+  echo "scripts/emulator.sh: starting a PERSISTENT emulator (Ctrl-C to stop)" >&2
+  exec firebase emulators:start --only firestore \
+    --project "${BAKEOFF_EMULATOR_PROJECT:-demo-bakeoff}"
+fi
+
 # ---- 2. start the emulator ----------------------------------------------------------
 
 LOG="$(mktemp -t firestore-emulator-XXXXXX.log)"
