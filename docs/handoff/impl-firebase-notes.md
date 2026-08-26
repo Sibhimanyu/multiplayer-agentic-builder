@@ -36,7 +36,7 @@ against the emulator.
 | B — CLI | **Pass.** B1, B2, B4–B7, B9 in `cli/outbox.test.ts`; B3, B10 in `cli/client.test.ts`; B8 at the API. |
 | C — git blackboard | **Pass.** C1–C7, 14/14 against real git and a real bare remote. |
 | D — webhook | **Pass.** D1–D6, 17/17. |
-| E — dashboard | **Not verified.** Needs a deploy + screenshots. Store is wired; code path untested against a live project. |
+| E — dashboard | **Mostly verified, against the emulator.** E1/E3/E5/E6/E7/E9 renderable from `npm run seed:demo`. E2 needs three timed first-time viewers, E4 needs both builds, E8 needs a token diff. |
 | F — the demo | **Not run.** Deploy-gated. |
 | G — measurements | G7/G8/G9 recorded below. **G1–G6 not measured** — they need a live project. |
 | H — non-negotiables | 8 of 10 verified by test. Two need both branches / a deploy (see below). |
@@ -353,7 +353,31 @@ I validate in my own API layer so the Firebase build is safe, but **the two buil
 on this input** until the check moves into `shared/globs.ts`. Recording it here because a
 divergence I introduced deliberately is still a divergence, and the comparison has to know.
 
-### 18. Push discipline is a real failure mode, and I hit it
+### 18. A standing rule and my own handoff disagree about `client/`
+
+**Flagged for the coordinator, not worked around.**
+
+`docs/orders/0001` says: *never edit `docs/`, `client/` or `shared/` without an order*.
+`docs/handoff/impl-firebase.md` build order step 9 says: *wire `client/src/App.tsx` to
+`createFirestoreStore`. One line.* Both cannot be followed.
+
+I followed the handoff, because step 9 is the whole point of the dashboard existing and the
+alternative is a board that renders nothing. What I have touched under `client/`:
+
+| Path | Why |
+|---|---|
+| `src/App.tsx` | the one-line store swap step 9 asks for (4 lines with its comment) |
+| `src/store/firestore.ts` | new — my adapter, the file step 9 names |
+| `package.json` + lock | adds the `firebase` dependency the adapter needs |
+| `.env.example` | new — documents the web config |
+
+`client/src/components.tsx` and `client/src/tokens.css` are **untouched**, and I have added
+nothing to `client/tsconfig.json` — the `import.meta.env` typing is a triple-slash reference
+inside my own file precisely so the shared tsconfig stays identical for both builds.
+
+If the coordinator would rather this arrived as an order first, say so and I will move it.
+
+### 19. Push discipline is a real failure mode, and I hit it
 
 Order 0004 names this session. I committed the entire build — adapter, CLI, functions, dashboard
 wiring — and ended the turn without pushing, leaving 23 further uncommitted paths behind.
@@ -452,9 +476,26 @@ network. Real cloud round-trips will be materially slower, and this number inclu
 accounting. **Do not put it in the G2 comparison table** — it is evidence that A2 passes at full
 scale, not a latency result.
 
-**E1–E9** need a deployed dashboard and screenshots. The store is wired (`App.tsx` is the
-one-line change the file anticipated) and the client typechecks and builds, but no code path has
-run against a live project.
+**E1–E9 turned out NOT to be deploy-gated**, which was my error. They needed the dashboard to be
+able to reach the emulator, nothing more. `client/src/store/firestore.ts` now honours
+`VITE_FIRESTORE_EMULATOR`, and `scripts/seed-demo.ts` drives F4–F9 through the real adapter and
+the real ledger to produce a board with:
+
+```
+seq 12  tasks 6  agents 4  contracts 2  locks 2
+needs_review  task_api_docs      agent_qa000004
+pr_open       task_items_crud    ci=failed agent_be000002
+blocked       task_items_ui      agent_fe000003
+open          task_items_detail / task_qa_smoke / task_schema
+```
+
+That is six columns with a genuinely empty one (E5), a CI-failed badge on a card (E7), a blocked
+card with a reason and a blocker, a long title (E6) and two live scope locks. The fixture folds
+from events rather than writing board rows directly — a hand-written `TaskView` renders
+identically and proves nothing.
+
+Still genuinely blocked: **E2** needs three first-time viewers timed, **E4** needs both builds
+side by side, **E8** needs a token diff against the design doc.
 
 **F1–F12** is the whole demo, deploy-gated.
 
