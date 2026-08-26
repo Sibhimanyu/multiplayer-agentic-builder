@@ -663,6 +663,33 @@ and multiplicatively.
 **Rule: retry belongs at exactly one layer.** When you move it down, delete it above. If both
 layers legitimately need it, the inner one must not retry what the outer one will.
 
+### 26b. A long-lived emulator degrades, and the last test in the batch pays for it
+
+A2 — the headline exactly-one-claim test, 1,000 transactions — failed at 106 s with `ABORTED:
+Transaction lock timeout` when batched after the concurrency stress tests. Run alone it passes
+in **219 s and 215 s**, twice, consistently.
+
+So it was neither my code nor test-file parallelism. Files were already serialised with
+`--test-concurrency=1` (finding 24). The cause is **accumulated degradation inside one emulator
+process**: by the time A2 ran, the same Java process had absorbed 32-way append storms, mixed
+claim/append contention and several hundred documents. Whichever test runs last under the most
+accumulated load is the one that fails, which is why this looked like an adapter regression.
+
+**The tempting fix was to raise the adapter's contention retry budget until A2 went green.** That
+would have been a number picked from a degraded backend and read as a property of the platform —
+precisely the single-run-threshold error this build wrote a rule against, committed against its
+own headline test. The adapter is fine on a healthy backend; the harness was contaminating it.
+
+Fixed structurally: the shared conformance suite now runs in **its own emulator lifetime**
+(`npm --prefix firebase run test:conformance`), and this build's own stress tests in another
+(`test:own`). Beyond making the suite green, that matters because the shared suite is the one
+artefact required to be comparable across both builds — its numbers are worthless if they depend
+on what this build happened to run beforehand.
+
+`tx_attempts` stays at 6. If production Firestore ever surfaces contention to callers, the retry
+budget is the knob — but I have no production data, and tuning it from emulator-degradation data
+would be inventing a threshold.
+
 ### 27. `created_at` is metadata — audited, already compliant
 
 Ruling 2, checked rather than asserted. Nothing sorts, pages or deduplicates on `created_at`:

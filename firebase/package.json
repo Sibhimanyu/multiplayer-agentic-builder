@@ -4,9 +4,9 @@
   "type": "module",
   "description": "The Firebase half of the bake-off: the CoordinationStore adapter, its harness for the SHARED conformance suite, and the demo fixture.",
   "scripts": {
-    "test": "cd .. && scripts/emulator.sh 'scripts/run-tests.sh --test-concurrency=1 --test-timeout=600000 firebase/store.test.ts firebase/errors.test.ts firebase/scoping.test.ts firebase/concurrency.test.ts'",
+    "test": "npm run test:conformance && npm run test:own",
     "test:errors": "cd .. && scripts/run-tests.sh --test-timeout=60000 firebase/errors.test.ts",
-    "test:emulator": "cd .. && scripts/emulator.sh 'scripts/run-tests.sh --test-concurrency=1 --test-timeout=900000 firebase/store.test.ts firebase/errors.test.ts firebase/scoping.test.ts firebase/concurrency.test.ts functions/src/api.test.ts functions/src/reaper.test.ts'",
+    "test:emulator": "npm run test:conformance && npm run test:own",
     "test:webhook": "cd .. && scripts/run-tests.sh --test-timeout=60000 functions/src/webhook.test.ts",
     "test:cli": "cd .. && scripts/run-tests.sh --test-timeout=180000 cli/outbox.test.ts cli/blackboard.test.ts cli/client.test.ts",
     "typecheck": "cd .. && tsc --noEmit -p tsconfig.firebase.json",
@@ -18,7 +18,8 @@
     "check": "cd .. && scripts/territory-check.sh && scripts/xcheck.sh",
     "test:conformance": "cd .. && scripts/emulator.sh 'scripts/run-tests.sh --test-concurrency=1 --test-timeout=900000 firebase/store.test.ts'",
     "check:live-rules": "node live-rules-check.mjs",
-    "measure": "cd .. && node firebase/measure.ts"
+    "measure": "cd .. && node firebase/measure.ts",
+    "test:own": "cd .. && scripts/emulator.sh 'scripts/run-tests.sh --test-concurrency=1 --test-timeout=600000 firebase/errors.test.ts firebase/scoping.test.ts firebase/concurrency.test.ts functions/src/api.test.ts functions/src/reaper.test.ts'"
   },
   "dependencies": {
     "firebase-admin": "^13.0.0",

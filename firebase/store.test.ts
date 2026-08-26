@@ -9,6 +9,25 @@
 // The emulator is required rather than a live project on purpose: A2 alone performs 1,000 claim
 // transactions, which against a real project is 1,000 billable writes plus 2,000 reads every
 // time the suite runs — on a plan with no spending cap.
+//
+// THIS FILE RUNS IN ITS OWN EMULATOR LIFETIME. `npm --prefix firebase run test:conformance`
+// starts a fresh emulator for it and nothing else shares that process.
+//
+// That is not tidiness, it is measurement hygiene, and it was earned. With this file batched
+// after the concurrency stress tests, A2 failed at 106 s with `ABORTED: Transaction lock
+// timeout` — contention retries exhausted. Run alone it passes in 219 s and 215 s, twice,
+// consistently. The failure was accumulated emulator degradation from the stress tests that ran
+// earlier in the SAME emulator process, not a defect in the adapter and not test-file
+// parallelism (files are already serialised with --test-concurrency=1).
+//
+// Two reasons this matters beyond making the suite green:
+//
+//   1. The shared suite is the one artefact that has to be comparable across both builds. Its
+//      numbers are worthless if they depend on what this build happened to run beforehand.
+//   2. The tempting fix was to raise the adapter's contention retry budget until A2 went green.
+//      That would have masked the signal with a number picked from a degraded backend — the
+//      single-run-threshold error this build wrote a rule against. The adapter is fine on a
+//      healthy backend; the harness was contaminating it.
 
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
