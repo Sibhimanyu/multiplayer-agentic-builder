@@ -663,55 +663,38 @@ and multiplicatively.
 **Rule: retry belongs at exactly one layer.** When you move it down, delete it above. If both
 layers legitimately need it, the inner one must not retry what the outer one will.
 
-### 26b. My own test harness silently ran suites against a foreign emulator
+### 26b. Three harness bugs wearing one costume: A2 was never unstable
 
-This entry replaces a wrong conclusion I had already written down, and the way it was wrong is
-the useful part.
+A2 — the headline exactly-one-claim test, 1,000 transactions — failed repeatedly, and I twice
+diagnosed the adapter before finally looking at the machine. **Every failure was a defect in my
+own test harness.** The chronology matters more than the fix, because I got it wrong twice in a
+row in a build where the rule against exactly this was already written down.
 
-A2 — the headline exactly-one-claim test — failed when batched after the stress tests, then
-passed twice in isolation (219 s, 215 s). I concluded: accumulated degradation inside one
-long-lived emulator process, fixed it by giving the shared suite its own emulator lifetime, and
-committed that explanation.
+| observation | what I concluded | what was actually true |
+|---|---|---|
+| fails batched, passes twice isolated (219 s, 215 s) | accumulated degradation in a long-lived emulator | **7 stray emulator processes were running** |
+| third isolated run fails (412 s) | maybe genuinely marginal | it overlapped another run I had launched |
+| clean loop: pass, then fail, fail (~400 ms each) | ... | 400 ms is not contention, it is **no backend** |
+| clean single run | — | **15/15, A2 passes in 206 s** |
 
-Then a **third** isolated run failed at 412 s. Two runs had not been enough, on a question about
-intermittency, in a build where I had written the rule that one green run proves nothing.
+Three separate harness defects, all mine:
 
-Checking the machine instead of theorising found the actual variable: **seven stray
-`emulators:start` processes.** And the cause was my own script:
+1. **Readiness probe asked the wrong question.** `nc -z $PORT` answers "is anything listening",
+   not "is *my* emulator listening". Overlapping runs silently shared one backend and contended
+   for the same documents. Fixed: refuse to start if the port is occupied.
+2. **Teardown did not wait for the socket.** Killing the process group returns before the
+   listening socket closes, so a back-to-back run bound nothing and every test failed fast. That
+   is the pass/fail/fail loop above. Fixed: poll until the port releases, and warn if it does not.
+3. **Two runs treated as sufficient** to judge an intermittency question — the exact error this
+   file already had a rule about, applied to the adapter and not to my own diagnosis.
 
-```bash
-for i in $(seq 1 240); do
-  if nc -z "$HOST" "$PORT" 2>/dev/null; then break; fi   # <-- "is anything answering?"
-  ...
-done
-echo "emulator ready"
-```
+**Conclusion, reversing what I wrote one commit earlier:** there is no evidence A2 is unstable on
+this platform. Two clean passes at 218 s and 206 s, and — more convincing than a pass count —
+*every* failure now has a named cause that is not the adapter.
 
-It polls *is anything listening on 8080*, not *is my emulator listening on 8080*. So whenever two
-runs overlapped, the second one's emulator failed to bind, `nc -z` succeeded against the first
-run's emulator, and the second run announced "emulator ready" and executed its entire suite
-against a foreign backend of unknown state — while both runs contended for the same documents.
-
-Every "isolated" figure above is therefore suspect, including the two passes I reasoned from.
-
-**This is the same shape as the guard bugs earlier in this file**: a check that succeeds for the
-wrong reason. `provision.sh` concluded "the project name is free" from a failed parse.
-`run-tests.sh` originally read `fail` and ignored `cancelled`. Here the readiness probe answers a
-question adjacent to the one that matters. In all three the guard reported success while its
-premise was unverified, and in all three the failure direction was *permissive*.
-
-Fixed: `emulator.sh` now **refuses to start** if the port is occupied, naming the two causes
-(concurrent run, or stale process) and the cleanup command. Attaching to an unknown backend is
-never the helpful behaviour.
-
-The separate-emulator split from the previous commit stays — running the shared suite on a clean
-backend is right regardless, because its numbers have to be comparable to the other build's and
-must not depend on what this build ran beforehand. But it is not established that it was the
-*cause* of anything, and the notes should not imply that it was.
-
-A2's actual stability is being re-measured on a clean machine with the guard in place. Until
-those numbers exist, the honest statement is: **A2's reliability on this platform is unknown**,
-and I do not yet know whether the counter-document ceiling makes it marginal.
+The thing I keep having to relearn: when a test and a harness disagree, the harness is the
+likelier suspect, and "check the machine" beats "reason about the code" by a wide margin. It took
+me three attempts to act on that.
 
 ### 27. `created_at` is metadata — audited, already compliant
 

@@ -94,11 +94,25 @@ interface OpCounts {
   reads: number;
   writes: number;
   deletes: number;
+  /** runTransaction CALLS -- one per logical operation. */
   transactions: number;
+  /**
+   * Transaction BODY EXECUTIONS. Greater than `transactions` means something retried.
+   *
+   * Counted separately because a retry loop is a correctness mechanism that doubles as a
+   * COST-HIDING mechanism (order 0019). The SDK re-runs the transaction body on internal
+   * retry and my adapter retries contention on top of that, so `reads` and `writes` are sums
+   * over every attempt. Without this counter a G4 figure of "6 reads per append" is
+   * indistinguishable from "2 reads, retried three times" -- a lower bound presented as a
+   * measurement.
+   *
+   * My first version of this harness counted only `transactions` and had exactly that hole.
+   */
+  attempts: number;
 }
 
 function countingFirestore(db: Firestore): { db: Firestore; counts: OpCounts; reset(): void } {
-  const counts: OpCounts = { reads: 0, writes: 0, deletes: 0, transactions: 0 };
+  const counts: OpCounts = { reads: 0, writes: 0, deletes: 0, transactions: 0, attempts: 0 };
 
   const wrapTx = (tx: unknown): unknown =>
     new Proxy(tx as object, {
@@ -123,7 +137,11 @@ function countingFirestore(db: Firestore): { db: Firestore; counts: OpCounts; re
           counts.transactions += 1;
           return (value as (...a: unknown[]) => unknown).call(
             target,
-            (tx: unknown) => body(wrapTx(tx)),
+            (tx: unknown) => {
+              // Every body execution, including SDK-internal retries.
+              counts.attempts += 1;
+              return body(wrapTx(tx));
+            },
             ...rest,
           );
         };
@@ -140,6 +158,7 @@ function countingFirestore(db: Firestore): { db: Firestore; counts: OpCounts; re
       counts.writes = 0;
       counts.deletes = 0;
       counts.transactions = 0;
+      counts.attempts = 0;
     },
   };
 }
@@ -323,21 +342,45 @@ async function main(): Promise<void> {
 
   out('## G4 — operations per request, counted not derived');
   out();
-  out('| operation | reads | writes | deletes | transactions |');
-  out('|---|---|---|---|---|');
-  for (const [name, o] of [
+  out('| operation | reads | writes | deletes | tx calls | tx attempts | clean? |');
+  out('|---|---|---|---|---|---|---|');
+  const g4rows = [
     ['`appendEvent`', opAppend],
     ['`claimTask`', opClaim],
     ['`readSnapshot`', opSnapshot],
     ['`readEvents`', opRead],
     ['`heartbeat`', opHeartbeat],
-  ] as const) {
-    out(`| ${name} | ${o.reads} | ${o.writes} | ${o.deletes} | ${o.transactions} |`);
+  ] as const;
+  let anyRetried = false;
+  for (const [name, o] of g4rows) {
+    const clean = o.attempts <= o.transactions;
+    if (!clean) anyRetried = true;
+    out(
+      `| ${name} | ${o.reads} | ${o.writes} | ${o.deletes} | ${o.transactions} | ${o.attempts} |` +
+        ` ${clean ? 'yes' : '**NO — retried**'} |`,
+    );
   }
   out();
-  out('Counted by proxying the Firestore handle, not by reading the adapter. The Catalyst G4');
-  out('correction invalidated every earlier planning figure precisely because those were reasoned');
-  out('from a schema rather than measured against a live request.');
+  out('Counted by proxying the Firestore handle AND the transaction object, not by reading the');
+  out('adapter. The Catalyst G4 correction invalidated every earlier planning figure precisely');
+  out('because those were reasoned from a schema rather than measured against a live request.');
+  out();
+  out('**`tx attempts` is the honesty column.** A retry loop is a correctness mechanism that');
+  out('doubles as a cost-hiding one: the SDK re-runs a transaction body on internal retry and');
+  out('this adapter retries contention on top of that, so `reads` and `writes` are sums over');
+  out('every attempt. If attempts exceeds calls, the row is an average over retries and NOT a');
+  out('per-operation cost.');
+  out();
+  if (anyRetried) {
+    out('> **At least one row above retried, so those figures are upper bounds inflated by');
+    out('> retries, not clean per-operation costs. Re-run on an idle project before quoting.**');
+  } else {
+    out('Every row above ran in a single attempt, so the counts are clean per-operation costs.');
+  }
+  out();
+  const contended = log.withCode('store.tx.contended').length;
+  out(`Adapter-level contention backoffs during the whole measurement: **${contended}**.`);
+  out('Zero means nothing in these figures is absorbing contention.');
   out();
 
   // ---- G5 / G6 ----

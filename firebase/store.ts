@@ -201,6 +201,43 @@ export const scopedKeyFor = (project_id: ProjectId, idempotency_key: string): st
 };
 
 /**
+ * Read the seq counter, distinguishing "fresh project" from "corrupted counter".
+ *
+ * Extracted and hardened after order 0019, which carried a finding from the Catalyst build: a
+ * hand-rolled `MAX(seq)` read returned `undefined` because ZCQL ignores the aggregate's column
+ * alias, the code defaulted it to 0, and it allocated seq 1 -- colliding with the first event
+ * ever written. The append path's retry loop then ABSORBED the bug: correct output, silently
+ * more expensive.
+ *
+ * The line here was the same shape:
+ *
+ *     const seq = ((snap.exists ? (snap.get('seq') as number) : 0) ?? 0) + 1;
+ *
+ * `?? 0` collapses three genuinely different situations into one: no counter document (a real
+ * fresh project, where 0 is right), a counter document whose `seq` field is missing or renamed
+ * (a corrupted counter, where 0 silently restarts the ledger), and a `seq` that is not a number
+ * at all. Only the first is legitimate.
+ *
+ * So the two bad cases now throw. This build would probably have failed loudly anyway -- every
+ * event would carry seq 1 and A4 would catch it -- but "it happens to fail loudly" is luck, not
+ * design, and that luck lasts exactly until something downstream absorbs it.
+ */
+export function readCounter(exists: boolean, raw: unknown, project_id: ProjectId): number {
+  // A genuinely fresh project: no counter document yet. The only case where 0 is correct.
+  if (!exists) return 0;
+
+  if (typeof raw === 'number' && Number.isInteger(raw) && raw >= 0) return raw;
+
+  // The counter exists but carries no usable seq. Defaulting to 0 would restart the ledger from
+  // 1 and duplicate every seq already issued.
+  throw new StoreError(
+    `seq counter for ${project_id} exists but holds no usable value (got ${typeof raw}: ` +
+      `${JSON.stringify(raw)}). Refusing to default to 0: that would restart the ledger and ` +
+      `duplicate every seq already issued.`,
+  );
+}
+
+/**
  * sha256 hex of a raw string. Deterministic, always a legal Firestore document id.
  *
  * Kept exported for tests. Callers inside the adapter use scopedKeyFor: an unscoped id is
@@ -593,7 +630,7 @@ export class FirestoreStore implements CoordinationStore {
       body: sanitizeBody(input.body, this.log, `${input.kind}.body`),
     };
     const counterSnap = await tx.get(this.counterRef(pid));
-    const seq = ((counterSnap.exists ? (counterSnap.get('seq') as number) : 0) ?? 0) + 1;
+    const seq = readCounter(counterSnap.exists, counterSnap.get('seq'), pid) + 1;
 
     const taskId = typeof prepared.body.task_id === 'string' ? prepared.body.task_id : null;
     const taskSnap = taskId ? await tx.get(this.tasksRef(pid).doc(taskId)) : null;

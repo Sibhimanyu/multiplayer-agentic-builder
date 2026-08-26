@@ -116,6 +116,22 @@ cleanup() {
     done
     kill -KILL "-$EMULATOR_PID" 2>/dev/null || true
   fi
+
+  # WAIT for the socket to actually release, do not just kill and return.
+  #
+  # Killing the process group does not mean the listening socket is gone by the time this
+  # function returns. A back-to-back run then either fails to bind or, worse, connects to a
+  # half-dead emulator -- which is exactly what happened when I ran three measurement rounds in
+  # a loop with `pkill; sleep 6` between them: round 1 passed and rounds 2 and 3 failed 13/15
+  # in ~400ms each. That looked like the test being unstable. It was the teardown.
+  for _ in $(seq 1 60); do
+    nc -z "$HOST" "$PORT" 2>/dev/null || break
+    sleep 0.5
+  done
+  if nc -z "$HOST" "$PORT" 2>/dev/null; then
+    echo "scripts/emulator.sh: WARNING -- $HOST:$PORT still listening after teardown." >&2
+    echo "  A following run will refuse to start rather than attach to it." >&2
+  fi
   # Surface the emulator log only on failure; on success it is noise.
   if [ "$code" -ne 0 ] && [ -s "$LOG" ]; then
     echo "--- emulator log (tail) ---" >&2
