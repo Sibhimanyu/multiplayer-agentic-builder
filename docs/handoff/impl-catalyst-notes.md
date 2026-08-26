@@ -1038,3 +1038,64 @@ The A5 warning from earlier holds and is now quantifiable: one full conformance 
 this backend costs ~301 appends ≈ **1,505 SELECTs and 602 INSERTs**, which is 15% of the
 monthly SELECT allowance for a single test run. Order 0005's "run it against the real backend
 once" was the right call, and the reason is SELECTs rather than INSERTs.
+
+---
+
+# Step 5 — snapshot fold done, Stratus BLOCKED on a browser step
+
+## `catalyst/lib/snapshot-fold.ts` — done, 16 tests
+
+Pure: rows in, `Snapshot` out, no I/O and no clock of its own, so the Event function can be a
+thin wrapper. Two rules in it are load-bearing rather than stylistic:
+
+**Ordering is by `seq` and only by `seq`.** Order 0017 made `created_at` metadata, and on this
+platform it carries second resolution, so a batch of events shares one timestamp. There is a
+test with two events at the *same* timestamp in opposite `seq` order, asserting the higher
+`seq` wins — a `created_at` sort would silently reorder them.
+
+**`snapshot.seq` is the highest `seq` applied**, not a count of events read, because that is
+the value a caller compares `last_written_seq` against to decide "stale, not lost".
+
+Also folded correctly and tested: a claim moves an open task to `claimed` but does **not**
+override a later lifecycle status; a republished v1 never overwrites v2; presence absent from
+Cache means both `offline` and `stale`; `revoked` beats a live heartbeat while the *string*
+`"false"` does not revoke; an unparseable JSON column is logged rather than silently becoming
+an empty `file_scope` that reads as "this task locks nothing".
+
+## The blocker: Stratus cannot be provisioned without a browser
+
+```
+CatalystbyZoho_Create_Bucket ->
+{"status":"failure","data":{
+  "message":"You are not allowed to perform this operation. User needs to be in session
+             when accessing Stratus for the first time",
+  "error_code":"OPERATION_NOT_ALLOWED"}}
+```
+
+Not a permissions misconfiguration and not transient. `Get_All_Buckets` **succeeds** on the
+same credentials and returns `[]`, so reads are allowed and only first-time creation is
+gated. The CLI has no `stratus` command at all, so there is no non-browser path.
+
+**This is the first thing in the entire build that requires a browser.** Everything up to here
+— project selection, nine tables, 63 columns, function deploy, 300 measured requests — was
+CLI or API. Recorded for order 0015's "anything that required a browser" question, where the
+answer was previously "zero".
+
+### What it blocks, and what it does not
+
+Blocked: `readSnapshot`, `subscribe`, and therefore A10, A11 and A13, plus the G1 re-measure
+against the *folded snapshot* path rather than the ledger path.
+
+Not blocked, and being built next: Cache presence (A9), the cron reaper, and the scope routes
+(A7, A8). The Stratus write is behind a port, so when the bucket exists it is a wiring change
+rather than a rewrite.
+
+### What I need from a human
+
+One browser action: open **Stratus** once in the Catalyst console for `multiplayer-agents`
+(project `53069000000062004`, Development). After that first session the API is expected to
+work, and I can create the bucket and everything downstream without further help.
+
+I am not attempting a workaround. Substituting Filestore or Cache for the snapshot would
+change the measured read path, which is the specific thing route C1 exists to test — the
+comparison would then be measuring a design I invented to dodge a provisioning gate.
