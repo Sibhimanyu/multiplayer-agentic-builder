@@ -79,6 +79,29 @@ fi
 
 # ---- 2. start the emulator ----------------------------------------------------------
 
+# REFUSE if the port is already occupied.
+#
+# This guard was missing and it silently corrupted results. The readiness check below polls
+# "is anything answering on $PORT" -- so when two runs overlapped, the second one's emulator
+# failed to bind, `nc -z` succeeded against the FIRST run's emulator, and the second run
+# reported "emulator ready" and executed its whole suite against a foreign, already-loaded
+# backend. Both runs then contended for the same documents.
+#
+# That produced a real false conclusion: A2 looked like it passed in isolation twice and failed
+# once, and I attributed the difference to accumulated load inside a single emulator. The actual
+# variable was how many emulators were running at the time. There were seven strays.
+#
+# Checking "is the port answering" when the question is "is MY backend answering" is the same
+# shape as a guard that passes on missing input: it succeeds for the wrong reason.
+if nc -z "$HOST" "$PORT" 2>/dev/null; then
+  echo "scripts/emulator.sh: REFUSING -- something is already listening on $HOST:$PORT." >&2
+  echo "  Attaching to it would run this suite against a backend of unknown state, which is" >&2
+  echo "  how results get silently corrupted. Either another run is in progress (wait for it)" >&2
+  echo "  or a stale emulator is left over:" >&2
+  echo "    pkill -f emulators:start; pkill -f cloud-firestore-emulator" >&2
+  exit 1
+fi
+
 LOG="$(mktemp -t firestore-emulator-XXXXXX.log)"
 EMULATOR_PID=""
 

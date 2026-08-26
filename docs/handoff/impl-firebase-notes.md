@@ -663,32 +663,55 @@ and multiplicatively.
 **Rule: retry belongs at exactly one layer.** When you move it down, delete it above. If both
 layers legitimately need it, the inner one must not retry what the outer one will.
 
-### 26b. A long-lived emulator degrades, and the last test in the batch pays for it
+### 26b. My own test harness silently ran suites against a foreign emulator
 
-A2 — the headline exactly-one-claim test, 1,000 transactions — failed at 106 s with `ABORTED:
-Transaction lock timeout` when batched after the concurrency stress tests. Run alone it passes
-in **219 s and 215 s**, twice, consistently.
+This entry replaces a wrong conclusion I had already written down, and the way it was wrong is
+the useful part.
 
-So it was neither my code nor test-file parallelism. Files were already serialised with
-`--test-concurrency=1` (finding 24). The cause is **accumulated degradation inside one emulator
-process**: by the time A2 ran, the same Java process had absorbed 32-way append storms, mixed
-claim/append contention and several hundred documents. Whichever test runs last under the most
-accumulated load is the one that fails, which is why this looked like an adapter regression.
+A2 — the headline exactly-one-claim test — failed when batched after the stress tests, then
+passed twice in isolation (219 s, 215 s). I concluded: accumulated degradation inside one
+long-lived emulator process, fixed it by giving the shared suite its own emulator lifetime, and
+committed that explanation.
 
-**The tempting fix was to raise the adapter's contention retry budget until A2 went green.** That
-would have been a number picked from a degraded backend and read as a property of the platform —
-precisely the single-run-threshold error this build wrote a rule against, committed against its
-own headline test. The adapter is fine on a healthy backend; the harness was contaminating it.
+Then a **third** isolated run failed at 412 s. Two runs had not been enough, on a question about
+intermittency, in a build where I had written the rule that one green run proves nothing.
 
-Fixed structurally: the shared conformance suite now runs in **its own emulator lifetime**
-(`npm --prefix firebase run test:conformance`), and this build's own stress tests in another
-(`test:own`). Beyond making the suite green, that matters because the shared suite is the one
-artefact required to be comparable across both builds — its numbers are worthless if they depend
-on what this build happened to run beforehand.
+Checking the machine instead of theorising found the actual variable: **seven stray
+`emulators:start` processes.** And the cause was my own script:
 
-`tx_attempts` stays at 6. If production Firestore ever surfaces contention to callers, the retry
-budget is the knob — but I have no production data, and tuning it from emulator-degradation data
-would be inventing a threshold.
+```bash
+for i in $(seq 1 240); do
+  if nc -z "$HOST" "$PORT" 2>/dev/null; then break; fi   # <-- "is anything answering?"
+  ...
+done
+echo "emulator ready"
+```
+
+It polls *is anything listening on 8080*, not *is my emulator listening on 8080*. So whenever two
+runs overlapped, the second one's emulator failed to bind, `nc -z` succeeded against the first
+run's emulator, and the second run announced "emulator ready" and executed its entire suite
+against a foreign backend of unknown state — while both runs contended for the same documents.
+
+Every "isolated" figure above is therefore suspect, including the two passes I reasoned from.
+
+**This is the same shape as the guard bugs earlier in this file**: a check that succeeds for the
+wrong reason. `provision.sh` concluded "the project name is free" from a failed parse.
+`run-tests.sh` originally read `fail` and ignored `cancelled`. Here the readiness probe answers a
+question adjacent to the one that matters. In all three the guard reported success while its
+premise was unverified, and in all three the failure direction was *permissive*.
+
+Fixed: `emulator.sh` now **refuses to start** if the port is occupied, naming the two causes
+(concurrent run, or stale process) and the cleanup command. Attaching to an unknown backend is
+never the helpful behaviour.
+
+The separate-emulator split from the previous commit stays — running the shared suite on a clean
+backend is right regardless, because its numbers have to be comparable to the other build's and
+must not depend on what this build ran beforehand. But it is not established that it was the
+*cause* of anything, and the notes should not imply that it was.
+
+A2's actual stability is being re-measured on a clean machine with the guard in place. Until
+those numbers exist, the honest statement is: **A2's reliability on this platform is unknown**,
+and I do not yet know whether the counter-document ceiling makes it marginal.
 
 ### 27. `created_at` is metadata — audited, already compliant
 
