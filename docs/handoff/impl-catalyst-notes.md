@@ -489,6 +489,79 @@ append. The end-to-end D4 assertion needs a reachable ledger and is not claimed 
 
 ---
 
+# Step 4c — Advanced I/O handler skeletons
+
+Six function directories under `functions/`, plus `functions/_lib/` for the shared plumbing.
+
+**Status: skeletons, and labelled as such.** Request contract, authorisation, validation and
+error mapping are written and tested; every Data Store call sits behind a port and is marked
+`NOT WIRED`. Nothing can be deployed or verified without a project ID, and nothing here
+claims otherwise.
+
+The testable parts got real tests — 24 of them in `functions/_lib/auth.test.ts`.
+
+## H4 — `agent_id` is never accepted from the client, verified by forging one
+
+Two layers, because one was not enough:
+
+1. `rejectServerOwnedFields()` **rejects** a body carrying `agent_id`, `actor_id`, `seq`,
+   `event_id` or `created_at` with a 400. Rejected, not ignored — H4's evidence is "verified
+   by forging one", so a forgery must be refused rather than quietly dropped.
+2. A **mechanical test walks every handler's source** and fails if any of them reads
+   `body.agent_id`. The forgery test only proves the helper works; this proves no handler
+   bypasses it.
+
+`actor_id` on every appended event comes from `principal.agent_id`, which is resolved from
+the bearer token on every request.
+
+## H3 — agents cannot merge, verified by attempting it
+
+`requireMergePermission()` throws unless the role explicitly grants it. The test attempts a
+merge as a backend role and asserts refusal, then asserts that `can_merge` values `"false"`,
+`"FALSE"`, `"0"`, `""`, `"no"`, `undefined` and `null` all fail closed.
+
+That list is the point. Data Store returns booleans **as strings** and `Boolean("false")` is
+`true`, so a direct read would grant merge to every agent whose role explicitly forbids it.
+Every fixture in the auth tests uses string booleans deliberately — a fixture using real
+booleans would hide exactly the bug the code guards against.
+
+## Error mapping decides what the client does next
+
+| Error | Status | Why that status |
+|---|---|---|
+| `StoreAuthError` | 401 | the CLI **stops**; retrying a revoked token burns quota and never succeeds |
+| `StoreBusyError` | 429 + `Retry-After` | the CLI backs off with jitter |
+| `StoreOfflineError` | 503 | the CLI queues to its outbox and keeps working |
+| `StoreError` | 400 | a bad request is not a server fault |
+| anything else | 500 | the only thing that produces a 500 |
+
+## Two ordering decisions worth recording
+
+**Append writes the dedupe row FIRST**, carrying the seq it reserved. A crash between the two
+writes leaves a dedupe row whose event is missing, and the replay path completes the write
+with the *same* seq. The reverse order would let a crash produce two events for one request,
+breaking A1 permanently. The orphan-completion path logs when it fires.
+
+**The webhook parses JSON only after verifying**, and the pre-verification parse used to find
+the repo is explicitly untrusted and used for routing only.
+
+## A deploy question I cannot resolve yet
+
+Catalyst deploys each function directory independently, so shared code in `functions/_lib/`
+is either copied in at package time or published as a package. That is unresolved and on the
+blocked list rather than silently assumed to work.
+
+## Test counts
+
+```
+npm test                                        19/19   shared conformance suite
+node --test "catalyst/**/*.test.ts" \
+             "functions/**/*.test.ts"          116/116  this workspace
+npx tsc --noEmit -p tsconfig.catalyst.json      clean
+```
+
+---
+
 # Blocked on the coordinator
 
 1. **Catalyst project ID** for this build — the handoff said `<paste>`. Needed for step 3.
