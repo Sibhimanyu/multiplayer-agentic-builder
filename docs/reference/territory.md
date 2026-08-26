@@ -56,3 +56,25 @@ git diff --stat origin/zoho-catalyst-app-builder HEAD -- \
 
 Empty output means you are in bounds. Anything listed is a violation — revert it and raise an
 order request instead.
+
+## Verify cross-branch invariants by RUNNING, not by reading
+
+Any claim of the form "this is the same on both branches" must be established by **executing it
+against the other branch**, not by comparing sources and reasoning that they match.
+
+The Firebase root-scripts bug is the proof: from inside either branch, everything looked
+correct. The script was fine. The suite passed. The defect — 25 tests on one branch, 19 on the
+other — was **invisible from within a single branch** and only appeared when the same command
+was run in both places.
+
+```bash
+git worktree add /tmp/xcheck origin/<other-branch>
+( cd /tmp/xcheck && npm install --silent && npm test )    # count it, don't read it
+git worktree remove /tmp/xcheck --force
+```
+
+A throwaway worktree is cheap. Reasoning that two files are identical is not evidence that two
+commands produce the same result; the second one is what the claim actually asserts.
+
+Applies to: root `npm test` count, the `.agentic/` tree in B2, the design tokens in E8, and
+anything else the checklist words as "across both builds".

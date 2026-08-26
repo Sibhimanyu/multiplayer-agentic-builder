@@ -67,7 +67,8 @@ Run the same suite against all three adapters: `memory`, `catalyst`, `firebase`.
 | D4 | Replayed `X-GitHub-Delivery` appends nothing the second time | ledger count |
 | D5 | `push`, `pull_request opened/synchronize/closed`, `check_suite completed` each map to the right event kind | 5 assertions |
 | D5a | `check_suite` conclusion mapping is **exactly** the table below. Both builds identical. | 9 assertions |
-| D5b | `pull_request closed` maps to `merged` only on strict `merged === true` | 4 assertions: true/false/undefined/null |
+| D5a-unknown | A conclusion **not in the table** drops. Test with a synthetic value GitHub has not invented. | assertion |
+| D5b | `pull_request closed` maps to `merged` only on strict `merged === true` | 5 assertions: `true` / `false` / `undefined` / `null` / **string `"true"`** |
 | D6 | Unmappable repo → logged and dropped, never a 500 | log + status code |
 
 ## E. Dashboard
@@ -140,6 +141,18 @@ missing badge, because a divergence is far harder to notice than an absence.
 Order 0006 said "an inconclusive `check_suite` must not map to `ci_failed`". That wording was
 imprecise: `timed_out` is not inconclusive. The rule is **conclusive failures map, everything
 else drops.**
+
+Why dropping `timed_out` was worse than it sounds: to an agent, **silence reads as "not
+finished yet"**. Dropping a terminal failure does not merely lose information, it installs the
+wrong belief.
+
+**Implement this as an allowlist table with an explicit default-drop, not a chain of `if`s**,
+so the whole allowlist is visible at once. Then test a conclusion GitHub has not invented yet:
+absent from the table must mean drop, so a future value cannot default into a red badge on a
+task whose CI never reported one. A permissive default is invisible until it misfires.
+
+The string `"true"` assertion in D5b matters on Catalyst specifically, where booleans are
+stored as strings and `"false"` is truthy in JS. It is the shape a JSON quirk actually takes.
 
 ## Composite key construction — either rule, never neither
 
