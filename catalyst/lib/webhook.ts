@@ -221,7 +221,11 @@ function mapKind(event: string, payload: Record<string, any>): MappedKind | null
 /**
  * The idempotency key for a delivery. GitHub retries with the SAME delivery id,
  * so keying on it makes a replay append nothing (D4).
+ *
+ * Underscore, not colon: this value becomes one PART of the composite
+ * `<project_id>:<idempotency_key>` dedupe key, and a colon inside a part is
+ * rejected precisely because it would make two different keys collide.
  */
 export function deliveryIdempotencyKey(delivery_id: string): string {
-  return `gh:${delivery_id}`;
+  return `gh_${delivery_id}`;
 }

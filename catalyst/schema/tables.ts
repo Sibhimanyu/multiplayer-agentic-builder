@@ -80,10 +80,12 @@ export const TABLES: TableSpec[] = [
   {
     name: 'request_dedupe',
     purpose: 'Idempotency. One row per accepted write request, inserted BEFORE the event it guards.',
-    atomic_on: 'idempotency_key',
+    atomic_on: 'dedupe_key',
     columns: [
-      { name: 'idempotency_key', ...ID, unique: true, mandatory: true,
-        note: 'uuid v4 from the caller, or a GitHub X-GitHub-Delivery id. Globally unique already, so no composite needed.' },
+      { name: 'dedupe_key', ...ID, unique: true, mandatory: true,
+        note: 'COMPOSITE "<project_id>:<idempotency_key>". The key is CLIENT-SUPPLIED, and unique is table-global, so a bare unique(idempotency_key) would let one project silently swallow another project\'s append as a duplicate. Cross-tenant event loss, not merely a collision.' },
+      { name: 'idempotency_key', ...ID, mandatory: true,
+        note: 'The raw key as supplied, kept for diagnostics. Not unique on its own.' },
       { name: 'project_id', ...ID, mandatory: true },
       { name: 'seq', type: 'bigint', note: 'The seq handed to the event this request produced. Replays return THIS, not a new one.' },
       { name: 'event_id', ...ID },

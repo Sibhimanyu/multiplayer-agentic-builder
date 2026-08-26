@@ -286,7 +286,10 @@ describe('D6 unmappable deliveries are dropped, never thrown', () => {
 describe('D4 replay key', () => {
   test('the idempotency key is derived from the delivery id, which GitHub reuses on retry', () => {
     assert.equal(deliveryIdempotencyKey('72d3162e-cc78-11e3-81ab-4c9367dc0958'),
-      'gh:72d3162e-cc78-11e3-81ab-4c9367dc0958');
+      'gh_72d3162e-cc78-11e3-81ab-4c9367dc0958');
+    // No colon: this becomes one PART of the composite dedupe key, and a colon
+    // inside a part is exactly what compositeKey() rejects.
+    assert.equal(deliveryIdempotencyKey('abc').includes(':'), false);
     // Same delivery -> same key -> the append is absorbed as a duplicate.
     assert.equal(deliveryIdempotencyKey('abc'), deliveryIdempotencyKey('abc'));
     assert.notEqual(deliveryIdempotencyKey('abc'), deliveryIdempotencyKey('abd'));

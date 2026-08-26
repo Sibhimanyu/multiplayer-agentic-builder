@@ -562,6 +562,82 @@ npx tsc --noEmit -p tsconfig.catalyst.json      clean
 
 ---
 
+# Order 0006 — composite keys confirmed, and one deviation I had to fix
+
+## Confirmed against the corrected mandatory behaviour 2
+
+The composite scheme already matched the corrected wording for `task_claims` and
+`scope_locks`, with `events.seq` exempt as the deliberate global. There is now a test that
+asserts exactly the three tables the behaviour names.
+
+## But it did NOT match for `request_dedupe`, and that was a real bug
+
+I had reasoned `idempotency_key` was "globally unique already, so no composite needed" —
+uuid v4 from the caller. The corrected behaviour names `request_dedupe` explicitly, and it is
+right and I was wrong. The key is **client-supplied**. With `is_unique` table-global, a client
+in project A sending a key that collides with project B's would make project B's append be
+absorbed as a duplicate and return someone else's `seq`.
+
+That is worse than the claim case. A claim collision is a denial of service — annoying,
+visible, recoverable. This one is **silent cross-tenant event loss**: the append returns 200
+with a plausible seq, and the event simply never exists.
+
+Fixed: `request_dedupe.dedupe_key` is now `<project_id>:<idempotency_key>`, with the raw key
+kept alongside for diagnostics. Tests assert two projects sharing one client-supplied key do
+not collide.
+
+**This forced a second change.** `deliveryIdempotencyKey` returned `gh:<delivery_id>`, and a
+colon inside a composite part is exactly what `compositeKey()` rejects. It now returns
+`gh_<delivery_id>`, with a test asserting it stays separator-free. The separator rule earned
+its keep by catching a key format I had already written.
+
+Third defect from "unique" meaning table-global, counting the seq deadlock and the claim key.
+The standing rule in 0006 — treat any new `is_unique` column as global until a probe says
+otherwise — is the right conclusion, and I would add: the failure mode gets quieter each
+time. Deadlock, then denial of service, then silent data loss.
+
+## G9 asymmetries — Catalyst paid, Firebase did not
+
+Recording these plainly now so they are not smoothed over later:
+
+| Guarantee | Catalyst cost | Firebase cost |
+|---|---|---|
+| Exactly-one claim, per project | composite key scheme across 5 tables, plus a builder that rejects the separator | none — a transaction on a document path is naturally scoped |
+| Strictly ascending `seq` | global allocator, one extra SELECT per append, bounded retry loop | none — a counter doc inside `runTransaction` |
+| Injection safety | hand-written escaper as the sole boundary, tested against attack payloads | none — the SDK is parameterised |
+| Idempotency | client-supplied key must be project-scoped by hand | doc id = key, scoped by collection path |
+
+Four guarantees, four places Catalyst needs a mechanism Firestore gets from its data model.
+None of them is exotic; all four were found by probing rather than reading.
+
+# Order 0006 section 3 — the `_lib` copy step
+
+`catalyst/tools/sync-lib.ts`, plus 11 tests.
+
+```
+node catalyst/tools/sync-lib.ts           # write the copies (predeploy)
+node catalyst/tools/sync-lib.ts --check   # verify, write nothing, exit 1 on drift
+```
+
+Copies land in `functions/<name>/_vendor/`, are gitignored, carry a `GENERATED FILE -- DO NOT
+EDIT` banner naming their source, and are always overwritten wholesale. `functions/_lib` stays
+the single source of truth.
+
+Two details that would have bitten at deploy time:
+
+1. **Imports are re-pointed.** A copy sits one level deeper than its source, so
+   `../../shared/` becomes `../../../shared/`. Without that the copies compile as broken
+   imports and it surfaces only at deploy — the worst moment to find out.
+2. **`tsconfig.catalyst.json` excludes `_vendor`.** The copies are byte-identical to source,
+   which is already checked, so including both would duplicate every declaration.
+
+The guard covers three kinds of drift, each with a test that deliberately causes it: an
+**edited** copy, a **missing** copy, and an **orphaned** copy whose source was deleted.
+`--check` reports and never repairs — a check that quietly fixed things would let CI go green
+on a working tree that still contains the edit.
+
+---
+
 # Blocked on the coordinator
 
 1. **Catalyst project ID** for this build — the handoff said `<paste>`. Needed for step 3.

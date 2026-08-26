@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import {
   SYSTEM_COLUMNS, TABLES, ZCQL_COLUMN_CAP, compositeKey, tableByName, toCreateColumnPayload,
 } from './tables.ts';
+import { deliveryIdempotencyKey } from '../lib/webhook.ts';
 
 const REQUIRED_TABLES = [
   'events', 'task_claims', 'scope_locks', 'tasks', 'agents',
@@ -77,7 +78,6 @@ describe('Data Store schema', () => {
       // composite key naming the project.
       const globallyUniqueByConstruction = [
         'seq',             // globally allocated on purpose (order 0005); a per-project seq deadlocks
-        'idempotency_key', // uuid v4 from the caller, or a GitHub delivery id
         'agent_id',        // agent_<8 hex>, server-minted
         'repo_full_name',  // owner/repo is already globally unique
       ];
@@ -87,6 +87,19 @@ describe('Data Store schema', () => {
       assert.match(String(uniqueCol.note), /COMPOSITE/,
         `${t.name}.${uniqueCol.name} must document its composite shape`);
     }
+  });
+
+  test('MB2: task_claims, scope_locks and request_dedupe all key on a composite', () => {
+    // The three tables the corrected mandatory behaviour 2 names by name.
+    for (const name of ['task_claims', 'scope_locks', 'request_dedupe']) {
+      const t = tableByName(name);
+      const unique = t.columns.find((c) => c.unique);
+      assert.ok(unique, `${name} must have a unique column`);
+      assert.match(unique.name, /_key$/, `${name}.${unique.name} must be a composite key column`);
+      assert.match(String(unique.note), /COMPOSITE/);
+    }
+    // events.seq is the documented exemption: deliberately global.
+    assert.equal(tableByName('events').atomic_on, 'seq');
   });
 
   test('no table exceeds the ZCQL 20-column projection cap once system columns are counted', () => {
@@ -162,6 +175,28 @@ describe('compositeKey', () => {
 
   test('rejects an empty part', () => {
     assert.throws(() => compositeKey('proj', ''), /may not be empty/);
+  });
+
+  test('MB2: two projects sharing a task name do not collide', () => {
+    // The cross-tenant denial of service a bare unique(task_id) would allow:
+    // project A claiming task_api would block project B forever.
+    assert.notEqual(
+      compositeKey('proj_a', 'task_api'),
+      compositeKey('proj_b', 'task_api'),
+    );
+  });
+
+  test('MB2: two projects sharing a CLIENT-SUPPLIED idempotency key do not collide', () => {
+    // Worse than the claim case, because the key comes from the client: a bare
+    // unique(idempotency_key) would let project A silently swallow project B's
+    // append as a duplicate. Cross-tenant event loss, not just a collision.
+    const key = '11111111-2222-4333-8444-555555555555';
+    assert.notEqual(compositeKey('proj_a', key), compositeKey('proj_b', key));
+  });
+
+  test('MB2: a GitHub delivery key is separator-free so it can be a composite part', () => {
+    // gh:<id> would have been rejected by the separator rule -- and rightly so.
+    assert.doesNotThrow(() => compositeKey('proj_a', deliveryIdempotencyKey('72d3162e-cc78')));
   });
 });
 

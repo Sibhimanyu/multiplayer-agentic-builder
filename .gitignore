@@ -1,3 +1,8 @@
+# vendored copies of functions/_lib, written by catalyst/tools/sync-lib.ts.
+# Generated artifacts: never edit one, never commit one. The single source of
+# truth is functions/_lib. Order 0006 section 3.
+functions/*/_vendor/
+
 # generated agent context, never committed
 .agentic/
 AGENTS.md

@@ -114,9 +114,9 @@ export function selectLocksForProject(project_id: string, limit: number = LIMITS
     ` WHERE project_id = ${zqStr(project_id)} ORDER BY acquired_at LIMIT 0, ${zqInt(cap.applied)}`;
 }
 
-export function selectDedupe(idempotency_key: string): string {
-  return `SELECT idempotency_key, project_id, seq, event_id FROM request_dedupe` +
-    ` WHERE idempotency_key = ${zqStr(idempotency_key)} LIMIT 0, 1`;
+export function selectDedupe(dedupe_key: string): string {
+  return `SELECT dedupe_key, idempotency_key, project_id, seq, event_id FROM request_dedupe` +
+    ` WHERE dedupe_key = ${zqStr(dedupe_key)} LIMIT 0, 1`;
 }
 
 /**
