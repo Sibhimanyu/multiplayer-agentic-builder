@@ -20,8 +20,8 @@ import type { Logger } from '../../shared/log.ts';
 import { toDuplicateValueError } from '../../catalyst/lib/duplicate.ts';
 import { fromCatalystDatetime, toCatalystDatetime } from '../../catalyst/lib/datetime.ts';
 import {
-  readMaxSeq, selectClaim, selectDedupe, selectEventByDedupeKey, selectEvents, selectMaxSeq,
-  unwrapRows,
+  readMaxSeq, selectClaim, selectDedupe, selectEventByDedupeKey, selectLocksForProject,
+  selectMaxSeq, unwrapRows,
 } from '../../catalyst/lib/zcql.ts';
 import { handleAppend } from '../append/index.ts';
 import type { AppendPort } from '../append/index.ts';
@@ -30,6 +30,10 @@ import type { ClaimPort } from '../claim/index.ts';
 import { handleEvents } from '../events/index.ts';
 import { handleWebhook } from '../github-webhook/index.ts';
 import type { WebhookPort } from '../github-webhook/index.ts';
+import { handleAcquireScope, handleReleaseScope } from '../scope/index.ts';
+import type { LockRecord, ScopePort } from '../scope/index.ts';
+import { handleHeartbeat, handleListPresence, PRESENCE_SEGMENT } from '../presence/index.ts';
+import type { PresenceDeps, PresencePort } from '../presence/index.ts';
 import { resolvePrincipal } from '../_lib/auth.ts';
 import type { AuthPort } from '../_lib/auth.ts';
 import { agentToken, errorResponse, header, json, withCors } from '../_lib/http.ts';
@@ -55,20 +59,29 @@ const DATETIME_COLUMNS = new Set(['created_at', 'claimed_at', 'acquired_at']);
  * consumed, and a provider console reports them hours later in coarse buckets.
  * Counting them at the call site is the only way to attribute them to a request.
  */
-export const ops = { selects: 0, inserts: 0, updates: 0, cache_puts: 0 };
+export const ops = {
+  selects: 0, inserts: 0, updates: 0, deletes: 0, cache_puts: 0, cache_gets: 0,
+};
 
 export function resetOps(): void {
-  ops.selects = 0; ops.inserts = 0; ops.updates = 0; ops.cache_puts = 0;
+  ops.selects = 0; ops.inserts = 0; ops.updates = 0;
+  ops.deletes = 0; ops.cache_puts = 0; ops.cache_gets = 0;
 }
 
 interface Datastore {
   table(name: string): {
     insertRow(row: Record<string, unknown>): Promise<Record<string, unknown>>;
+    deleteRow(rowId: string): Promise<unknown>;
   };
+}
+interface CacheSegment {
+  put(key: string, value: string, expiryInHours?: number): Promise<unknown>;
+  get(key: string): Promise<unknown>;
 }
 interface CatalystApp {
   datastore(): Datastore;
   zcql(): { executeZCQLQuery(query: string): Promise<unknown[]> };
+  cache(): { segment(name?: string): CacheSegment };
 }
 
 /**
@@ -249,6 +262,110 @@ export function makeWebhookPort(app: CatalystApp, log: Logger): WebhookPort {
   };
 }
 
+export function makeScopePort(app: CatalystApp): ScopePort {
+  return {
+    listLocks: async (project_id) => {
+      const rows = unwrapRows<Record<string, unknown>>(
+        await query(app, selectLocksForProject(project_id)), 'scope_locks');
+      return rows.map((r): LockRecord => ({
+        lock_key: String(r.lock_key), agent_id: String(r.agent_id), task_id: String(r.task_id),
+        globs: parseGlobs(r.globs), acquired_at: String(r.acquired_at),
+      }));
+    },
+    insertLock: (row) => insertRow(app, 'scope_locks', { ...row }),
+    deleteLock: async (lock_key) => {
+      // No DELETE in ZCQL via this path, so rows go through the Data Store API.
+      await deleteRowsWhere(app, 'scope_locks', 'lock_key', lock_key);
+    },
+    deleteLocksForAgent: async (project_id, agent_id) => {
+      const rows = unwrapRows<Record<string, unknown>>(await query(app,
+        `SELECT ROWID, lock_key FROM scope_locks WHERE project_id = '${project_id.replace(/'/g, "''")}'` +
+        ` AND agent_id = '${agent_id.replace(/'/g, "''")}' ORDER BY acquired_at LIMIT 0, 200`), 'scope_locks');
+      for (const r of rows) await deleteRowById(app, 'scope_locks', String(r.ROWID));
+      return rows.length;
+    },
+  };
+}
+
+function parseGlobs(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map(String);
+  if (typeof raw !== 'string' || raw === '') return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    // An unparseable glob list must NOT read as "locks nothing" -- that would
+    // silently disable the very check this table exists for. Treat it as a lock
+    // on everything, so it conflicts loudly instead of failing open.
+    return ['**'];
+  }
+}
+
+async function deleteRowById(app: CatalystApp, table: string, rowid: string): Promise<void> {
+  ops.deletes += 1;
+  try {
+    await app.datastore().table(table).deleteRow(rowid);
+  } catch (err) {
+    throw mapSdkError(err);
+  }
+}
+
+async function deleteRowsWhere(
+  app: CatalystApp, table: string, column: string, value: string,
+): Promise<void> {
+  const rows = unwrapRows<Record<string, unknown>>(await query(app,
+    `SELECT ROWID FROM ${table} WHERE ${column} = '${value.replace(/'/g, "''")}' LIMIT 0, 1`), table);
+  for (const r of rows) await deleteRowById(app, table, String(r.ROWID));
+}
+
+export function makePresenceDeps(app: CatalystApp, log: Logger): PresenceDeps {
+  const segment = app.cache().segment(PRESENCE_SEGMENT);
+  const port: PresencePort = {
+    // ALWAYS an explicit expiry. The SDK takes hours; a put without one resets
+    // the TTL to 48 hours, which would keep a dead agent looking connected.
+    put: async (key, value, ttl_ms) => {
+      ops.cache_puts += 1;
+      await segment.put(key, value, Math.max(1, Math.round(ttl_ms / 3_600_000)));
+    },
+    get: async (key) => {
+      ops.cache_gets += 1;
+      const v = await segment.get(key);
+      return normaliseCacheValue(v);
+    },
+    getMany: async (keys) => {
+      const out = new Map<string, string | null>();
+      for (const k of keys) {
+        ops.cache_gets += 1;
+        out.set(k, normaliseCacheValue(await segment.get(k)));
+      }
+      return out;
+    },
+  };
+  return {
+    port, log,
+    now_ms: () => Date.now(),
+    listAgentIds: async (project_id) => {
+      const rows = unwrapRows<Record<string, unknown>>(await query(app,
+        `SELECT agent_id FROM agents WHERE project_id = '${project_id.replace(/'/g, "''")}'` +
+        ` LIMIT 0, 100`), 'agents');
+      return rows.map((r) => String(r.agent_id));
+    },
+  };
+}
+
+/** Cache returns assorted shapes, and delete() leaves a null value behind. */
+function normaliseCacheValue(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'string') return v === '' ? null : v;
+  if (typeof v === 'object') {
+    const holder = v as { cache_value?: unknown; value?: unknown };
+    const inner = holder.cache_value ?? holder.value;
+    if (inner === null || inner === undefined) return null;
+    return typeof inner === 'string' ? inner : JSON.stringify(inner);
+  }
+  return String(v);
+}
+
 // ---- routing -------------------------------------------------------------
 
 async function route(app: CatalystApp, req: HttpRequest, log: Logger): Promise<HttpResponse> {
@@ -280,6 +397,25 @@ async function route(app: CatalystApp, req: HttpRequest, log: Logger): Promise<H
     if (!key) throw new HttpError(400, 'MISSING_IDEMPOTENCY_KEY', 'X-Idempotency-Key is required');
     return handleAppend(makeAppendPort(app), principal, req.body, key,
       () => new Date().toISOString(), log);
+  }
+
+  if (path === '/scope' && req.method === 'POST') {
+    return handleAcquireScope(makeScopePort(app), principal, req.body,
+      () => new Date().toISOString(), log);
+  }
+
+  if (path === '/scope/release' && req.method === 'POST') {
+    return handleReleaseScope(makeScopePort(app), principal, req.body, log);
+  }
+
+  if (path === '/heartbeat' && req.method === 'POST') {
+    return handleHeartbeat(makePresenceDeps(app, log), principal, req.body);
+  }
+
+  if (path === '/presence' && req.method === 'GET') {
+    const url = new URL(req.path, 'http://local');
+    return handleListPresence(makePresenceDeps(app, log), principal,
+      url.searchParams.get('project_id') ?? principal.project_id);
   }
 
   if (path === '/events' && req.method === 'GET') {

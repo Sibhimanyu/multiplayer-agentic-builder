@@ -1099,3 +1099,56 @@ work, and I can create the bucket and everything downstream without further help
 I am not attempting a workaround. Substituting Filestore or Cache for the snapshot would
 change the measured read path, which is the specific thing route C1 exists to test — the
 comparison would then be measuring a design I invented to dodge a provisioning gate.
+
+# Presence and scope locks — built, deployed, verified live
+
+Both unblocked by not needing Stratus. `/heartbeat`, `/presence`, `/scope`, `/scope/release`
+are live on the deployed function.
+
+## Presence: Cache, and the two quirks that shaped the code
+
+Verified live: `POST /heartbeat` → 204, then `GET /presence` returns
+`{"status":"working","stale":false,...}`. **Zero Data Store writes on that path** — the whole
+reason it exists, since 1,000 UPDATEs/month means a 20 s heartbeat from *one* agent would
+exhaust the monthly allowance in 5.6 hours.
+
+Two documented Cache behaviours are handled explicitly, each with a test:
+
+- **`delete()` leaves the key present with a NULL value.** So "absent" has two
+  representations, and a null must read as absent rather than as a zero-valued heartbeat. The
+  double reproduces the quirk rather than asserting against a clean map.
+- **A write without an explicit expiry resets the TTL to 48 hours.** Every write passes one,
+  and the test counts TTL-less writes and asserts zero. A heartbeat that accidentally lived
+  two days would show a dead agent as connected long after the laptop closed.
+
+One more decision worth recording: a presence value with **no usable timestamp is treated as
+absent, not as live**. Defaulting to "now" would make a dead agent look alive, which is the
+wrong direction to fail — the entire purpose of the value is to decide whether someone is
+still there.
+
+## Scope locks: the atomicity gap, stated rather than papered over
+
+Catalyst has no transactions, so the glob-intersection check and the lock INSERT **cannot be
+one atomic step**. `unique(lock_key)` stops a duplicate lock for the same (project, agent,
+task), but it cannot stop two *different* agents with overlapping globs both passing the check
+in the same instant. Firestore does this in a single `runTransaction`. G9.
+
+Three things narrow the window, and the third is the one that actually closes it:
+
+1. The check reads immediately before the insert, so the window is one round trip.
+2. After inserting, the lock set is **re-read and re-checked**.
+3. If a conflicting lock landed during the window, the loser **releases its own lock** and
+   reports the conflict — rather than both agents proceeding with overlapping scope.
+
+The tie-break is **deterministic**: the lower `lock_key` wins. Both racers compute the same
+comparison from the same data, so exactly one concludes it lost. Without that, both could
+yield and *neither* would hold the scope — a worse outcome than the race itself, and there is
+a test asserting exactly one of `a < b` / `b < a` holds.
+
+Both sides of the race are tested by injecting a competing lock between the pre-check and the
+re-check: one test where we hold the lower key and keep the lock, one where we do not and roll
+our own lock back.
+
+One deliberate fail-closed choice: an **unparseable `globs` column is treated as `['**']`**, a
+lock on everything, so it conflicts loudly. Treating it as `[]` would silently disable the
+check this table exists for.
