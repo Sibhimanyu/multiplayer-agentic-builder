@@ -826,3 +826,98 @@ row wondering why an agent is blocked.
 |---|---|---|
 | 1 | ~1.5 h | Spec read, `shared/` foundation, section A suite, `is_unique` probe |
 | 2 | ~0.3 h | Orders 0001–0003: probe recorded, rebased onto shared foundation |
+
+---
+
+# Order 0015 — PROVISIONED. Every resource, verbatim.
+
+## Catalyst
+
+| | |
+|---|---|
+| Project name | `multiplayer-agents` |
+| Project ID | `53069000000062004` |
+| Org | `60083782173` |
+| Environment | Development only |
+| Domain | `multiplayer-agents-60083782173.development` |
+| DC | `catalystserverless.in` |
+
+Verified by `catalyst project:list --org 60083782173 -ni` before selecting — the ID in 0015
+matches what the platform reports. `onam-utsavam` and `Project-Rainfall` were listed but
+neither was read, written nor selected.
+
+`catalyst project:use multiplayer-agents --org 60083782173 -ni` → "Successfully made project
+active", **< 1 s**, wrote `.catalystrc`.
+
+## Table IDs, verbatim
+
+| Table | `table_id` |
+|---|---|
+| `events` | `53069000000057006` |
+| `request_dedupe` | `53069000000063003` |
+| `task_claims` | `53069000000063362` |
+| `scope_locks` | `53069000000058006` |
+| `tasks` | `53069000000061002` |
+| `agents` | `53069000000064004` |
+| `members` | `53069000000053012` |
+| `roles` | `53069000000051019` |
+| `github_links` | `53069000000055010` |
+
+Nine tables, 63 declared columns, all created from `catalyst/schema/tables.ts` via
+`toCreateColumnPayload` rather than typed by hand — the schema that was dry-run tested is
+literally the schema that was provisioned.
+
+**Table IDs are non-monotonic too**: 57006, 63003, 63362, 58006, 61002, 64004, 53012, 51019,
+55010, created in that order. Same per-shard block allocation as `ROWID`. Anything that sorted
+resources by ID would list them in a fictional order.
+
+## GitHub
+
+`gh repo create Sibhimanyu/inventory-tracker-catalyst --private` → **4 s**, one command, no
+browser. `https://github.com/Sibhimanyu/inventory-tracker-catalyst`
+
+## Provisioning cost
+
+| Step | Cost |
+|---|---|
+| Verify + select project | 2 CLI commands, < 1 s |
+| 9 × `Create_Table` | 9 API calls, ~40 s wall clock |
+| 9 × `Create_Column` (batched per table) | 9 API calls + **2 failures**, ~50 s |
+| GitHub repo | 1 command, 4 s |
+| **Browser steps** | **zero** |
+
+The project itself was created by the human before this order. There is no
+`catalyst project:create` — the coordinator verified that wall independently.
+
+## A new platform finding: column `description` has an undocumented charset
+
+The first `Create_Column` call for `events` failed:
+
+```json
+{"status":"failure","data":{"error_code":"PATTERN_NOT_MATCHED",
+ "message":"Please check whether the input values are correct"}}
+```
+
+Bisected in two calls. The columns were fine; the **`description` field** was rejected.
+Confirmed by probe:
+
+- `"Minted from seq. Deliberately not unique."` → **accepted**
+- `"contract | coordination | human -- derived from kind, never trusted <caller>"` → **rejected**
+
+So `|`, `<`, `>` and `--` are not accepted in a column description. The error names **neither
+the field nor the offending character**, and `PATTERN_NOT_MATCHED` is identical whatever is
+wrong — so a caller learns only "something in this payload". Descriptions are now generated
+through a `[A-Za-z0-9 .,]` filter.
+
+Two mitigating facts worth recording: the failure was **atomic** (no partial column creation —
+`List_All_Columns` confirms `events` has exactly its 10 declared columns and the probe column
+`probe_desc_dashes` does not exist), and it failed at DDL time rather than silently mangling
+the value the way `varchar` clamping does.
+
+## Confirmations from real provisioning
+
+- `text` columns come back with `max_length: 10000` — the documented cap, now measured.
+- `bigint` comes back `max_length: 19`.
+- `is_unique: true` accepted on `varchar` **and** `bigint` in production use, matching the probe.
+- `text` columns carry no `search_index_enabled` in the response, consistent with the API
+  schema refusing it for that type.

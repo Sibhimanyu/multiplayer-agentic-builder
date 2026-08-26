@@ -1,0 +1,23 @@
+{
+  "project": {
+    "name": "multiplayer-agents",
+    "id": "53069000000062004",
+    "org": "60083782173",
+    "env": "Development",
+    "domain": "multiplayer-agents-60083782173.development"
+  },
+  "tables": {
+    "events": "53069000000057006",
+    "request_dedupe": "53069000000063003",
+    "task_claims": "53069000000063362",
+    "scope_locks": "53069000000058006",
+    "tasks": "53069000000061002",
+    "agents": "53069000000064004",
+    "members": "53069000000053012",
+    "roles": "53069000000051019",
+    "github_links": "53069000000055010"
+  },
+  "created_at": "2026-08-26",
+  "github_repo": "https://github.com/Sibhimanyu/inventory-tracker-catalyst",
+  "note": "Every resource this build created, verbatim, per order 0015. Nothing pre-existing was touched."
+}
