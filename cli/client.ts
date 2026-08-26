@@ -74,7 +74,11 @@ export class ApiClient {
       res = await this.doFetch(url, {
         method,
         headers: {
-          authorization: `Bearer ${this.opts.token}`,
+          // X-Agent-Token, raw, not Authorization: Bearer. Ruled in order 0017 -- the Catalyst
+          // API Gateway reserves Authorization and validates it as a Zoho OAuth token before
+          // the function runs, so a shared CLI cannot use it. One header everywhere beats a
+          // per-platform branch in shared code.
+          'x-agent-token': this.opts.token,
           'content-type': 'application/json',
           ...extraHeaders,
         },

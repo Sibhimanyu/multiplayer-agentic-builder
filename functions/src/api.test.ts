@@ -119,7 +119,7 @@ const call = (
   token = backendToken,
 ): Promise<{ status: number; body: Record<string, unknown> }> =>
   handleApi(
-    { method, path, headers: { authorization: token ? `Bearer ${token}` : undefined }, body } satisfies ApiRequest,
+    { method, path, headers: { 'x-agent-token': token || undefined }, body } satisfies ApiRequest,
     deps,
   );
 
@@ -174,7 +174,10 @@ test('H agents cannot merge: even a grant_merge agent cannot append `merged`', a
     token_sha256: hashToken(integratorToken),
   });
 
-  const id = await resolveAgent(db, `Bearer ${integratorToken}`);
+  // resolveAgent takes the RAW token now (order 0017): a Bearer prefix is refused, not
+  // stripped. This direct call was the first thing my own strictness broke, which is the
+  // point of refusing rather than accommodating.
+  const id = await resolveAgent(db, integratorToken);
   assert.equal(id.permissions.merge, true, 'test premise: this agent does hold merge');
 
   const res = await call(
@@ -266,6 +269,39 @@ test('an unknown, missing or malformed token is 401', async () => {
     deps,
   );
   assert.equal(noHeader.status, 401);
+});
+
+test('0017: X-Agent-Token is the only header read, and Authorization is refused by name', async () => {
+  // Ruled canonical for all three builds. Authorization would have worked fine on Firestore --
+  // the constraint is Catalyst's API Gateway, which reserves the header and rejects the request
+  // before the function runs. A shared CLI cannot branch per platform, so one header wins.
+  const viaAuthorization = await handleApi(
+    { method: 'GET', path: '/whoami', headers: { authorization: `Bearer ${backendToken}` }, body: {} },
+    deps,
+  );
+  assert.equal(viaAuthorization.status, 401, 'a valid token in the wrong header must not work');
+  assert.equal(
+    viaAuthorization.body.error,
+    'wrong_auth_header',
+    'and the error must name the mistake: "wrong token" and "wrong header" need different fixes',
+  );
+
+  const viaAgentToken = await handleApi(
+    { method: 'GET', path: '/whoami', headers: { 'x-agent-token': backendToken }, body: {} },
+    deps,
+  );
+  assert.equal(viaAgentToken.status, 200, 'the same token in the right header works');
+  assert.equal(viaAgentToken.body.agent_id, backendAgentId);
+});
+
+test('0017: X-Agent-Token carries the RAW token; a Bearer prefix is refused, not stripped', async () => {
+  // Silently stripping would let a client be wrong indefinitely without anyone noticing.
+  const prefixed = await handleApi(
+    { method: 'GET', path: '/whoami', headers: { 'x-agent-token': `Bearer ${backendToken}` }, body: {} },
+    deps,
+  );
+  assert.equal(prefixed.status, 401);
+  assert.match(String(prefixed.body.detail), /raw token/, 'the error must say what to send');
 });
 
 test('a revoked token is 401 and stays 401', async () => {

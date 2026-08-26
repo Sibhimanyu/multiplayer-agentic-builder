@@ -16,6 +16,7 @@
 //     actor_type 'github'.
 
 import {
+  AGENT_TOKEN_HEADER,
   assertAppendable,
   hashToken,
   mintToken,
@@ -164,7 +165,15 @@ export async function handleApi(req: ApiRequest, deps: ApiDeps): Promise<ApiResp
     // /connect is the only unauthenticated route: it trades an invite code for a token.
     if (route === 'POST /connect') return await connect(req, deps);
 
-    const id = await resolveAgent(deps.db, req.headers.authorization);
+    // A stale client still sending Authorization gets a specific message rather than a bare
+    // 401, because "your token is wrong" and "your header is wrong" need different fixes.
+    if (!req.headers[AGENT_TOKEN_HEADER] && req.headers.authorization) {
+      return json(401, {
+        error: 'wrong_auth_header',
+        detail: `use ${AGENT_TOKEN_HEADER} with the raw token; Authorization is not read`,
+      });
+    }
+    const id = await resolveAgent(deps.db, req.headers[AGENT_TOKEN_HEADER]);
     const forged = rejectForgedIdentity(req.body, id, log);
     if (forged) return forged;
 

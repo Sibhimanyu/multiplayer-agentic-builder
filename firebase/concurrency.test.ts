@@ -24,7 +24,6 @@ import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 import { createFirestoreStore, scopedKeyFor, type FirestoreStore } from './store.ts';
 import { CapturingLogger } from '../shared/log.ts';
 import { isRetryable, StoreBusyError } from '../shared/store/errors.ts';
-import { withRetry } from '../shared/store/retry.ts';
 import { FakeClock } from '../shared/clock.ts';
 import type { AppendResult, EventInput, TaskView } from '../shared/store/types.ts';
 
@@ -335,20 +334,22 @@ if (EMULATOR) {
     );
   });
 
-  test('32 concurrent appends ALL land once the caller honours the retry contract', async () => {
-    // The same 32, through the shared withRetry the CLI uses. This is the assertion that
-    // matters: the ceiling is real, and the documented recovery clears it.
-    const pid = await project('32_retry');
+  test('32 concurrent appends ALL land, absorbed by the adapter alone', async () => {
+    // NO caller-side withRetry here, and that is the point.
+    //
+    // NESTED RETRY LAYERS MULTIPLY. This test used to wrap each append in the shared withRetry
+    // at attempts:8 -- written when the adapter did no retrying of its own. Once contention
+    // moved into the adapter (6 attempts, 40ms..2s each), the effective ceiling became 8 x 6 =
+    // 48 attempts with compounding backoff, and this test plus the mixed one below took
+    // THIRTY-SIX MINUTES and were cancelled by the timeout.
+    //
+    // The defect was mine and it was structural: I moved retry down a layer and left it in the
+    // layer above. Since the adapter now owns contention, the caller must not also own it.
+    const pid = await project('32_adapter');
     const N = 32;
 
     const results = await Promise.all(
-      Array.from({ length: N }, (_, i) =>
-        withRetry(() => store.appendEvent(pid, progress(i), keys32[i]!), {
-          attempts: 8,
-          op: 'appendEvent',
-          log,
-        }).then((r) => r.value),
-      ),
+      Array.from({ length: N }, (_, i) => store.appendEvent(pid, progress(i), keys32[i]!)),
     );
 
     assert.equal(new Set(results.map((r) => r.seq)).size, N, 'all 32 distinct seq');
@@ -387,17 +388,13 @@ if (EMULATOR) {
     const pid = await project('mixed');
     await store.seedTasks(pid, [task('task_a'), task('task_b')]);
 
-    // Retry-wrapped, for the reason established above: under this much contention on one
-    // counter document a raw call may legitimately refuse with StoreBusyError, and the caller's
-    // job is to back off. Testing it unwrapped would be testing that the contract is not the
-    // contract.
-    const retried = <T>(fn: () => Promise<T>) =>
-      withRetry(fn, { attempts: 8, op: 'mixed', log }).then((r) => r.value);
-
+    // Unwrapped, for the same reason as above: the adapter absorbs contention, so adding a
+    // caller-side retry here would multiply the two and is what made this test run for 36
+    // minutes before being cancelled.
     const work: Promise<unknown>[] = [];
-    for (let i = 0; i < 6; i++) work.push(retried(() => store.appendEvent(pid, progress(i), randomUUID())));
-    for (let i = 0; i < 6; i++) work.push(retried(() => store.claimTask(pid, 'task_a', `agent_race${i}`)));
-    for (let i = 0; i < 6; i++) work.push(retried(() => store.claimTask(pid, 'task_b', `agent_other${i}`)));
+    for (let i = 0; i < 6; i++) work.push(store.appendEvent(pid, progress(i), randomUUID()));
+    for (let i = 0; i < 6; i++) work.push(store.claimTask(pid, 'task_a', `agent_race${i}`));
+    for (let i = 0; i < 6; i++) work.push(store.claimTask(pid, 'task_b', `agent_other${i}`));
     await Promise.all(work);
 
     const { events } = await store.readEvents(pid, 0);

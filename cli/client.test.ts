@@ -22,15 +22,19 @@ const silent: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error:
 /** A fetch that returns queued responses and records what was asked for. */
 function stub(
   responses: ({ status: number; body?: unknown; headers?: Record<string, string> } | Error)[],
-): { fetchImpl: typeof fetch; calls: { url: string; method: string; auth?: string; body?: string }[] } {
-  const calls: { url: string; method: string; auth?: string; body?: string }[] = [];
+): {
+  fetchImpl: typeof fetch;
+  calls: { url: string; method: string; auth?: string; authorization?: string; body?: string }[];
+} {
+  const calls: { url: string; method: string; auth?: string; authorization?: string; body?: string }[] = [];
   let i = 0;
   const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
     const headers = (init?.headers ?? {}) as Record<string, string>;
     calls.push({
       url: String(url),
       method: init?.method ?? 'GET',
-      auth: headers.authorization,
+      auth: headers['x-agent-token'],
+      authorization: headers.authorization,
       body: typeof init?.body === 'string' ? init.body : undefined,
     });
     // The index is clamped to the last element, so this cannot be undefined — but
@@ -254,7 +258,10 @@ test('the token travels as a Bearer header and never in a URL or body', async ()
   await api.appendEvent('task_progress', { task_id: 't', summary: 's' }, 'key-0000');
 
   const call = calls[0]!;
-  assert.equal(call.auth, 'Bearer secret-token');
+  // Order 0017: X-Agent-Token with the RAW token, and Authorization must not be sent at all --
+  // the Catalyst API Gateway reserves it, so a shared CLI sending it would break that build.
+  assert.equal(call.auth, 'secret-token', 'raw token in x-agent-token, no Bearer prefix');
+  assert.equal(call.authorization, undefined, 'Authorization must not be sent by the CLI');
   assert.ok(!call.url.includes('secret-token'), 'a token in a URL lands in every access log');
   assert.ok(!(call.body ?? '').includes('secret-token'), 'and must not be in the body either');
 });

@@ -81,15 +81,42 @@ function sameDigest(a: string, b: string): boolean {
   return timingSafeEqual(ba, bb);
 }
 
-/** "Bearer <token>" -> "<token>". Returns null for anything else. */
-export function bearerToken(authorization: string | undefined): string | null {
-  if (!authorization) return null;
-  const m = /^Bearer\s+(\S+)$/i.exec(authorization.trim());
-  return m ? m[1]! : null;
+/**
+ * The canonical agent-token header. Ruled in order 0017.
+ *
+ * `X-Agent-Token`, carrying the RAW token, on every route of every build. Not
+ * `Authorization: Bearer`, which would have worked perfectly well here -- the Catalyst API
+ * Gateway RESERVES `Authorization` and validates it as a Zoho OAuth token before the function
+ * runs, so the handler never sees the request at all and no handler code can recover it.
+ *
+ * The CLI is shared, so the alternatives were one header everywhere or a per-platform branch in
+ * the CLI -- and a per-platform branch in shared code is the exact divergence this structure
+ * exists to prevent. This build pays nothing for the convention; Catalyst pays for the
+ * constraint. Register entry 12.
+ */
+export const AGENT_TOKEN_HEADER = 'x-agent-token';
+
+/**
+ * Read the raw token from the X-Agent-Token header.
+ *
+ * Rejects a `Bearer ` prefix rather than quietly stripping it: a custom header carries the raw
+ * value, and silently accepting both shapes means a client can be wrong for months without
+ * anyone noticing. A loud failure names the mistake.
+ */
+export function agentToken(header: string | undefined): string | null {
+  if (!header) return null;
+  const raw = header.trim();
+  if (raw === '') return null;
+  if (/^Bearer\s/i.test(raw)) {
+    throw new StoreAuthError(
+      `${AGENT_TOKEN_HEADER} must carry the raw token, not a "Bearer " prefix`,
+    );
+  }
+  return raw;
 }
 
 /**
- * Resolve a bearer token to a full identity, or throw StoreAuthError.
+ * Resolve an X-Agent-Token value to a full identity, or throw StoreAuthError.
  *
  * Note the absent parameters: no agent_id, no project_id, no role. The caller cannot assert
  * who it is. Everything comes from the token document.
@@ -97,9 +124,9 @@ export function bearerToken(authorization: string | undefined): string | null {
  * Costs one indexed query per request. That is the price of immediate revocation — caching it
  * for even 60 seconds means a revoked agent keeps writing for 60 seconds.
  */
-export async function resolveAgent(db: Firestore, authorization: string | undefined): Promise<Identity> {
-  const token = bearerToken(authorization);
-  if (!token) throw new StoreAuthError('missing or malformed Authorization header');
+export async function resolveAgent(db: Firestore, header: string | undefined): Promise<Identity> {
+  const token = agentToken(header);
+  if (!token) throw new StoreAuthError(`missing or empty ${AGENT_TOKEN_HEADER} header`);
 
   const digest = hashToken(token);
   // Collection-group query: one lookup regardless of how many projects exist. The token hash

@@ -157,6 +157,9 @@ export const api = onRequest({ cors: true }, async (req, res) => {
   const path = req.path.replace(/^\/api/, '') || '/';
 
   const headers: Record<string, string | undefined> = {
+    // Both are forwarded: x-agent-token is what auth reads, and authorization is forwarded
+    // only so the router can tell a stale client it is using the wrong header.
+    'x-agent-token': req.header('x-agent-token'),
     authorization: req.header('authorization'),
     'if-none-match': req.header('if-none-match'),
   };

@@ -607,6 +607,87 @@ Worth stating as a general point rather than a Firestore one: **any test suite s
 external resource must serialise at the file level**, and the default is against you.
 
 
+
+### 25. Detecting a condition by message text, and the fix that was worse
+
+Order 0017 ruling 1b made structured-only error matching normative after the Catalyst SDK
+renamed `error_code` to `code`. It asked both builds to audit for message matching. Mine had
+exactly one instance, and it was load-bearing:
+
+```ts
+const contended = mapped instanceof StoreBusyError && /aborted|contention|lock/i.test(mapped.message);
+```
+
+That worked *only* because `mapFirestoreError` composes the message from Google's own wording.
+Two ways it breaks:
+
+- **Reword and it silently stops.** If Google changed "Transaction lock timeout" to "Transaction
+  conflict detected", contention would stop being retried and would start surfacing to every
+  caller again — reinstating the intermittent shared-suite failure that took three runs to pin
+  down in the first place.
+- **A quota error whose text contains "lock" would be retried.** That is the one thing the retry
+  must never do: retrying an exhausted quota consumes more of the thing that ran out.
+
+Both demonstrated rather than argued:
+
+```
+reworded message, code still 10 -> isContention: true    (old regex: false)
+quota whose TEXT contains lock  -> isContention: false   (old regex: TRUE, and retried)
+```
+
+**And the first fix was worse than the bug.** I wrote `mapped.cause_code === 'ABORTED'`, because
+the shared `StoreError` has a `cause_code` field. But `StoreBusyError`'s constructor accepts it
+and does not forward it — it passes only `{ backend_message }` to `super`. So `cause_code` is
+permanently `undefined` on a busy error, `contended` would have been permanently false, and
+contention retry would have been silently disabled altogether. Caught by reading the frozen
+file rather than trusting the field existed.
+
+Fixed with a local `FirestoreBusyError extends StoreBusyError` carrying `grpc_code`.
+`instanceof StoreBusyError`, `isRetryable` and `.name` are all unchanged, so nothing downstream
+— including the shared suite — can tell. **Order request:** `StoreBusyError` should forward
+`cause_code`; both builds need to branch on a structured reason and ruling 1b makes it normative.
+
+### 26. Nested retry layers multiply, and I built one
+
+The most expensive defect of the session in wall-clock terms: two tests ran for **36 minutes**
+and were cancelled.
+
+When contention retry moved *into* the adapter (6 attempts, 40 ms–2 s backoff), the tests kept
+their caller-side `withRetry(..., { attempts: 8 })` — written earlier, when the adapter did no
+retrying at all. The effective ceiling became **8 × 6 = 48 attempts** with compounding backoff.
+
+The arithmetic is obvious once stated, and that is the point: nothing failed, nothing warned, the
+suite just got slower until it hit a timeout. Retry is the kind of thing that composes silently
+and multiplicatively.
+
+**Rule: retry belongs at exactly one layer.** When you move it down, delete it above. If both
+layers legitimately need it, the inner one must not retry what the outer one will.
+
+### 27. `created_at` is metadata — audited, already compliant
+
+Ruling 2, checked rather than asserted. Nothing sorts, pages or deduplicates on `created_at`:
+`readEvents` is `orderBy('seq', 'asc')` and the fold sorts `a.seq - b.seq`. A grep for
+`created_at` near any ordering, cursor or dedupe construct returns nothing.
+
+This build is explicitly *not* being degraded to match Catalyst's second-resolution datetime
+columns, so it keeps native millisecond `created_at` as metadata while `seq` stays authoritative
+for ordering. Register entry 13.
+
+### 28. The suite gate earned its keep on its first real red
+
+`run-tests.sh` was added after a hang reported `fail 0 / cancelled 2`. Its first genuine failure
+was this one:
+
+```
+run-tests: tests=66 pass=63 fail=1 cancelled=2 skipped=0 todo=0
+run-tests: FAIL -- 1 failing test(s)
+run-tests: FAIL -- 2 CANCELLED test(s). A cancelled test is usually a hang or a timeout...
+```
+
+Three separate defects in one run — a broken direct call to `resolveAgent`, and two tests
+cancelled by the multiplicative retry — and it named all three instead of showing a mostly-green
+count.
+
 ---
 
 ## Provisioning, measured (order 0015)

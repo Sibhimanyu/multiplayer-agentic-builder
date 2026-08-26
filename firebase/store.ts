@@ -100,6 +100,55 @@ const HUMAN_READABLE_LIMIT = 1_500;
 const LISTENER_COUNT = 6;
 
 /**
+ * Structured reason codes carried on mapped errors, so callers branch on a FIELD and never on
+ * message text.
+ *
+ * Order 0017 ruling 1b, and it caught a real defect here: withContentionRetry detected
+ * contention with `/aborted|contention|lock/i.test(error.message)`. That happened to work only
+ * because mapFirestoreError composes the message from Google's own wording. If Google reworded
+ * "Transaction lock timeout" to "Transaction conflict detected", the adapter would silently
+ * stop retrying contention and start surfacing it to every caller again -- reintroducing the
+ * intermittent shared-suite failure that took three runs to pin down. Worse, a QUOTA error
+ * whose text happened to contain "lock" would have been retried, which is the one thing the
+ * retry must never do: retrying an exhausted quota consumes more of what ran out.
+ */
+const CODE_ABORTED = 'ABORTED';
+const CODE_RESOURCE_EXHAUSTED = 'RESOURCE_EXHAUSTED';
+
+/**
+ * A StoreBusyError that actually retains its structured reason code.
+ *
+ * Needed because the shared `StoreBusyError` constructor accepts `cause_code` on `StoreError`
+ * but does not forward it -- it passes only `{ backend_message }` to super, so `cause_code` is
+ * always undefined on a busy error. I found that while fixing the message-matching defect: my
+ * first fix read `mapped.cause_code === CODE_ABORTED`, which would have been permanently false
+ * and would have silently disabled contention retry altogether. That is a worse bug than the
+ * one it replaced, and it would have shown up only as the intermittent shared-suite failure
+ * coming back.
+ *
+ * A subclass rather than an edit: `shared/store/errors.ts` is frozen, and `instanceof
+ * StoreBusyError` still holds, so nothing downstream -- including `isRetryable` and the shared
+ * conformance suite -- can tell the difference.
+ *
+ * ORDER REQUEST: `StoreBusyError` should forward `cause_code` to super. Both builds need to
+ * branch on a structured reason (Catalyst has to parse which column a DUPLICATE_VALUE names,
+ * where only `seq` may be retried), and ruling 1b makes structured-only matching normative.
+ * One line in the shared file removes the need for this subclass on both sides.
+ */
+class FirestoreBusyError extends StoreBusyError {
+  readonly grpc_code: string;
+  constructor(message: string, opts: { backend_message?: string; retry_after_ms?: number; grpc_code: string }) {
+    super(message, { backend_message: opts.backend_message, retry_after_ms: opts.retry_after_ms });
+    this.name = 'StoreBusyError'; // keep the wire-visible name identical to the shared taxonomy
+    this.grpc_code = opts.grpc_code;
+  }
+}
+
+/** True only for transient transaction contention, decided by a FIELD and never by text. */
+export const isContention = (err: unknown): boolean =>
+  err instanceof FirestoreBusyError && err.grpc_code === CODE_ABORTED;
+
+/**
  * Apply a list cap and log the drop. Never truncate silently (non-negotiable H).
  *
  * Local rather than shared because the foundation does not export one; the log CODE is what
@@ -181,11 +230,14 @@ export function mapFirestoreError(err: unknown, op: string): StoreError {
     case 16:
     case 'unauthenticated':
       return new StoreAuthError(msg, { backend_message: detail });
+    // NOTE: StoreAuthError's constructor takes no cause_code, so the structured code for auth
+    // failures is not carried. That is fine -- nothing branches on WHICH auth failure it was,
+    // and auth is terminal either way. Every code a caller branches on IS carried below.
     case 8:
     case 'resource-exhausted':
       // Quota. Firestore supplies no reset window, so advising one would be a fiction and would
       // suppress the caller's backoff the same way the ABORTED hint did.
-      return new StoreBusyError(msg, { backend_message: detail });
+      return new FirestoreBusyError(msg, { backend_message: detail, grpc_code: CODE_RESOURCE_EXHAUSTED });
     case 10:
     case 'aborted':
       // Transaction contention. Retryable, and deliberately WITHOUT a retry_after_ms hint.
@@ -204,7 +256,10 @@ export function mapFirestoreError(err: unknown, op: string): StoreError {
       // A hint is right when the backend knows when to come back (a rate limit with a reset
       // window). It is wrong for lock contention, where the only useful advice is "spread out
       // and grow", which is exactly what backoffMs already does. So: no hint.
-      return new StoreBusyError(msg, { backend_message: detail });
+      //
+      // cause_code carries the STRUCTURED reason so callers can branch on it. See the note on
+      // withContentionRetry: detecting contention by message text was a real defect.
+      return new FirestoreBusyError(msg, { backend_message: detail, grpc_code: CODE_ABORTED });
     case 4:
     case 'deadline-exceeded':
     case 14:
@@ -247,10 +302,10 @@ async function withContentionRetry<T>(
       return await fn();
     } catch (err) {
       const mapped = err instanceof StoreError ? err : mapFirestoreError(err, op);
-      // ONLY contention. A permission error, a bad argument or an exhausted quota must not be
-      // retried here — quota in particular, because retrying it burns more of the thing that
-      // ran out. Those go straight to the caller.
-      const contended = mapped instanceof StoreBusyError && /aborted|contention|lock/i.test(mapped.message);
+      // ONLY contention, identified by its STRUCTURED code and never by message text.
+      // A permission error, a bad argument or an exhausted quota must not be retried here --
+      // quota in particular, because retrying it burns more of the thing that ran out.
+      const contended = isContention(mapped);
       if (!contended || attempt === attempts - 1) throw mapped;
 
       const wait = backoffMs(attempt, { base_ms: 40, cap_ms: 2_000 });
