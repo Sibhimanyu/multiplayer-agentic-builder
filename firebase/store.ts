@@ -52,6 +52,7 @@ import { StoreAuthError, StoreBusyError, StoreError, StoreOfflineError } from '.
 import { sanitizeBody, sanitizeText, VARCHAR_MAX } from '../shared/sanitize.ts';
 import { consoleLogger, type Logger } from '../shared/log.ts';
 import { systemClock, type Clock } from '../shared/clock.ts';
+import { backoffMs } from '../shared/store/retry.ts';
 import {
   LAYER_OF,
   LIMITS,
@@ -86,6 +87,11 @@ export interface FirestoreStoreOptions {
   resubscribe_after_offline_ms?: number;
   /** Coalesce the 6 collection listeners into one frame. 0 disables (tests). */
   debounce_ms?: number;
+  /**
+   * Transaction attempts before transient contention is surfaced as StoreBusyError.
+   * Default 6. Set to 1 to see raw contention, which is what the contention test does.
+   */
+  tx_attempts?: number;
 }
 
 const HUMAN_READABLE_LIMIT = 1_500;
@@ -177,12 +183,28 @@ export function mapFirestoreError(err: unknown, op: string): StoreError {
       return new StoreAuthError(msg, { backend_message: detail });
     case 8:
     case 'resource-exhausted':
+      // Quota. Firestore supplies no reset window, so advising one would be a fiction and would
+      // suppress the caller's backoff the same way the ABORTED hint did.
       return new StoreBusyError(msg, { backend_message: detail });
     case 10:
     case 'aborted':
-      // Transaction contention. The SDK already retried internally; surfacing it as busy lets
-      // the caller back off rather than hammering the same contended document.
-      return new StoreBusyError(msg, { backend_message: detail, retry_after_ms: 250 });
+      // Transaction contention. Retryable, and deliberately WITHOUT a retry_after_ms hint.
+      //
+      // This carried `retry_after_ms: 250` and that was a real bug. The shared withRetry honours
+      // a server-advised wait VERBATIM in preference to its own backoff:
+      //
+      //     const advised = err instanceof StoreBusyError ? err.retry_after_ms : undefined;
+      //     const wait = advised ?? backoffMs(attempt, policy);
+      //
+      // so a constant hint replaced the jittered exponential curve with a flat 250 ms, forever.
+      // Observed in a failing run: delays [250,250,250,250,250,250,250]. Every contender then
+      // retries in LOCKSTEP every 250 ms and re-collides indefinitely — the precise failure the
+      // shared retry's own header warns about.
+      //
+      // A hint is right when the backend knows when to come back (a rate limit with a reset
+      // window). It is wrong for lock contention, where the only useful advice is "spread out
+      // and grow", which is exactly what backoffMs already does. So: no hint.
+      return new StoreBusyError(msg, { backend_message: detail });
     case 4:
     case 'deadline-exceeded':
     case 14:
@@ -191,6 +213,58 @@ export function mapFirestoreError(err: unknown, op: string): StoreError {
     default:
       return new StoreError(msg, { backend_message: detail, cause_code: String(code) });
   }
+}
+
+/**
+ * Run a transaction, retrying transient lock contention with jittered exponential backoff.
+ *
+ * Why this belongs in the ADAPTER and not in every caller.
+ *
+ * Every append reads and writes one counter document, so contention on it is not an unusual
+ * condition — it is the normal shape of concurrent work in this design. The Firestore SDK
+ * retries internally and then gives up with `ABORTED: Transaction lock timeout`, which maps to
+ * StoreBusyError: legal per the contract, and retryable.
+ *
+ * But pushing it to callers means every caller writes the same retry loop, and the shared
+ * conformance suite does not write one at all — so A2 (20 concurrent claims, 50 rounds) went
+ * intermittently red on this platform while being perfectly green on a backend where a claim
+ * conflict is a VALUE rather than a retryable error. That is a platform difference leaking
+ * through the seam, which is the one thing the seam exists to prevent.
+ *
+ * So transient contention is absorbed here, and StoreBusyError is surfaced only once the
+ * contention is genuinely sustained. That is the honest boundary: a caller cannot do anything
+ * smarter with a lock timeout than wait and spread out, and this already does both.
+ */
+async function withContentionRetry<T>(
+  op: string,
+  attempts: number,
+  clock: Clock,
+  log: Logger,
+  fn: () => Promise<T>,
+): Promise<T> {
+  let last: unknown;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const mapped = err instanceof StoreError ? err : mapFirestoreError(err, op);
+      // ONLY contention. A permission error, a bad argument or an exhausted quota must not be
+      // retried here — quota in particular, because retrying it burns more of the thing that
+      // ran out. Those go straight to the caller.
+      const contended = mapped instanceof StoreBusyError && /aborted|contention|lock/i.test(mapped.message);
+      if (!contended || attempt === attempts - 1) throw mapped;
+
+      const wait = backoffMs(attempt, { base_ms: 40, cap_ms: 2_000 });
+      log.info('store.tx.contended', 'transaction contended, backing off', {
+        op,
+        attempt: attempt + 1,
+        wait_ms: wait,
+      });
+      await clock.sleep(wait);
+      last = mapped;
+    }
+  }
+  throw last;
 }
 
 /** Wrap every backend call so no native Firestore error can escape the seam. */
@@ -265,6 +339,8 @@ export class FirestoreStore implements CoordinationStore {
    * records plainly that on this platform it is induced rather than observed.
    */
   private readonly frozenAt = new Map<ProjectId, number>();
+  /** Transaction attempts before contention is surfaced to the caller. */
+  private readonly tx_attempts: number;
 
   constructor(opts: FirestoreStoreOptions) {
     this.db = opts.db;
@@ -272,6 +348,7 @@ export class FirestoreStore implements CoordinationStore {
     this.clock = opts.clock ?? systemClock;
     this.debounce_ms = opts.debounce_ms ?? 40;
     this.resubscribe_after_offline_ms = opts.resubscribe_after_offline_ms ?? 25 * 60_000;
+    this.tx_attempts = opts.tx_attempts ?? 6;
   }
 
   // ---- paths -------------------------------------------------------------------------
@@ -303,6 +380,18 @@ export class FirestoreStore implements CoordinationStore {
 
   private iso(): string {
     return this.clock.iso();
+  }
+
+  /**
+   * Every transaction in this adapter goes through here.
+   *
+   * One chokepoint rather than six call sites, so "transactions absorb transient contention" is
+   * a property of the adapter rather than something six places have to remember.
+   */
+  private tx<T>(op: string, body: (tx: Transaction) => Promise<T>): Promise<T> {
+    return withContentionRetry(op, this.tx_attempts, this.clock, this.log, () =>
+      this.db.runTransaction(body),
+    );
   }
 
   // ---- setup (not one of the ten) ----------------------------------------------------
@@ -494,7 +583,7 @@ export class FirestoreStore implements CoordinationStore {
   ): Promise<{ event_id: string; seq: Seq; duplicate: boolean }> {
     await this.assertNotRevoked(pid, event.actor_type === 'agent' ? event.actor_id : undefined);
     return guard('appendEvent', async () => {
-      const r = await this.db.runTransaction(async (tx) => {
+      const r = await this.tx('appendEvent', async (tx) => {
         const plan = await this.planAppend(tx, pid, event, idempotency_key);
         this.commitAppend(tx, pid, plan);
         return plan;
@@ -550,7 +639,7 @@ export class FirestoreStore implements CoordinationStore {
     await this.assertNotRevoked(pid, agent_id);
     return guard('claimTask', async () => {
       const claimRef = this.claimsRef(pid).doc(task_id);
-      return this.db.runTransaction(async (tx) => {
+      return this.tx('claimTask', async (tx) => {
         const held = await tx.get(claimRef);
         if (held.exists) {
           const owner = held.get('agent_id') as AgentId;
@@ -591,7 +680,7 @@ export class FirestoreStore implements CoordinationStore {
     await this.assertNotRevoked(pid, agent_id);
     await guard('releaseTask', async () => {
       const claimRef = this.claimsRef(pid).doc(task_id);
-      await this.db.runTransaction(async (tx) => {
+      await this.tx('releaseTask', async (tx) => {
         const held = await tx.get(claimRef);
         // Releasing a task you do not own is a no-op, not an error.
         if (!held.exists || held.get('agent_id') !== agent_id) return;
@@ -637,7 +726,7 @@ export class FirestoreStore implements CoordinationStore {
   ): Promise<{ released: boolean }> {
     return guard('reapClaim', async () => {
       const claimRef = this.claimsRef(pid).doc(task_id);
-      return this.db.runTransaction(async (tx) => {
+      return this.tx('reapClaim', async (tx) => {
         const held = await tx.get(claimRef);
         // Someone else already released it, or the owner changed since the survey. Either way
         // there is nothing to reap and nothing to append.
@@ -683,7 +772,7 @@ export class FirestoreStore implements CoordinationStore {
     const want = globs.map(normalizeGlob);
 
     return guard('acquireScope', async () =>
-      this.db.runTransaction(async (tx) => {
+      this.tx('acquireScope', async (tx) => {
         // Read the whole (bounded) lock table. Capped at LIMITS.locks so one project cannot
         // turn this into an unbounded transactional read.
         const snap = await tx.get(this.locksRef(pid).limit(LIMITS.locks + 1));
@@ -735,7 +824,7 @@ export class FirestoreStore implements CoordinationStore {
     await this.assertNotRevoked(pid, agent_id);
     await guard('releaseScope', async () => {
       const ref = this.locksRef(pid).doc(agent_id);
-      await this.db.runTransaction(async (tx) => {
+      await this.tx('releaseScope', async (tx) => {
         const held = await tx.get(ref);
         if (!held.exists) return; // no-op
         const lock = held.data() as ScopeLock;

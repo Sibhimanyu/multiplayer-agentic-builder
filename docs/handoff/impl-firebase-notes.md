@@ -437,6 +437,77 @@ branch's output would have been permissible; it was not necessary.
 
 An absent or unparseable count fails the check rather than passing it. Missing is drift.
 
+
+### 22. An advisory retry hint silently defeated exponential backoff
+
+The best bug of the session, and entirely mine. Transferable to any adapter, so it is written
+for a reader who is not on Firestore.
+
+The shared `withRetry` prefers a server-advised wait over its own curve:
+
+```ts
+const advised = err instanceof StoreBusyError ? err.retry_after_ms : undefined;
+const wait = advised ?? backoffMs(attempt, policy);
+```
+
+That is reasonable — if a backend says "come back in 3 seconds", believe it. My adapter mapped
+Firestore's `ABORTED: Transaction lock timeout` to `StoreBusyError` with a **constant**
+`retry_after_ms: 250`, which looked like helpfully passing on a hint and was actually an
+override. Observed in a failing run:
+
+```
+delays: [250,250,250,250,250,250,250]
+```
+
+Flat. No growth, no jitter. Eight attempts spanning under two seconds, and every contending
+caller retrying **in lockstep every 250 ms** — recreating the collision each time. Precisely the
+failure the shared retry's own header comment warns about, produced by the thing meant to
+improve it.
+
+`backoffMs` was never broken; I checked it in isolation and it grows 125→250→500→1000→…→cap
+correctly. The bug was the interaction, which is why neither file looks wrong on its own.
+
+**The rule:** a `retry_after_ms` is appropriate only when the backend genuinely knows when to
+come back — a rate limit with a reset window. For *contention*, the only useful advice is
+"spread out and grow", and supplying any constant actively prevents that. Firestore never
+returns a reset window, so the correct hint is none at all.
+
+### 23. Contention belongs to the adapter, not to every caller
+
+Downstream of 22, and it fixed an intermittent failure in the SHARED suite.
+
+`ABORTED` is legal and retryable per the contract, so surfacing it is defensible. But the
+consequence was that A2 — 20 concurrent claims, 50 rounds — went intermittently red here while
+being perfectly green on a backend where a lost claim is a *value* rather than a retryable
+error. `conformance.ts` writes no retry loop, and it should not have to.
+
+That is a platform difference leaking through the seam, which is the one thing the seam exists
+to prevent. So transient contention is now absorbed inside the adapter: one
+`withContentionRetry` chokepoint wraps every `runTransaction`, retries only contention (never a
+quota error — retrying that burns more of what ran out), and surfaces `StoreBusyError` only once
+contention is sustained. `tx_attempts: 1` disables it, which is how the ceiling test still
+observes the raw behaviour.
+
+The general shape: **if a guarantee is in your contract, absorb the platform's noise below the
+seam rather than exporting it to every caller and to the shared suite.**
+
+### 24. `node --test` parallelises FILES, and a shared emulator cannot take it
+
+The last of the intermittency, and it had nothing to do with the adapter at all.
+
+`node --test` runs test *files* concurrently by default. Every emulator-backed file here
+contends the same emulator, so the 32-way contention test was saturating it while the shared
+conformance suite was mid-run — and A1 or A2 would fail with a lock timeout caused entirely by
+a different file. Diagnosing it as an adapter problem twice was my own error; the tell was A1
+taking 10 seconds when it normally takes 400 ms.
+
+`--test-concurrency=1` on every emulator suite. It costs wall-clock (the batch is now ~7
+minutes, dominated by A2's 1,000 transactions) and buys determinism, which is the right trade
+given rule 2 from G9.20: an intermittent test is worse than a failing one.
+
+Worth stating as a general point rather than a Firestore one: **any test suite sharing one
+external resource must serialise at the file level**, and the default is against you.
+
 ---
 
 ## G9 asymmetries — guarantees Catalyst paid for and Firestore did not
@@ -451,8 +522,18 @@ spec bugs that only surfaced because someone ran the thing against a real backen
 |---|---|---|
 | Atomic claim, scoped per project | Composite key columns (`"proj_01:task_items_crud"`) plus a builder that rejects a separator inside any part, because `is_unique` is **table-global** — a bare `unique(task_id)` lets project A's claim block project B's identically-named task forever | **Nothing.** A transaction on a document path is naturally scoped: `projects/{pid}/claims/{task_id}` cannot collide across projects because the path already contains the project. |
 | Injection safety | ZCQL has **no parameter binding at all**. With `project_id` arriving from request bodies, one hand-written escaper is the entire injection boundary, and it needs its own audited chokepoint and tests asserting no unpaired quote survives | **Nothing.** The SDK is parameterised; there is no query string to escape. There is no equivalent exposure to test. |
-| Strictly ascending `seq` | A dedicated `seq bigint is_unique` column allocated **globally**, with insert-retry-on-`DUPLICATE_VALUE` and increment-don't-re-read, after `ROWID` turned out to run *backwards* across inserts | A counter document read and incremented inside the same `runTransaction` as the append. One mechanism, no retry loop, gap-free. |
+| Strictly ascending `seq` | A dedicated `seq bigint is_unique` column allocated **globally**, with an insert-retry-on-`DUPLICATE_VALUE` loop it had to design, after `ROWID` turned out to run *backwards* across inserts | A counter document read and incremented inside the same `runTransaction`. **Corrected downward after measurement:** this is not "no retry loop" — the SDK retries internally and, past a contention ceiling, gives up and surfaces `ABORTED`. Both platforms need a retry. Only one had to think about it. |
 | Running the conformance suite | A5 needs 301 events ≈ 602 INSERTs against a **5,000/month** free-tier budget — about **8 runs a month** before A5 alone exhausts it, so A5 must be excluded from routine real-backend runs | 602 writes against **20,000/day**. Effectively unlimited; the full suite runs freely on every change. |
+
+**One of these shrank, and it shrank because of my own measurement.** The row above originally
+claimed the counter document cost Firestore nothing — first-class primitive, no retry loop. That
+was wrong, and the 32-way contention test is what proved it wrong (see G9.20). Firestore's retry
+is real; it is just implicit, inherited from the SDK rather than designed. The honest difference
+is not "retry versus no retry", it is **who had to think about it**.
+
+I am recording that prominently rather than quietly editing the cell, because a comparison whose
+asymmetries only ever grow in one direction has stopped measuring and started arguing. The most
+useful thing my own testing did to this table was make one of its rows smaller.
 
 Two of these deserve more than a table row.
 

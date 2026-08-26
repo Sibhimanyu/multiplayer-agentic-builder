@@ -79,18 +79,32 @@ test('PERMISSION_DENIED is never retryable — the expensive mistake', () => {
   }
 });
 
-test('transaction contention is retryable and carries a wait hint', () => {
-  // ABORTED means the SDK already exhausted its internal retries on a contended document.
-  // Backing off is right; hammering the same document is not.
+test('transaction contention is retryable and advises NO wait, deliberately', () => {
+  // ABORTED means the SDK exhausted its internal retries on a contended document. Retryable,
+  // yes — but it must NOT carry a retry_after_ms hint, and that is the opposite of what this
+  // test asserted until a failing run showed why.
+  //
+  // The shared withRetry honours an advised wait in preference to its own curve:
+  //     const wait = advised ?? backoffMs(attempt, policy);
+  // so a constant hint flattens jittered exponential backoff into a fixed interval. Observed:
+  // delays [250,250,250,250,250,250,250]. Every contender then retries in lockstep and
+  // re-collides forever, which is the exact failure the shared retry exists to prevent.
+  //
+  // A hint belongs where the backend knows when to come back. For lock contention the only
+  // useful advice is "spread out and grow", which backoffMs already does.
   const mapped = mapFirestoreError({ code: 10, message: 'too much contention' }, 'claimTask');
   assert.ok(mapped instanceof StoreBusyError);
   assert.equal(isRetryable(mapped), true);
   if (mapped instanceof StoreBusyError) {
-    assert.ok((mapped.retry_after_ms ?? 0) > 0, 'contention must advise a wait');
+    assert.equal(
+      mapped.retry_after_ms,
+      undefined,
+      'contention must NOT advise a wait: a constant hint defeats exponential backoff',
+    );
   }
 });
 
-test('quota exhaustion is retryable but advises no fixed wait', () => {
+test('quota exhaustion is retryable and also advises no fixed wait', () => {
   const mapped = mapFirestoreError({ code: 8, message: 'quota exceeded' }, 'appendEvent');
   assert.ok(mapped instanceof StoreBusyError);
   if (mapped instanceof StoreBusyError) {
