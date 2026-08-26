@@ -138,6 +138,24 @@ correlation: it cannot reliably distinguish the bug from the fix.
 If a test's outcome depends on load, either assert the property that holds under **all** loads,
 or pin the load. Never both leave it variable and treat a green run as evidence.
 
+**A retry loop is a cost-hiding mechanism as well as a correctness one.** Found the hard way:
+a broken `MAX(seq)` read returned `undefined`, defaulted to 0, and allocated `seq` 1 — colliding
+with the first event ever written. The append path has an increment-on-collision retry, so it
+**absorbed** the bug: correct output, silently more expensive, walking up from 1 until it found a
+free slot. The identical bug in a path *without* a retry loop failed loudly and was found in
+minutes.
+
+Two consequences, and the second binds every route:
+
+1. **A measured path working is not evidence that its sub-operations work.** Success told the
+   build nothing about whether its `MAX(seq)` read was correct.
+2. **Any measured path containing a retry loop must have its per-operation cost verified
+   independently** — by instrumenting attempt counts, or by exercising the same sub-operations
+   through a path with no retry. Otherwise a G4 figure is a lower bound presented as a
+   measurement.
+
+Both builds have retry loops on the append path. Audit them before reporting G4 as final.
+
 **Assert the contract, not your expectation of it.** A retryable refusal under contention is
 the contract working. Asserting "all N succeed" against a store whose interface defines
 `StoreBusyError` as a normal outcome is asserting that the contract is not the contract. Assert
@@ -220,6 +238,28 @@ key. Apply this shape wherever a test checks that two things were written consis
 
 Ask of every assertion: *would this still pass if the values were correct in number but wired
 to the wrong records?* If yes, it is not testing the thing you care about.
+
+## Substitution rule: only when nothing measured changes
+
+Two substitution requests, two different answers, and the test that separates them is worth
+stating.
+
+**Refused — Stratus.** Bucket creation is browser-gated, and substituting Filestore or Cache for
+the snapshot was rejected because **the measured read path *is* route C1.** Snapshot-via-CDN at
+34 ms against 1,347 ms for git is the reason C1 was chosen over C2. Substituting would have
+produced a number that looks like evidence for a design nobody chose.
+
+**Permitted — Cron → Job function.** A cron-type function is unreachable programmatically: HTTP
+invocation returns 403 `HTTP Execution is not supported`, `functions:execute` needs a runtime
+binary the machine lacks, and the Job Scheduling API refuses it with *"The given function is not
+a job function."* A Job function was substituted, and nothing measured changed: the reaper's
+schedule appears in no G-metric, and F11's criterion — released within 15 minutes — is satisfied
+identically either way.
+
+**The rule.** A substitution is permitted if and only if **nothing measured or claimed changes.**
+The burden is on whoever substitutes: name what would change, and show that it does not. Record
+it either way. If the answer is "I am not sure whether this changes a measurement", the answer is
+no — stop and ask.
 
 ## Guard rule: missing is drift
 
