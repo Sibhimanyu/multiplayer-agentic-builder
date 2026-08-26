@@ -534,6 +534,23 @@ that would make someone look — pass and fail — both read fine. And the state
 timed out*, whose obvious remedy is to raise the timeout, which would have buried this
 permanently under a green suite.
 
+**Three serialised runs, and the evidence is in the disagreement between the first two.**
+
+| run | code | result |
+|---|---|---|
+| 1 | pre-fix | `63/63 pass`, 0 cancelled — contention did not fire |
+| 2 | **identical pre-fix code** | `61 pass, 0 fail, 2 cancelled` — two tests timed out at 900 s each |
+| 3 | post-fix | `64/64 pass`, 0 fail, 0 cancelled. The same two tests: **56.5 s** and **7.0 s** |
+
+Runs 1 and 2 executed the same commit and disagreed. That disagreement *is* the finding: the
+defect was load-dependent, so a single green run proved nothing, and I had one before I went
+looking. Had I stopped at run 1 — which is the natural thing to do, since it was green — this
+would have shipped.
+
+Run 3's new regression test also earns its place rather than passing trivially: it logged
+`adapter absorbed 30 contention backoff(s) under FakeClock` and finished in 18 s. Thirty real
+backoffs, every one of which would have hung on the first under the old code.
+
 Method note: **the test that would have caught this is the test that only fails under
 contention**, which is exactly the test I could not rely on. Probing `FakeClock.sleep()`
 directly, in four lines, found it in seconds:
