@@ -13,6 +13,52 @@ This file is my report, per order 0001. Append-only, honest, every constraint an
 
 ---
 
+## Summary — route G, at a glance
+
+Everything below is measured against the real GitHub remote unless it says otherwise.
+
+| | Result |
+|---|---|
+| **Section A** | **17/17 clean in one run**, `conformance.ts` unmodified, 34 m 15 s |
+| **A2** | 50/50, once failed, 50/50, 50/50 — 1,000 claims per pass |
+| **Sections B, D** | 75 offline tests, **zero quota** |
+| **F1–F12** | **12/12 clean**, real 15-minute reaper timeout |
+| **G1** publish → visible | p50 **7,599 ms**, p95 9,922 (n=100) |
+| **G2** claimTask win | p50 **2,182 ms**, p95 2,805 (n=200) |
+| **G3** full demo | 1,088 s — **but 944 s of it is F11's deliberate wait**; 144 s without it |
+| **G4** claimTask (win) | 1 git push, **0 metered operations** |
+| **G5** monthly cost | **$0**, at 2 people and at 10. No meter exists on the write path. |
+| **G6** free-tier headroom | untouched. Suite ran 3× and the demo 4× in one afternoon |
+| **G7** adapter | 1,742 lines (1,105 code); tests 1.5× that |
+| **G8** build | ~2.5 h active, of which **3.56 h of timed measurement runs** overlapped |
+| **Provisioning** | **1 CLI command, 0 console steps, 0 accounts, 0 billing** |
+
+**Where route G wins:** setup cost, and the fact that its atomic primitive is free and
+server-enforced. **Where it loses:** latency — seconds, not milliseconds — and a long tail
+(one `releaseTask` in 200 took 36 s). **The condition:** every load-bearing fact here had to be
+probed, because four of them are things the documentation does not say and the obvious reading
+gets backwards.
+
+### Things I got wrong and found myself
+
+Listed because the corrections are the most useful thing in this file.
+
+1. **`rc=0` does not mean you won a claim.** Pushing a sha to a ref that already equals it is a
+   no-op and the lease is never evaluated. Written naively, every concurrent claimant returns
+   `ok:true` — **and A2 would still pass 50/50**, because A2 counts `ok:true`.
+2. **My entry-18 test proved the wrong thing.** It passed with the designed CAS *removed*,
+   because orphan commits were independently holding the line. Found by mutation-testing my own
+   adversarial test.
+3. **A5's cap log was findable only by me.** I invented my own log code. The information was all
+   there; an operator grepping the documented code across three routes would have got silence.
+4. **`published` conflated "reached the ledger" with "gave up".** It reported success for a
+   contract that never landed, and the assertion checking it passed.
+5. **My O(N²) `seq` figure needed a qualifier** — it is a property of contention, not of
+   appending. Sequential appends cost exactly one push each.
+
+
+---
+
 ## Order 0016 step 1 — rebase for `shared/`
 
 ```
