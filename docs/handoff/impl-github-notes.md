@@ -801,7 +801,14 @@ truncating silently. **The log code is part of the contract, not decoration**, a
 somewhere" is the same class of error as asserting count instead of correlation.
 
 Fixed to match `memory.ts` exactly, including the `has_more` case and `Math.max(1, ...)` on the
-limit.
+limit. Re-run: **A5 green, 1,012,910 ms.**
+
+**Why that is not yet a 17/17 claim.** The fix touched `readEvents` *and* `event_id`
+construction, and `event_id` is asserted by A1, `readEvents` by A4, A6, A11, A13 and A16. Sixteen
+of those tests passed against the *previous* build of the adapter. Order 0022's rule —
+*"verifying the parts is not verifying the whole"* — cuts exactly here: a green A5 plus sixteen
+greens from before the change is not the same claim as one clean run. A full run on the fixed
+build is in flight and the number below is whatever it returns.
 
 #### A NUL byte in my own source, and what it hid
 
