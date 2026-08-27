@@ -1463,7 +1463,7 @@ Two things I can add that narrow it further:
   Job Scheduling and Slate all accepted their first API call with no console visit. So the
   per-identity session requirement is **specific to Stratus**, not a general property of the
   platform, which makes it a genuine outlier rather than something we mis-set up.
-- **[32m[1m[32m✔[39m[32m[22m [39mLogged as: [36m[1mSibhimanyu G undefined[22m[39m reports ** — no email. The coordinator hit the
+- **`catalyst whoami` reports `Sibhimanyu G undefined`** — no email. The coordinator hit the
   same wall. So the CLI cannot tell anyone which identity it is acting as, which means a human
   cannot easily confirm they are opening the console as the right account. That is a real
   diagnosability gap and it is part of why this gate has taken three attempts: the error names a
