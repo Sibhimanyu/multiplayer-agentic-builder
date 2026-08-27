@@ -20,7 +20,8 @@
 import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
-import { createCatalystStore, NotProvisionedError } from '../store/catalyst.ts';
+import { createCatalystStore } from '../store/catalyst.ts';
+import { NotProvisionedError } from '../../shared/store/errors.ts';
 import { stripUnstorable } from '../../shared/sanitize.ts';
 import { CapturingLogger } from '../../shared/log.ts';
 
@@ -80,7 +81,7 @@ async function main(): Promise<number> {
     body: { task_id: `task_smoke_${stamp}`, summary: 'progress nobody should receive' },
   }, humanKey));
   const humanRead = await count(store.readEvents(PROJECT, human.seq - 1, 5));
-  record('human-layer event withheld from an agent', 'protocol',
+  record('A16a: human-layer event ABSENT from an agent read', 'A16',
     humanRead.events.every((e) => e.layer !== 'human'),
     `${humanRead.events.length} events returned, none human-layer`);
 
@@ -97,6 +98,13 @@ async function main(): Promise<number> {
   }, emojiKey));
   const page = await count(store.readEvents(PROJECT, appended.seq - 1, 1));
   const stored = String((page.events[0]?.body as { reason?: unknown })?.reason ?? '');
+  // A16's second half. Absence alone cannot distinguish a working filter from a
+  // failed write, so the SAME read path must return a coordination-layer event.
+  record('A16b: coordination-layer event PRESENT on the same path', 'A16',
+    page.events.length === 1 && page.events[0].seq === appended.seq
+      && page.events[0].layer === 'coordination',
+    `seq=${page.events[0]?.seq} layer=${page.events[0]?.layer}`);
+
   record('emoji stripped before the write', 'A12',
     stored === stripUnstorable(dirty).value && stored !== '' && !stored.includes('?'),
     JSON.stringify(stored));

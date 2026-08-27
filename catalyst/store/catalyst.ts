@@ -24,27 +24,15 @@ import type {
 } from '../../shared/store/types.ts';
 import { LIMITS } from '../../shared/store/types.ts';
 import {
-  StoreAuthError, StoreBusyError, StoreError, StoreOfflineError,
+  NotProvisionedError, StoreAuthError, StoreBusyError, StoreError, StoreOfflineError,
 } from '../../shared/store/errors.ts';
+import type { UnprovisionedOperations } from '../../shared/store/errors.ts';
 import type { Logger } from '../../shared/log.ts';
 import { nullLogger } from '../../shared/log.ts';
 
-/**
- * Thrown by the operations that need a Stratus bucket.
- *
- * A distinct type rather than a generic StoreError so a caller -- and the
- * conformance suite -- can tell "this platform capability has not been
- * provisioned" apart from "this call failed". Silently returning an empty
- * snapshot would let A10, A11 and A13 pass against nothing.
- */
-export class NotProvisionedError extends StoreError {
-  readonly capability: string;
-  constructor(capability: string, detail: string) {
-    super(`${capability} is not provisioned: ${detail}`);
-    this.name = 'NotProvisionedError';
-    this.capability = capability;
-  }
-}
+/** What a human must provision, in words they can act on. */
+const STRATUS_RESOURCE =
+  'the Stratus bucket for snapshot.json (project multiplayer-agents, Development)';
 
 const STRATUS_GATE =
   'Stratus requires an interactive console session before its first API use. ' +
@@ -247,7 +235,7 @@ export class CatalystStore implements CoordinationStore {
    * claim is about that path.
    */
   async readSnapshot(_project_id: ProjectId, _etag?: string): Promise<SnapshotRead | null> {
-    throw new NotProvisionedError('readSnapshot (Stratus snapshot.json)', STRATUS_GATE);
+    throw new NotProvisionedError('readSnapshot', STRATUS_RESOURCE, { backend_message: STRATUS_GATE });
   }
 
   /**
@@ -259,12 +247,17 @@ export class CatalystStore implements CoordinationStore {
    * fabricated state.
    */
   subscribe(_project_id: ProjectId, _from_seq: Seq, _onChange: (s: Snapshot) => void): () => void {
-    throw new NotProvisionedError('subscribe (poll over Stratus snapshot.json)', STRATUS_GATE);
+    throw new NotProvisionedError('subscribe', STRATUS_RESOURCE, { backend_message: STRATUS_GATE });
   }
 }
 
-/** Which operations are unavailable, so a harness can report rather than guess. */
-export const UNPROVISIONED_OPERATIONS = ['readSnapshot', 'subscribe'] as const;
+/**
+ * Which operations this adapter cannot service, so a harness can REPORT what is
+ * unavailable instead of discovering it by throwing. Never undefined: an adapter
+ * with no gaps returns an empty array, because "nothing missing" and "this
+ * adapter does not say" are different answers.
+ */
+export const UNPROVISIONED_OPERATIONS: UnprovisionedOperations = ['readSnapshot', 'subscribe'];
 
 export function createCatalystStore(opts: CatalystStoreOptions): CatalystStore {
   return new CatalystStore(opts);

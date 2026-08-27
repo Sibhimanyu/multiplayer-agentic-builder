@@ -5,9 +5,9 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CatalystStore, NotProvisionedError, UNPROVISIONED_OPERATIONS, createCatalystStore } from './catalyst.ts';
+import { CatalystStore, UNPROVISIONED_OPERATIONS, createCatalystStore } from './catalyst.ts';
 import {
-  StoreAuthError, StoreBusyError, StoreError, StoreOfflineError, isRetryable,
+  NotProvisionedError, StoreAuthError, StoreBusyError, StoreError, StoreOfflineError, isRetryable,
 } from '../../shared/store/errors.ts';
 import { CapturingLogger } from '../../shared/log.ts';
 
@@ -184,12 +184,15 @@ describe('status mapping is the contract with the retry policy', () => {
 });
 
 describe('the Stratus-gated operations refuse rather than fake', () => {
-  test('readSnapshot throws NotProvisionedError naming the capability', async () => {
+  test('readSnapshot throws NotProvisionedError naming the operation and resource', async () => {
     const { store } = stub(() => json({}));
     await assert.rejects(() => store.readSnapshot(PROJECT), (err: unknown) => {
       assert.ok(err instanceof NotProvisionedError);
-      assert.match((err as NotProvisionedError).capability, /readSnapshot/);
-      assert.match((err as Error).message, /OPERATION_NOT_ALLOWED|in session/);
+      const e = err as NotProvisionedError;
+      assert.equal(e.operation, 'readSnapshot');
+      assert.match(e.resource, /Stratus bucket/);
+      // The backend's own words are kept, so whoever reads it knows what to do.
+      assert.match(String(e.backend_message), /in session/);
       return true;
     });
   });
@@ -208,8 +211,24 @@ describe('the Stratus-gated operations refuse rather than fake', () => {
     assert.deepEqual(calls, []);
   });
 
-  test('the unavailable set is declared, so a harness reports instead of guessing', () => {
+  test('A17: the unavailable set is declared, so a harness reports instead of guessing', () => {
     assert.deepEqual([...UNPROVISIONED_OPERATIONS], ['readSnapshot', 'subscribe']);
+    // Never undefined: "nothing missing" and "this adapter does not say" are
+    // different answers and a caller cannot tell them apart from undefined.
+    assert.ok(Array.isArray(UNPROVISIONED_OPERATIONS));
+  });
+
+  test('A17: NotProvisionedError is NOT retryable', () => {
+    // A provisioning gate does not clear because you asked twice. Retrying it
+    // burns quota and hides a setup step behind what looks like flakiness.
+    assert.equal(isRetryable(new NotProvisionedError('readSnapshot', 'a bucket')), false);
+  });
+
+  test('A17: it names the operation AND the resource a human must provision', () => {
+    const err = new NotProvisionedError('readSnapshot', 'the Stratus bucket');
+    assert.equal(err.operation, 'readSnapshot');
+    assert.equal(err.resource, 'the Stratus bucket');
+    assert.match(err.message, /readSnapshot is unavailable/);
   });
 });
 

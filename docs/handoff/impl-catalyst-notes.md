@@ -1358,3 +1358,75 @@ distinct type, `UNPROVISIONED_OPERATIONS` exported, no network call on either ga
 I have not added it to `shared/` because `shared/` is frozen and that needs an order — and if
 Firebase and I each define our own, they diverge, which is the "two different suites" failure
 in a different costume.
+
+---
+
+# Order 0024 — gates verified. SLATE IS OPEN. STRATUS IS NOT.
+
+Verified before building, as instructed. The two gates gave different answers, which is
+exactly why 0024 asked.
+
+## Slate — OPEN
+
+```
+CatalystbyZoho_List_All_Slate_Apps -> {"status":"success","data":[]}
+```
+
+An empty list, not `INVALID_URL_PATTERN`. By 0024's own signature table that means activated.
+Confirmed without waiting for a deploy to tell me, which is the trap that order warned about.
+
+## Stratus — STILL GATED. Identical signature.
+
+```
+CatalystbyZoho_Create_Bucket -> {"status":"failure","data":{
+  "error_code":"OPERATION_NOT_ALLOWED",
+  "message":"You are not allowed to perform this operation. User needs to be in session
+             when accessing Stratus for the first time"}}
+```
+
+Byte-identical to the message from before the human's console visit. Three checks before
+concluding that, because "reported activated" deserves more than one attempt:
+
+1. **Does a bucket already exist?** `Get_All_Buckets` → `{"status":"success","data":[]}`.
+   Reads succeed and return nothing, so activation did not create one and there is nothing to
+   adopt. Reads succeeded before activation too, so a successful read is **not** evidence the
+   gate cleared — worth stating, because it is the check most likely to be mistaken for one.
+2. **Is the bucket NAME the problem?** The job pool earlier rejected a hyphen with
+   *"must contain only alphanumeric and underscore"*, so a name error masquerading as a gate
+   was plausible. Retried as `coordinationsnapshots`, plain alphanumeric, with minimal
+   `bucket_meta`. **Identical error.** Not the name.
+3. **Is it the payload?** Stripped `bucket_meta` to the required `type` alone. Identical error.
+
+### The hypothesis I would check first
+
+The MCP acts as **`sibhimanyu.g+t0@zohotest.com`**, the account that created the project. The
+error is specifically about a *session*, so if the console visit happened under a different
+Zoho account, the first-time session for the identity the API actually uses would still be
+unmet. Worth confirming which account opened the console before assuming the activation failed.
+
+I am not working around it, per the standing rule and my own earlier reasoning: the snapshot
+read path is what route C1 exists to measure.
+
+## What Slate being open does and does not unblock
+
+It does **not** unblock much on its own. The dashboard is hosted on Slate, but a dashboard needs
+`readSnapshot` and `subscribe`, and those need the bucket. Slate hosting an interface that
+cannot read state is not progress worth claiming. So the queue is unchanged: bucket first.
+
+## Done while verifying
+
+- **`NotProvisionedError` now comes from `shared/store/errors.ts`** and my local copy is
+  deleted. The shared signature is `(operation, resource)` rather than my `(capability,
+  detail)`, and it carries both fields separately so a caller can name the operation and tell a
+  human what to provision. `isRetryable` returns false for it, which my version did not
+  guarantee — a provisioning gate does not clear because you asked twice.
+- **A17 satisfied**: throws the distinct type, makes no network call (asserted by a request
+  spy), declares `UNPROVISIONED_OPERATIONS` as an array rather than leaving it undefined, and
+  is not retryable.
+- **A16 satisfied live, both halves**, in the adapter smoke — now 13/13:
+  - **A16a** human-layer `task_progress` appended, read as an agent → absent.
+  - **A16b** coordination-layer event on the **same read path** → present, `seq=113`,
+    `layer=coordination`.
+
+  The second half is the one that matters. Absence alone cannot distinguish a working filter
+  from a failed write, which is precisely the confusion that produced this row.
