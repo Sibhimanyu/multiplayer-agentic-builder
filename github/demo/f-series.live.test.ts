@@ -253,9 +253,19 @@ if (LIVE) {
       assert.ok([be.agent_id, fe.agent_id].includes(loser.owner),
         'the loser must be told a real owner');
 
-      // Then each takes its own task, as the demo intends.
-      if (!r1.ok) assert.deepEqual(await be.store.claimTask(PROJECT, TASK_API, be.agent_id), { ok: true });
+      // The winner steps back so the demo can proceed with its intended
+      // assignment. (My first version assumed the BACKEND could always take
+      // TASK_API afterwards, which is only true when the backend won the race --
+      // a test that only passes when the coin lands one way.)
+      const winner = r1.ok ? be : fe;
+      await winner.store.releaseTask(PROJECT, TASK_API, winner.agent_id);
+
+      assert.deepEqual(await be.store.claimTask(PROJECT, TASK_API, be.agent_id), { ok: true });
       assert.deepEqual(await fe.store.claimTask(PROJECT, TASK_UI, fe.agent_id), { ok: true });
+
+      // Re-claiming a task you already hold is idempotent, not a loss to
+      // yourself.
+      assert.deepEqual(await be.store.claimTask(PROJECT, TASK_API, be.agent_id), { ok: true });
 
       const claims = await owner().listClaims(PROJECT);
       const byTask = new Map(claims.map((c) => [c.task_id, c.agent_id]));
@@ -478,9 +488,10 @@ if (LIVE) {
       await run('gh', ['pr', 'merge', String(prNumber), '--repo', REPO, '--squash', '--delete-branch']);
 
       const pr = JSON.parse((await run('gh', [
-        'pr', 'view', String(prNumber), '--repo', REPO, '--json', 'merged,mergeCommit',
-      ])).stdout) as { merged: boolean; mergeCommit: { oid: string } | null };
-      assert.equal(pr.merged, true);
+        'pr', 'view', String(prNumber), '--repo', REPO, '--json', 'mergedAt,mergeCommit,state',
+      ])).stdout) as { mergedAt: string | null; mergeCommit: { oid: string } | null; state: string };
+      assert.equal(pr.state, 'MERGED');
+      assert.ok(pr.mergedAt, 'the PR must really be merged, not merely closed');
 
       const mapped = mapDelivery('pull_request', {
         repository: { full_name: REPO },

@@ -563,6 +563,17 @@ export function createGithubStore(opts: GithubStoreOptions) {
     if (!owner) {
       throw new StoreError(`claimTask: ${task_id} was rejected but has no owner`);
     }
+    if (owner.agent_id === agent_id) {
+      // We already hold it. The push was rejected only because the claim object
+      // embeds claimed_at, so a second call builds a different sha -- but the
+      // OUTCOME the caller asked about is true: this agent owns this task.
+      //
+      // Returning {ok:false, owner: <yourself>} would tell an agent it lost a
+      // race to itself, which is not a state the interface describes and not
+      // one a caller can act on. Idempotent, for the same reason releasing a
+      // task you do not own is a no-op rather than an error.
+      return { ok: true };
+    }
     return { ok: false, owner: owner.agent_id, claimed_at: owner.claimed_at };
   }
 
