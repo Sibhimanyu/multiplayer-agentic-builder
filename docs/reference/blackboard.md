@@ -142,7 +142,10 @@ Measured on this machine against a real GitHub remote:
 |---|---|
 | `git ls-remote` | **1,347 ms** |
 | `git fetch`, no-op | **1,354 ms** |
-| HTTPS GET of a static CDN object | **34 ms** |
+| HTTPS GET of a static CDN object (`raw.githubusercontent.com`) | **34 ms** |
+
+**That 34 ms is GitHub's CDN, and it belongs to route G.** It is not a Stratus number, not a
+Firestore number, and must never be cited as one. See `g9-asymmetries.md` entry 25.
 
 Git is **40x slower** for answering the same question. So consumers do not use git:
 

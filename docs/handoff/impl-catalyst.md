@@ -28,7 +28,7 @@ Those are shared. If you believe a shared file is wrong, say so and stop — do 
 | Dashboard hosting | **Slate** | Web Client Hosting is deprecated. Slate is Git-based with preview deploys. |
 | Write endpoints | **Advanced I/O Functions** | Only type that can capture a raw body for GitHub HMAC. 30 s cap. |
 | Ledger + claims | **Data Store** | `is_unique` gives atomic claim without transactions. |
-| Read path | **Stratus** `snapshot.json` | Measured 34 ms vs 1,347 ms for git and 150× cheaper than a SELECT. |
+| Read path | **Stratus** `snapshot.json` | **UNMEASURED.** The 34 ms once cited here was measured against `raw.githubusercontent.com` — see the correction below. Stratus has never been timed. |
 | Presence | **Cache**, TTL 1 h | TTL expiry *is* the staleness signal. Never a Data Store UPDATE. |
 | Reaper | **Cron Function** | Releases stale claims past 15 min. |
 | Login | **Authentication** | Zoho SSO. |

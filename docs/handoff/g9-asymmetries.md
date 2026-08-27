@@ -28,6 +28,8 @@ Catalyst a composite-key scheme and Firestore nothing" is the finding. Averaging
 | 20 | Scheduled work | A cron-type function is **unreachable programmatically**: HTTP invocation gives 403 `HTTP Execution is not supported`, `functions:execute` needs a local runtime binary, and the Job Scheduling API refuses it — *"The given function is not a job function."* A function's type is also **immutable**, so the deployed cron had to be deleted before a job function of the same name could deploy. And "a Cron Function" is really **three resources** — Job Pool, Cron, function — where the design named one. | One scheduled function. | measured live |
 | 21 | **Stratus is the only service that blocks its own API** | Data Store, Functions, Cache and Job Scheduling all accepted their **first** API call on this identity with no console visit — nine tables, 63 columns, two functions, a job pool and a cron, all provisioned through the API. Stratus alone returns `OPERATION_NOT_ALLOWED` / *"needs to be in session when accessing Stratus for the first time"*, and it has survived one console visit. **An outlier is a platform finding, not a configuration mistake** — the project is demonstrably set up correctly. | No service gates its own API on a prior browser session. | measured across 5 services |
 | 22 | **You cannot tell which identity you are acting as** | `catalyst whoami` reports a display name only — *"Sibhimanyu G undefined"* — with no email, and no CLI config exposes one. So when an error says a **session** is required, nobody involved can verify which identity needs it. A human is asked to open the console as a specific account while having no way to confirm from the tooling which account the API uses. This is why the Stratus gate has taken three attempts. | `firebase login:list` prints the account. A service-account key names its own `client_email`. | measured |
+| 23 | **The MCP cannot write a Stratus object at all** | 18 Stratus tools exposed and **none of them writes an object.** Both signature paths fail from outside a function: `Create_Upload_Signature` returns a policy pinning `content-length: 0` **regardless of the body passed** — called twice with different lengths, identical policy — and the REST PUT returns `400 invalid_request_parameter` across four variations. `Generate_Signed_URL` + GET returns `400 "Signature didn't match. Request is tampered"`. The write is therefore **untested, not failing**: the real path is the SDK's `putObject` from inside a deployed function, which needs deployed code to exercise. | Admin SDK writes from anywhere with a service-account key. | probed, 4 variations |
+| 24 | **No per-object cache control in the Node SDK** | The REST docs list `cache-control` as a `putObject` header, but `zcatalyst-sdk-node@3.4.0` builds only `compress`, `Content-Type`, `expires-after`, `overwrite` and `x-user-meta`. **There is no `cache-control` option and no such header.** The only cache API is a bucket-level `purge-cache`, and the console exposes no caching toggle — only General Settings and Bucket CORS. So with `bucket_meta.caching: "Disabled"`, **whether route C1's snapshot read is cacheable at all is an open question**, and it must be settled before G1 is measured rather than after. | `Cache-Control` set freely on Hosting; Firestore reads are SDK-cached client-side. | SDK source + console |
 | 16 | Provisioning | **No `project:create` exists.** `iac:import` needs a zip from `iac:pack`, which needs a template from an asynchronous `iac:export` that delivers to the console. The MCP has no create-project tool. Console only. Then 2 CLI commands, 18 API calls (2 failing), ~95s, zero browser steps for everything after the project itself. | One CLI command, but the project still needed a console visit, and the billing link cannot be done by any CLI. | measured |
 | 5 | Atomic append + idempotency together | Exists only because there are no transactions. `seq` allocation needs a retry loop, so the dedupe row cannot be written inside it, and the write order must be event-first-then-dedupe with orphan recovery on crash. | Nothing. `runTransaction` makes both writes atomic. | dry-run double: 12 concurrent appends, 1 passed, 11 failed |
 | 6 | Presence / heartbeat | Cannot use a durable row UPDATE — the free tier is **1,000 UPDATEs per month**, which a 20s heartbeat exhausts in 5.6 hours. Requires Cache with a TTL, where key expiry *is* the staleness signal. | A field write on the agent doc. 20,000 writes/day free. | free-tier arithmetic |
@@ -141,6 +143,45 @@ with one `runTransaction`.
 
 When the final comparison is written, do not flatten "needed a workaround" and "cannot be made
 correct" into the same column.
+
+## Entry 25 — route C1's headline number was borrowed from route G
+
+This is the most serious bookkeeping error found so far, and it is mine.
+
+`blackboard.md` measured three things on this machine: `git ls-remote` 1,347 ms, `git fetch`
+1,354 ms, and "HTTPS GET of a static CDN object" **34 ms**. The URL five lines below identifies
+that object: **`raw.githubusercontent.com`**. So the 34 ms is *GitHub's CDN* — it is **route G's
+read path, measured on route G's infrastructure.**
+
+`impl-catalyst.md` then restated it as `Read path | Stratus | Measured 34 ms`, and from there it
+propagated into the design doc, the checklist, and order 0018 as the reason **route C1 was chosen
+over route C2**.
+
+**Stratus has never been timed. Not once.** The number that justified the platform choice was
+measured on a competing platform.
+
+Order 0017 caught the weaker version of this ("the Stratus builder does not exist, so 34 ms is not
+what was measured"). Nobody caught that the number was not merely *unmeasured* but **borrowed from
+a different vendor**. Unmeasured invites "so measure it." Borrowed means the comparison was
+circular: C1 beat C2 on a figure C1 had never earned.
+
+### Why it survived so long
+
+It read as a measurement because it *was* one — the ms figure was real, the method was sound, the
+table said "measured on this machine." Everything was true except the subject. A provenance field
+naming the host would have caught it on the day it was written; "measured" alone did not.
+
+**Rule, retroactive to every number in this register:** a latency figure carries the *host it was
+measured against*, not just its evidence class. `34 ms` is not a fact about CDNs in general. Audit
+backwards per the 0026 rule — any figure that names no host is suspect until one is attached.
+
+### What follows for the comparison
+
+- G1 for route C1 on the folded-snapshot path is **open**, and entry 24 says the design's cacheable
+  read may not even be reachable through the SDK.
+- **If it isn't, C1's advantage over C2 was never real** — and C2, plain Data Store reads, may have
+  been the better route all along. That is a result. Report it at full strength; do not bury it.
+- The existing measured G1 covers the *ledger* path and was correctly labelled. It stands.
 
 ## Coordinator discipline — record what was measured separately from what was reasoned
 
