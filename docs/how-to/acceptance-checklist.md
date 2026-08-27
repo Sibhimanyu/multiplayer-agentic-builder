@@ -305,6 +305,29 @@ until an accident did.** A16 requires both halves: assert the human-layer event 
 that a coordination-layer event is present, because absence alone cannot distinguish a working
 filter from a broken write.
 
+## Timestamp every gate re-probe
+
+"Still shut" is ambiguous about **when**. If a human's console visit lands at 07:40 and the probe
+ran at 07:32, the result says nothing about it — and whoever compares the two later cannot tell.
+
+Record the UTC instant of every gate re-probe alongside the verbatim error. Cheap, and it is the
+difference between a result and an anecdote.
+
+## Check the SIZE of a mechanical edit, not just its result
+
+A scripted fix to a notes file looked correct and had **deleted 999 lines** — a DOTALL regex
+matched too greedily. `git diff --stat` caught it before the commit.
+
+> I checked the *result* of the mechanical edit and it looked right, when what I needed to check
+> was its *size*.
+
+Same family as the retry loop hiding a cost and a successful read not being a probe: the
+observation made could not distinguish *"fixed one line"* from *"fixed one line and deleted a
+thousand"*.
+
+**`git diff --stat` is the correlation check for edits.** Run it before every commit that a script
+or regex produced, and read the line counts rather than glancing at the file.
+
 ## The check you reach for first is often the one that cannot answer
 
 A worked case, and it is the sharpest instance of the unifying rule below.
