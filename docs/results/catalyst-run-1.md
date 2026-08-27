@@ -16,6 +16,9 @@ Recorded by the coordinator from the Catalyst build's report, 2026-08-26. Branch
 
 ## G1 — append and publish→visible, n=100
 
+Measured against the coordination Advanced I/O function, **IN data centre**, client in
+Asia/Kolkata — same region, so these are best-case round trips.
+
 | | p50 | p95 |
 |---|---|---|
 | `appendEvent` | 202 ms | 281 ms |
@@ -24,6 +27,8 @@ Recorded by the coordinator from the Catalyst build's report, 2026-08-26. Branch
 0 failures. Cold first call reported separately, never folded into the percentiles.
 
 ## G2 — claim round-trip, n=200
+
+Same host as G1: coordination function, **IN DC**, client Asia/Kolkata, same region.
 
 | p50 | p95 | p99 | max |
 |---|---|---|---|

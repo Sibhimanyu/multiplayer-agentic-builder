@@ -144,6 +144,75 @@ with one `runTransaction`.
 When the final comparison is written, do not flatten "needed a workaround" and "cannot be made
 correct" into the same column.
 
+## Entry 26 — Stratus bucket caching does not exist in the IN data centre
+
+`Update_Bucket` **does** expose `bucket_meta.caching.status` (enum `["true","Disabled"]`), so this
+was called rather than skipped. The platform refused:
+
+```json
+{"message":"Invalid operation. Bucket caching feature is not available in current DC.",
+ "error_code":"FORBIDDEN"}
+```
+
+Bucket state before and after is byte-identical, `modified_time` unchanged.
+
+**This is an absent capability, not a provisioning gate, and the distinction is load-bearing:** a
+gate can be passed — by a console click, a support ticket, a paid plan — so it costs *effort* and
+belongs in G10. This cannot be passed at all, so it costs *the design*. Adding it to the gate count
+would have understated it by implying a price existed.
+
+**Rule:** before adding anything to G10, ask whether it can be passed. If not, it is not a gate.
+
+## Entry 27 — `putObject` works; the write path was never broken
+
+First attempt from inside the deployed function, no variation needed. `put` 142 ms, `head` 111 ms,
+`get` 23 ms, `delete` 136 ms — **function→Stratus inside one DC, not client latencies.** The earlier
+`Create_Upload_Signature` and `Generate_Signed_URL` failures were about those surfaces, not about
+Stratus writes. "Untested, not failing" was the correct call and it held.
+
+Two defects in the probe, self-reported rather than buried: `getObject`'s return was `String()`-
+coerced to `"[object Object]"`, so the probe proved the *call* succeeded without proving the *bytes*
+round-tripped; and `deleteObjects` returns `"Object Deletion scheduled."`, so absence was verified
+separately instead of trusting the response. Both are the same error as reading an exit code — a
+success-shaped response is not a verified outcome.
+
+## Entry 28 — C1's cached read does not exist, so C1's case is now quota, not latency
+
+Host named, per the entry-25 rule: **`coordinationsnapshots-development.zohostratus.in`**, client in
+Asia/Kolkata, pre-signed URL (the bucket is Authenticated, so this is the real client path).
+
+| cold | warm | cache headers |
+|---|---|---|
+| **79 ms** | **20 ms** | **none** |
+
+`cache-control: no-store`, `pragma: no-cache`, `expires` at epoch; `age`, `x-cache`,
+`cf-cache-status`, `via` all absent.
+
+Warm being 4× faster does **not** satisfy the pre-registered "warm ≪ cold" branch, which required a
+cache header. Three things attribute the 59 ms to connection reuse: Stratus explicitly forbids
+caching, **two distinct `x-sts-request-id` values prove both requests reached the origin**, and
+`keep-alive: timeout=20` is exactly the handshake that vanished. This is the 0029 discipline applied
+without being asked — a faster number is not a mechanism.
+
+**Verdict, per the pre-registration and unsoftened: C1's read is a plain origin object GET, and
+C1's advantage over C2 was never established.** C1 pays for a snapshot builder, an Event function
+and a bucket to obtain a read C2 gets with none of them.
+
+**C1 retains one narrower argument: operation cost.** One object GET against `readEvents`' 3
+SELECTs, and SELECT is the binding quota per G4/G6 (1,260 SELECT = 12.6% of quota, against 403
+INSERT = 8.1%). ETag is present, so `readSnapshot(etag)` → 304 survives.
+
+**But "C1 wins on quota" is not yet measured either, and it is the same shape as entry 25** — a
+comparative claim resting on a number for only one side. Stratus's own quota consumption per GET is
+unknown. Until it is measured, C1 has *no* established advantage over C2, on any axis.
+
+### And 79 ms is the best case, which cuts the same way
+
+Client and DC were both in India. Absent CDN caching there is **no edge to absorb cross-region
+RTT**, so an agent in the US pays the full round trip on *every* snapshot read, uncached, forever.
+Edge caching is precisely what would have made a single global snapshot viable. Neither of us
+measured this, and it makes C1's read worse than 79 ms suggests rather than better.
+
 ## Entry 25 — route C1's headline number was borrowed from route G
 
 This is the most serious bookkeeping error found so far, and it is mine.
@@ -170,6 +239,12 @@ circular: C1 beat C2 on a figure C1 had never earned.
 It read as a measurement because it *was* one — the ms figure was real, the method was sound, the
 table said "measured on this machine." Everything was true except the subject. A provenance field
 naming the host would have caught it on the day it was written; "measured" alone did not.
+
+**Unstated is not the same as wrong.** The `catalyst-run-1.md` audit found six figures across two
+tables naming no host — but all were measured against the route that claims them, so they were
+*mislabelled*, not misattributed. Entry 25 was a correct number with a correct method and the wrong
+subject. Keep the two severities apart; collapsing them would make every missing label look like a
+scandal and bury the one that is.
 
 **Rule, retroactive to every number in this register:** a latency figure carries the *host it was
 measured against*, not just its evidence class. `34 ms` is not a fact about CDNs in general. Audit

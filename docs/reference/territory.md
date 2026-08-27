@@ -27,6 +27,7 @@ Freeze protects **anything whose divergence would invalidate the comparison**. N
 | `<platform>/**` | **per-build** | everything else you build |
 | `tsconfig.<platform>.json` | **per-build** | as a NEW file, never by editing the shared one |
 | `docs/handoff/impl-<platform>-notes.md` | **per-build** | your report |
+| `docs/results/**` | **coordinator only** | comparison artifacts; a build editing its own scorecard is the conflict of interest the whole exercise exists to avoid |
 | `docs/handoff/g9-asymmetries.md` | **coordinator only** | the register |
 | `docs/orders/**` | **coordinator only** | append-only, never edited after issue |
 
