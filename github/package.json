@@ -1,0 +1,12 @@
+{
+  "name": "catalyst-builder-github",
+  "private": true,
+  "type": "module",
+  "description": "Route G: GitHub-only adapter. Its own tree, its own test command -- root npm test stays exactly the shared suite, 19/19, per territory.md.",
+  "scripts": {
+    "test": "node --test \"store/*.test.ts\"",
+    "test:unit": "node --test store/transport.test.ts store/refs.test.ts",
+    "test:live": "GITHUB_LIVE=1 node --test store/github.live.test.ts",
+    "typecheck": "tsc --noEmit -p ../tsconfig.github.json"
+  }
+}
