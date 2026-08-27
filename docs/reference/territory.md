@@ -30,6 +30,26 @@ Freeze protects **anything whose divergence would invalidate the comparison**. N
 | `docs/handoff/g9-asymmetries.md` | **coordinator only** | the register |
 | `docs/orders/**` | **coordinator only** | append-only, never edited after issue |
 
+## Credentials never enter the repo
+
+A service-account key, token or private key is **never** committed, never placed in a worktree,
+and never pasted into an order — orders are pushed, and a secret in git history survives every
+later deletion.
+
+Credentials live outside every repo, referenced **by path**:
+
+```
+~/.config/multiplayer-agents/           dir mode 700
+  firebase-adminsdk.json                file mode 600
+```
+
+Point tooling at them with `GOOGLE_APPLICATION_CREDENTIALS` or the equivalent. An order may name
+the **path**; it may never contain the material.
+
+If a credential arrives inside the working tree — an attachment, a download — move it out and
+delete the copy in the same action. `.context/` being gitignored is a safety net, not a
+destination.
+
 ## Two rules that follow
 
 **1. Test files never live under `shared/`.** Firebase found this the hard way: its test files
