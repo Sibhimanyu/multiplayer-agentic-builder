@@ -321,7 +321,7 @@ export function createGithubStore(opts: GithubStoreOptions) {
       const eventRef = l.eventRef(next);
       const created_at = clock.iso();
       const event_id = `evt_${createHash('sha256')
-        .update(`${project_id} ${dedupe_key} ${next}`).digest('hex').slice(0, 20)}`;
+        .update(scopedKey(project_id, dedupe_key, String(next))).digest('hex').slice(0, 20)}`;
 
       const stored: StoredEvent = {
         event_id, seq: next, project_id, layer: event.layer, kind: event.kind,
@@ -471,22 +471,25 @@ export function createGithubStore(opts: GithubStoreOptions) {
   ): Promise<{ events: Event[]; next_cursor: Seq; has_more: boolean }> {
     assertNoFault(faults, 'readEvents');
     const l = layout(project_id);
-    const asked = limit ?? LIMITS.events;
-    const capped = Math.min(asked, LIMITS.events);
-    if (asked > LIMITS.events) {
-      log.warn('github.readEvents.capped', 'limit capped', {
-        project_id, asked, capped, cap: LIMITS.events,
-      });
-    }
+    const requested = limit ?? LIMITS.events;
+    const applied = Math.max(1, Math.min(requested, LIMITS.events));
 
     const all = (await loadEvents(l, 'readEvents')).filter(
       (e) => e.project_id === project_id && e.seq > since_seq,
     );
-    const page = all.slice(0, capped);
+    const page = all.slice(0, applied);
     const has_more = all.length > page.length;
-    if (has_more) {
-      log.warn('github.readEvents.truncated', 'page truncated, more remain', {
-        project_id, returned: page.length, dropped: all.length - page.length,
+
+    // ONE line, with the code and field names the contract specifies -- see
+    // shared/store/memory.ts. I had invented `github.readEvents.capped` with my
+    // own field names, which A5 correctly rejected: a caller grepping for the
+    // documented code would have found nothing and concluded no cap had been
+    // applied. "Every capped list logs what it dropped" only holds if the log
+    // is findable, so the code is part of the contract, not decoration.
+    if (requested > LIMITS.events || has_more) {
+      log.warn('store.events.capped', 'readEvents hit the row cap', {
+        project_id, since_seq, requested, applied, returned: page.length,
+        dropped: all.length - page.length, has_more,
       });
     }
     const next_cursor = page.length > 0 ? page[page.length - 1]!.seq : since_seq;

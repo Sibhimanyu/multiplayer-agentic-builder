@@ -749,6 +749,84 @@ models *another* client writing, went through the same path, so an event written
 simulated outage was delivered to the very subscriber that is supposed to be blind. Suppressed
 for foreign writes. The test found a genuine defect, not a harness artefact.
 
+### Section A against the real backend — run 1
+
+Full suite, `shared/store/conformance.ts` unmodified, against
+`Sibhimanyu/inventory-tracker-github`. **16/17 on the first complete run**, one failure that was
+my defect and is fixed.
+
+```
+✔ A1  same idempotency_key twice -> same seq, duplicate:true, ledger grew by 1   20,957 ms
+✔ A2  20 concurrent claimTask -> exactly one winner, 50 consecutive rounds      592,811 ms
+✔ A3  losing claimant gets {ok:false, owner}, never a thrown error               21,480 ms
+✔ A4  readEvents returns strictly ascending seq                                  96,409 ms
+✖ A5  readEvents caps at 300 when asked for 1000, and logs the cap            1,002,706 ms
+✔ A6  an appended event is never mutated or deleted by a later operation         43,225 ms
+✔ A7  acquireScope rejects intersecting globs and names the conflicts            27,785 ms
+✔ A8  acquireScope allows disjoint globs concurrently                            29,712 ms
+✔ A9  AgentPresence.stale flips true after the 90s timeout                       24,343 ms
+✔ A10 subscribe fires once immediately, before any change                        22,182 ms
+✔ A11 subscribe survives a network drop and resumes from the cursor              25,832 ms
+✔ A12 emoji and 4-byte UTF-8 in durable text is stripped                         21,272 ms
+✔ A13 a snapshot reporting seq < last_written_seq is stale, not lost             34,490 ms
+✔ A14 a revoked token throws StoreAuthError and is not retried                   18,332 ms
+✔ A15 a rate-limited backend throws StoreBusyError and backs off with jitter     16,520 ms
+✔ A16 human layer withheld from an agent read, coordination is not               19,334 ms
+✔ A17 route G reports an empty unprovisioned list, not an absent one                603 ms
+
+tests 17   pass 16   fail 1   duration 2,018,347 ms (33m 38s)
+```
+
+**A2 is the result worth reading twice.** 50 rounds of 20 concurrent claimants — **1,000 claims
+against the real GitHub remote** — with exactly one winner every round, every loser naming the
+same owner, and that owner always a real claimant. 593 s. This is the non-negotiable
+"A2 passes 50 consecutive runs" satisfied against the backend rather than a double.
+
+#### A5 failed, and it was mine
+
+```
+AssertionError: expected a store.events.capped log line
+```
+
+`readEvents` capped correctly and paged correctly. What was wrong is that I emitted the cap
+under my own log code, `github.readEvents.capped`, with my own field names (`asked`, `capped`,
+`cap`) — and split it across two lines. The contract's code is **`store.events.capped`** with
+`requested` / `applied` / `dropped`, as `shared/store/memory.ts` emits it.
+
+This is worth more than a one-line fix, because the non-negotiable is *"every capped list logs
+what it dropped"* and by my own reading I had satisfied it — the information was all there. It
+was not **findable**. An operator grepping the documented code across all three routes would
+have got hits from Catalyst and Firebase and silence from route G, and concluded route G was
+truncating silently. **The log code is part of the contract, not decoration**, and "I logged it
+somewhere" is the same class of error as asserting count instead of correlation.
+
+Fixed to match `memory.ts` exactly, including the `has_more` case and `Math.max(1, ...)` on the
+limit.
+
+#### A NUL byte in my own source, and what it hid
+
+Chasing the A5 fix, `grep` went silent on `github/store/github.ts`. `file` reported it as
+**`data`**, not text. Two NUL bytes had landed in the middle of a template literal where spaces
+belonged:
+
+```
+.update(`${project_id}\x00${dedupe_key}\x00${next}`)
+```
+
+TypeScript compiled it, every test passed, and the adapter behaved correctly — a NUL is a
+perfectly good hash separator. But the file was **binary to every text tool**: `grep` finds
+nothing, `git diff` would have shown `Binary files differ`, and code review would have gone
+blind on it without anyone noticing.
+
+Two things came out of it. The immediate one: the bytes are gone. The better one: that line was
+**hand-rolled concatenation for a composite key when `scopedKey` already existed** three imports
+away, audited and tested. It now calls `scopedKey`. That is precisely order 0019's finding —
+*"duplicated logic that already existed in correct form, and the duplicate was the broken one"* —
+reproduced in my own tree, and the duplicate was again the broken one.
+
+I scanned every other file in my tree for NULs. Clean.
+
+
 ### FLAG for the coordinator — a timing assumption in the shared suite
 
 Not worked around silently, and `shared/` not touched.
