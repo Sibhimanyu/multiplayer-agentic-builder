@@ -46,8 +46,28 @@ A round counted as PASS only if all three held (order 0009, correlation not coun
 2. `refs/claims/<task>` pointed at **that winner's** commit, not merely at *a* commit,
 3. all 19 losers reported `rejected` — a refusal, not a crash.
 
-This satisfies A2 and the non-negotiable "A2 passes 50 consecutive runs" **against the real
-backend rather than a double**. Strongest A2 evidence of any route so far.
+~~This satisfies A2 and the non-negotiable "A2 passes 50 consecutive runs". Strongest A2 evidence
+of any route so far.~~
+
+> **CAVEAT ADDED 2026-08-27 — do not quote the 50/50 without this.** The build later found that
+> **`rc=0` does not mean "I won"**. Pushing a sha to a ref that *already equals that sha* is a
+> no-op: `Everything up-to-date`, `rc=0`, and **the lease is never evaluated**.
+>
+> Probe A did not expose it because every agent there carried a distinct commit message. **The bug
+> was invisible to the very test meant to prove the mechanism.**
+>
+> Had the adapter been written the way probes B, E and J were — pushing a fixed base sha for
+> convenience — every concurrent claim would return `rc=0`, every agent would believe it won, and
+> **A2 would still pass 50/50**, because A2 counts `ok:true` results and they would all be true.
+>
+> The 50/50 remains true *for the commits used*. It is **not** evidence that the mechanism
+> discriminates, because the test could not have detected this failure class. Fixed by deciding on
+> the `--porcelain` status character (`*` new reference vs `=` up to date, identical `rc`) **and**
+> making the claim object unique per `(agent, task)` — both, because the first is what a refactor
+> breaks silently.
+
+I amplified the uncaveated version in order 0023 and called it the strongest primitive evidence of
+any route. That was my error to record, and this correction is the build's, not mine.
 
 ## CORRECTION to the brief — the naive push is not unconditionally unsafe
 

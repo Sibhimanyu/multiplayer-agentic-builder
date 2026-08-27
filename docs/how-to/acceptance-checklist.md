@@ -313,6 +313,25 @@ ran at 07:32, the result says nothing about it — and whoever compares the two 
 Record the UTC instant of every gate re-probe alongside the verbatim error. Cheap, and it is the
 difference between a result and an anecdote.
 
+## A file can compile, pass, and be invisible to review
+
+Two NUL bytes landed mid-template-literal in a source file. **It compiled and its tests passed** —
+but `grep` went silent on it, `file` reported "data", and `git diff` would have said *"Binary files
+differ"*, so **review would have gone blind without saying so.**
+
+Add a pre-commit check that no tracked text file contains a NUL byte:
+
+```bash
+git diff --cached --name-only -z | xargs -0 -r grep -lIP '\x00' 2>/dev/null
+```
+
+Anything printed is binary-by-accident. This is the same family as checking edit size: the
+observation you would naturally make — "it compiles, tests pass" — cannot distinguish a healthy
+file from one no text tool can read.
+
+Underneath that instance: a hand-rolled composite key where `scopedKey` already existed three
+imports away. Second time in this project that a duplicated helper was the broken copy.
+
 ## Check the SIZE of a mechanical edit, not just its result
 
 A scripted fix to a notes file looked correct and had **deleted 999 lines** — a DOTALL regex

@@ -77,8 +77,20 @@ both**, which the two-column table cannot express:
 | Ownership check on release | application code | application code | **server-enforced for free** by pinning the lease to the owner's sha |
 | Presence / heartbeat | Cache PUT with TTL, zero rows | one field write per beat | **one ref update, zero rows**, storage footprint exactly one ref per agent forever |
 
-Route G's weak spots are still expected to be `seq` ordering and latency, neither yet measured.
-Do not read the rows above as a verdict.
+### Measured since — including where route G is WORSE
+
+| Guarantee | Catalyst | Firebase | **Route G** |
+|---|---|---|---|
+| `seq` allocation cost | 1 extra SELECT per append | counter doc in the transaction | **O(N²).** Attempts equal the seq being claimed, so 12 concurrent allocations cost **78 push attempts plus 78 re-reads**. Correct and expensive — and the expense sits inside a retry loop where 0019 says it would otherwise be invisible. |
+| Atomic append + idempotency (register entry 5) | write order event-then-dedupe, with orphan recovery | `runTransaction` | **Does not arise.** `--atomic` genuinely rolls back, measured both directions, so the event ref and its dedupe marker land in **one push**. Nothing to order, nothing to recover. |
+| Server-enforced scope locks (**entry 18**) | **residual race, narrowable not closable** | one `runTransaction` | **CLOSED, window ZERO.** `--force-with-lease` with a *non-empty* expected value is a real compare-and-swap on a ref's value, so a generation ref becomes a serialisation point: read gen + locks, check intersections against exactly that set, then push the new lock **and** the gen bump in one atomic push whose lease pins gen to what was read. Anyone acquiring in between moves gen, the CAS fails, the whole push rolls back. No deterministic tie-break needed — there is no residual race to break a tie in. |
+
+**Entry 18 was the largest asymmetry in this register and route G closes it outright.** Recording
+that matters as much as recording where Catalyst suffers: the note above about not flattening
+"needed a workaround" and "cannot be made correct" into one column cuts in this direction too.
+
+`seq` ordering was route G's predicted weak spot and it **is** one — but on cost, not correctness.
+Latency is still unmeasured. Do not read these rows as a verdict.
 
 ## The largest asymmetry so far
 

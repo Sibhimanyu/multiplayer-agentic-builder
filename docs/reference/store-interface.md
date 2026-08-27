@@ -220,6 +220,53 @@ fallback.
 Each adapter maps its own backend's error shape to the `StoreError` family at one chokepoint.
 Detection uses structured fields, never substring matching on human-readable text.
 
+### `subscribe` may fire from cache — RULED 2026-08-27
+
+`subscribe` must "fire once immediately with current state". **"Immediately" cannot mean "within a
+few microtasks" for any network-backed adapter**, because the cheapest read on any of these routes
+is a round trip. Both poll-mode routes hit this, so it is ruled here rather than being
+rediscovered independently — which is the two-interpretations failure the shared suite exists to
+prevent.
+
+**The ruling:**
+
+1. With a **populated** cache, `subscribe` fires **synchronously from it**, satisfying
+   microtask-scoped tests. That is the real client lifecycle: render what you have, refresh when
+   fresh data lands.
+2. With a **cold** cache, it fires as soon as the first read resolves. A10 must permit either.
+3. The first fire **may be stale**. It must **never** be fabricated, and never structurally empty
+   — a snapshot with no tasks *because nothing was read* is the A10-passes-against-fabricated-state
+   failure from order 0020. **A10 asserts on content**: the delivered snapshot must contain the
+   seeded state, not merely arrive.
+4. It must then fire again on the first successful fresh read.
+5. Callers already know the staleness bound from `freshness`. Nothing else needs to.
+
+Applies to Catalyst C1 as much as route G. Catalyst: this is settled before you unstub
+`subscribe`, not after.
+
+### Log codes are part of the contract
+
+Emitting the right *information* under the wrong *code* is a contract violation, not a cosmetic
+one. Found live: a route logged its `readEvents` cap using its own field names instead of
+`store.events.capped` / `requested` / `applied` / `dropped`.
+
+> An operator grepping the documented code across three routes would get hits from two and silence
+> from the third, and conclude that route truncates silently.
+
+Every capped, dropped or truncated thing (behaviour 10) must be emitted under the **documented
+code with the documented fields**. A5 checks the code, not just that something was logged.
+
+### Read the structured field, never the exit code
+
+An exit code collapses distinct outcomes. Measured: `git push` returns **`rc=0` both when it
+creates a ref and when the ref already holds exactly that sha** — `Everything up-to-date`, and in
+the second case **the lease is never evaluated at all**. An adapter branching on `rc` cannot tell
+"I won" from "nothing happened".
+
+`--porcelain` distinguishes them (`*` new reference vs `=` up to date) at identical `rc`. Same
+family as never matching on an error message string: decide on structured output, never on a
+summary value that has lost the distinction you need.
+
 ### `readEvents` must not over-fetch by one
 
 Probed: ZCQL **rejects** `LIMIT 0, 301` outright rather than clamping to 300. The
