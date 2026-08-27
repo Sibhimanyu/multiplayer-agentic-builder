@@ -884,6 +884,42 @@ that number or it is a lower bound presented as a measurement.
 reasoning. The fix is re-running.
 
 
+**A2 re-run after the fix: PASS, 580,540 ms.** 50 rounds x 20 claimants, clean.
+
+Honest record for A2 so far: **passed 50/50, failed once, passed 50/50.** The failure has a named
+cause that is not the claim mechanism, and the fix is in. I am not calling it settled on two
+greens — order 0021's rule is that two runs are not enough to close an intermittency question,
+and that is the rule Firebase broke and then wrote. What closes it is the full clean run below
+plus every subsequent one, and I will keep reporting the count rather than the verdict.
+
+### Order 0026's edit-size rule, applied retroactively to my own tree
+
+0026: *"I checked the result of the mechanical edit and it looked right, when what I needed to
+check was its size"* — a greedy regex deleted 999 lines of notes and only `git diff --stat`
+caught it.
+
+I have made scripted edits to this notes file and to `github/store/github.ts` all session, and
+had **not** been checking sizes either. Audited every one retroactively:
+
+```
+docs/handoff/impl-github-notes.md      607/0  158/21  125/0  5/0  78/0  8/1  27/0  50/0
+github/store/github.ts                1121/0   56/2   15/12  45/12
+github/store/{refs,transport}.ts       175/0  308/0
+github/store/*.test.ts                  93/0  183/0  184/0  107/0
+```
+
+Every deletion count is proportionate to a change I described. The two non-trivial ones are
+**158/21**, which replaced the "still open, not yet probed — `seq`" placeholder with the probed
+answer, and **45/12** / **15/12**, which rewrote the `rest()` and `readEvents` bodies. Nothing
+was silently truncated.
+
+Adopted going forward, and worth saying why it belongs in the same family as the rest of this
+project's findings: `git diff --stat` is the **correlation check for edits**. Reading the file
+and seeing the intended change cannot distinguish *"fixed one line"* from *"fixed one line and
+deleted a thousand"* — the same shape as asserting count instead of correlation, and as a
+working read not being evidence about a gated write.
+
+
 ### Order 0025's new rule, turned on my own A17
 
 Order 0025 added: **test the operation that is actually restricted, not the nearest one that
