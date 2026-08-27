@@ -5,13 +5,16 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { COLUMNS, type Snapshot } from './store/types';
-import { createMockStore } from './store/mock';
+import { createGithubStore } from './store/github';
 import { DetailPanel, EmptyColumn, TaskCard, TopNav } from './components';
 
 const PROJECT_ID = 'proj_inventory';
 
 export default function App() {
-  const store = useMemo(() => createMockStore('poll'), []);
+  const store = useMemo(() => createGithubStore({
+    repo: import.meta.env.VITE_GITHUB_REPO,
+    token: import.meta.env.VITE_GITHUB_TOKEN,
+  }), []);
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [selected, setSelected] = useState<string | null>('task_items_crud');
 
