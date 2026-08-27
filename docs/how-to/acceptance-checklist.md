@@ -305,6 +305,26 @@ until an accident did.** A16 requires both halves: assert the human-layer event 
 that a coordination-layer event is present, because absence alone cannot distinguish a working
 filter from a broken write.
 
+## The check you reach for first is often the one that cannot answer
+
+A worked case, and it is the sharpest instance of the unifying rule below.
+
+Stratus bucket creation is gated on a first-time browser session. The obvious way to test whether
+the gate cleared is *"is Stratus reachable?"* — and `Get_All_Buckets` **succeeded and returned
+`[]` before activation as well as after.** A successful read was never evidence of anything.
+
+> If someone had asked "is Stratus reachable", the answer was yes, and it was useless.
+
+Only the **write** distinguishes the states, because only the write is gated.
+
+**Rule: test the operation that is actually restricted, not the nearest one that responds.** A
+neighbouring call succeeding is not evidence about the call you care about — it is the
+sub-operation fallacy again, one layer out: working reads are not evidence that writes work, any
+more than a working path proves its sub-operations do.
+
+Before treating a probe as evidence, ask: **would this have given the same answer in the broken
+state?** If yes, it is not a probe, it is a formality.
+
 ## The unifying rule: unverifiable is not true
 
 Three separately-discovered rules have converged, so state the general form once.
