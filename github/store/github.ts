@@ -161,6 +161,22 @@ export function createGithubStore(opts: GithubStoreOptions) {
     if (!Array.isArray(parsed)) {
       throw new StoreError(`${operation}: ref listing was not an array`);
     }
+    // matching-refs returns the FULL matching set -- measured at 320 refs, no
+    // Link header, no truncation, with and without per_page. The adapter relies
+    // on that: a partial listing would understate max(seq) and hand out a seq
+    // that is already taken.
+    //
+    // So if a Link header ever appears, GitHub has started paginating and this
+    // code is silently reading a prefix. Fail loudly rather than continue --
+    // "any check that cannot distinguish verified-true from could-not-verify
+    // must fail" (order 0021). This is the guard being cheap insurance against
+    // a behaviour change, not a workaround for one.
+    if (res.headers.link !== undefined) {
+      throw new StoreError(
+        `${operation}: the ref listing is paginated, so this read is a prefix of the truth`,
+        { backend_message: res.headers.link },
+      );
+    }
     return parsed.map((r) => {
       const rec = r as { ref?: unknown; object?: { sha?: unknown } };
       if (typeof rec.ref !== 'string' || typeof rec.object?.sha !== 'string') {
@@ -176,17 +192,31 @@ export function createGithubStore(opts: GithubStoreOptions) {
     return found.find((r) => r.ref === ref)?.sha ?? null;
   }
 
-  /** Commit message + committer date for a sha. One REST call, no object download. */
+  /**
+   * Commit message + committer date for a sha. One REST call, no object download.
+   *
+   * Cached forever, and that is SOUND rather than a risk: a git object is
+   * content-addressed, so a sha names one immutable byte sequence for all time.
+   * There is no invalidation question because there is no way for the answer to
+   * change. Without this, folding a snapshot re-read every agent and task on
+   * every call, which made seeding quadratic.
+   */
+  const commitCache = new Map<string, { message: string; date: string }>();
+
   async function readCommit(
     sha: string, operation: string,
   ): Promise<{ message: string; date: string }> {
+    const hit = commitCache.get(sha);
+    if (hit) return hit;
     const res = await rest(`/git/commits/${sha}`, { operation });
     if (res.status < 200 || res.status >= 300) throw mapHttpStatus(res, { operation });
     const d = JSON.parse(res.body) as { message?: unknown; committer?: { date?: unknown } };
     if (typeof d.message !== 'string' || typeof d.committer?.date !== 'string') {
       throw new StoreError(`${operation}: commit payload is malformed`);
     }
-    return { message: d.message, date: d.committer.date };
+    const value = { message: d.message, date: d.committer.date };
+    commitCache.set(sha, value);
+    return value;
   }
 
   // ---- git --------------------------------------------------------------
@@ -354,7 +384,25 @@ export function createGithubStore(opts: GithubStoreOptions) {
    * cache because an event is immutable (MB3) -- a subsequent fetch only ever
    * transfers objects that did not exist before.
    */
+  const eventMirrorState = new Map<string, string>();
+  const eventCache = new Map<string, StoredEvent[]>();
+
   async function loadEvents(l: RefLayout, operation: string): Promise<StoredEvent[]> {
+    // One cheap listing tells us whether a fetch is needed at all. Events are
+    // append-only and immutable (MB3), so an unchanged ref set means an
+    // unchanged ledger -- there is no in-place edit that could hide behind the
+    // same names.
+    const refs = await listRefs(l.eventGlob, operation);
+    const fingerprint = refs.map((r) => `${r.ref}:${r.sha}`).sort().join('|');
+    const cached = eventCache.get(l.project_id);
+    if (cached && eventMirrorState.get(l.project_id) === fingerprint) return cached;
+
+    if (refs.length === 0) {
+      eventMirrorState.set(l.project_id, fingerprint);
+      eventCache.set(l.project_id, []);
+      return [];
+    }
+
     const local = `refs/local-mirror/${l.project_id}/ev/*`;
     const f = await opts.git.run([
       'fetch', '--quiet', '--prune', '--no-tags', 'origin',
@@ -404,6 +452,8 @@ export function createGithubStore(opts: GithubStoreOptions) {
     // order or commit date -- probe K measured that a rebase reorders commits
     // and rewrites their dates.
     out.sort((a, b) => a.seq - b.seq);
+    eventMirrorState.set(l.project_id, fingerprint);
+    eventCache.set(l.project_id, out);
     return out;
   }
 
@@ -1060,6 +1110,10 @@ export function createGithubStore(opts: GithubStoreOptions) {
       await opts.git.push(['origin', ...batch]);
     }
     lastHeartbeat.clear();
+    eventMirrorState.delete(project_id);
+    eventCache.delete(project_id);
+    lastSnapshot = null;
+    lastEtag = '';
   }
 
   const store: CoordinationStore = {

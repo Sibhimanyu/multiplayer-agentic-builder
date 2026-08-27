@@ -720,6 +720,11 @@ this row route G is in the first.
 - **`readEvents`** does one `git fetch` of the event namespace and then reads objects locally.
   One network round trip regardless of page size, and safe to cache forever because an event is
   immutable (MB3).
+- **`matching-refs` does not paginate.** Measured, because the adapter depends on it: a partial
+  listing would understate `max(seq)` and hand out a number already taken. At **320 refs** the
+  endpoint returned all 320 in one response with **no `Link` header**, identically with and
+  without `per_page=100`. Verified rather than assumed — but only up to 320, so the adapter now
+  **throws if a `Link` header ever appears** rather than silently reading a prefix.
 - **Error mapping** is one chokepoint on structured fields only: HTTP status for REST,
   `--porcelain` flag plus exit code for git, and `rc=128` — which collapses auth, offline, DNS
   and missing-repo — resolved by one REST call rather than by reading git's prose. 25 tests
