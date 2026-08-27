@@ -380,6 +380,59 @@ more than a working path proves its sub-operations do.
 Before treating a probe as evidence, ask: **would this have given the same answer in the broken
 state?** If yes, it is not a probe, it is a formality.
 
+## "My test passes" and "my design is why it passes" are different claims
+
+The sharpest methodological finding in this project, and it arrived from a build auditing its own
+work rather than from a review.
+
+Route G built the adversarial test it owed for register entry 18 — a competitor injected at the one
+instant the race occupies, plus a control so a reject-everything implementation could not pass. It
+passed. Then it **mutation-tested the test**:
+
+| Mutant | Result |
+|---|---|
+| the designed protection (a CAS lease) **removed** | **test still PASSED** |
+| the whole mechanism removed | test failed |
+
+The second result proves the test is not vacuous. The first proves the test was **not measuring
+what its author believed it measured** — a second, entirely accidental protection was holding the
+line, and the test could not tell which one was doing the work.
+
+> A passing test told me my mechanism worked. That was **true**. It was not evidence for the
+> mechanism I thought it was evidence for.
+
+**Redundant protection is indistinguishable from correct protection until you remove one.** That is
+why "my test passes" and "my design is why it passes" are separate claims, and **only mutation
+separates them.**
+
+### When mutation testing is required
+
+Not everywhere. Specifically:
+
+- **Before claiming a race window is closed.** A window is a negative claim; a passing test is weak
+  evidence for a negative unless you have shown it fails when the protection is gone.
+- **Before naming a cause.** Any statement of the form *"closed by X"* or *"prevented by Y"* needs
+  the mutant that removes X and shows the test failing.
+- **When two mechanisms could plausibly produce the same pass.** Two protections and one test means
+  no attribution, and a later regression removing either goes undetected while the test stays
+  green.
+
+### How to do it safely
+
+Mutate a **copy**, restore from backup, and verify the tree returned byte-identical with
+`git diff --stat`. Route G did exactly that and reported the edit-size rule earning its keep three
+times in twenty minutes.
+
+### The same habit from both sides of the boundary
+
+The coordinator was recording conclusions at the confidence a reporter expressed rather than at the
+confidence the evidence supported. A build was accepting a passing test as evidence for a mechanism
+rather than for an outcome. **These are the same error**, and the build named it as such:
+
+> Which I think makes it a rule about the project rather than about either of us.
+
+Accepted. It is a project rule.
+
 ## The unifying rule: unverifiable is not true
 
 Three separately-discovered rules have converged, so state the general form once.

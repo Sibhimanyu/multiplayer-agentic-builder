@@ -83,13 +83,48 @@ both**, which the two-column table cannot express:
 |---|---|---|---|
 | `seq` allocation cost | 1 extra SELECT per append | counter doc in the transaction | **O(N²).** Attempts equal the seq being claimed, so 12 concurrent allocations cost **78 push attempts plus 78 re-reads**. Correct and expensive — and the expense sits inside a retry loop where 0019 says it would otherwise be invisible. |
 | Atomic append + idempotency (register entry 5) | write order event-then-dedupe, with orphan recovery | `runTransaction` | **Does not arise.** `--atomic` genuinely rolls back, measured both directions, so the event ref and its dedupe marker land in **one push**. Nothing to order, nothing to recover. |
-| Server-enforced scope locks (**entry 18**) | residual race, narrowable not closable — **mitigation tested from both sides by injecting a competitor between pre-check and re-check** | one `runTransaction` | **CLAIMED closed, window zero — REASONED, NOT YET MEASURED.** The mechanism: `--force-with-lease` with a *non-empty* expected value is a real compare-and-swap on a ref's value, so a generation ref becomes a serialisation point — read gen + locks, check intersections against that set, push the new lock **and** the gen bump in one atomic push whose lease pins gen to what was read. A competitor acquiring in between moves gen, the CAS fails, the whole push rolls back. **But A7 and A8 cover intersecting and disjoint globs and neither injects a competitor between the generation read and the push, which is the specific race entry 18 is about.** Catalyst tested its mitigation at exactly that point; route G has not yet built the equivalent. Do not quote "window zero" as measured until it does. |
+| Server-enforced scope locks (**entry 18**) | residual race, narrowable not closable — **mitigation tested from both sides by injecting a competitor between pre-check and re-check** | one `runTransaction` | **MEASURED. Window closed by TWO mechanisms — one designed, one incidental — both now pinned.** Injected-competitor tested: B acquires `src/**` from inside A's transport at the instant A finishes reading the locks it is about to reason about; A pushes a stale generation holding `src/api/**` — overlapping, not identical, the case `is_unique` cannot catch — A is rejected, its conflict **names** agent B and carries `src/**`, exactly one lock survives. With a control, so a reject-everything implementation could not pass. **Do not read this as "closed by compare-and-swap":** mutation testing showed the CAS alone is not what closes it. See below. The mechanism: `--force-with-lease` with a *non-empty* expected value is a real compare-and-swap on a ref's value, so a generation ref becomes a serialisation point — read gen + locks, check intersections against that set, push the new lock **and** the gen bump in one atomic push whose lease pins gen to what was read. A competitor acquiring in between moves gen, the CAS fails, the whole push rolls back. **But A7 and A8 cover intersecting and disjoint globs and neither injects a competitor between the generation read and the push, which is the specific race entry 18 is about.** Catalyst tested its mitigation at exactly that point; route G has not yet built the equivalent. Do not quote "window zero" as measured until it does. |
 
 **Entry 18 was the largest asymmetry in this register and route G's mechanism appears to close it.**
 Recording that matters as much as recording where Catalyst suffers — the note about not flattening
 "needed a workaround" and "cannot be made correct" into one column cuts in this direction too.
 
-**But it is not measured yet, and route G said so before I noticed.** Corrected above.
+### Entry 18 is closed by two mechanisms, and only one was designed
+
+Route G mutation-tested its own adversarial test and found it did **not** discriminate:
+
+| Mutant | Result |
+|---|---|
+| generation ref still pushed, **CAS lease removed** | **test PASSED** |
+| generation ref **removed from the push entirely** | test FAILED |
+
+The second mutant proves the test is not vacuous — it genuinely detects an open window. The first
+is the finding: **the CAS is not what closes it.** Two independent mechanisms do.
+
+1. **The explicit CAS lease** — designed, and what was originally reported.
+2. **Generation commits being orphans** — *accidental*. `mkObject` builds commits with
+   `commit-tree` and no parent, so pushing one over an existing generation ref is a
+   **non-fast-forward** and the server rejects it.
+
+That second mechanism is the **descendant rule appearing for the third time** in this project —
+underneath the coordinator's `HEAD`/`HEAD~1` claim probe, underneath route G's own `rc=0` finding,
+and now doing load-bearing work nobody designed it to do.
+
+**Mechanism 2 is fragile in a plausible direction.** Chaining generation commits for auditability
+is an obvious future improvement, and it would make every plain push a fast-forward and evaporate
+mechanism 2 entirely. The CAS would still hold, so nothing would break *yet* — but the live test
+passes either way, so a **later** regression dropping the CAS would go undetected. Two protections,
+one test, no attribution.
+
+Both are now pinned offline in `scope-invariants.test.ts`, and the pins were mutation-tested too:
+
+| Mutant | Orphan test | CAS tests |
+|---|---|---|
+| CAS removed | passes | **both fail** |
+| generation commits chained | **fails** | both pass |
+
+Each mutant caught by exactly the test that owns it. That is attribution, and it is what should
+have existed before the window was first called closed.
 
 `seq` ordering was route G's predicted weak spot and it **is** one — but on cost, not correctness.
 Latency is still unmeasured. Do not read these rows as a verdict.
@@ -126,6 +161,12 @@ claim about the world.
 **Standing rule for this file: every entry states its evidence class.** `measured live` /
 `probed` / `reasoned` / `free-tier arithmetic`. An entry whose class is `reasoned` may not be
 summarised as though it were measured, and the final comparison must not promote one to the other.
+
+**Extended 2026-08-27: `measured` is not sufficient either — an entry also needs ATTRIBUTION.**
+Entry 18 was measured *and* the measurement did not establish which mechanism produced the result.
+An entry naming a cause ("closed by compare-and-swap") is a stronger claim than an entry naming an
+outcome ("window closed"), and only mutation testing separates them. Where an entry names a cause,
+it must say how the cause was isolated.
 
 Route G named the shape of my error precisely: *the same shape as your own probe generalising from
 `HEAD`/`HEAD~1` — a correct conclusion resting on evidence that does not cover the case.* That is
