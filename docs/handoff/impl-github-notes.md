@@ -892,6 +892,51 @@ greens — order 0021's rule is that two runs are not enough to close an intermi
 and that is the rule Firebase broke and then wrote. What closes it is the full clean run below
 plus every subsequent one, and I will keep reporting the count rather than the verdict.
 
+### Run 3 — 17/17 CLEAN, one run, real backend
+
+```
+✔ A1  same idempotency_key twice -> same seq, duplicate:true, ledger grew by 1     23,011 ms
+✔ A2  20 concurrent claimTask -> exactly one winner, 50 consecutive rounds        596,328 ms
+✔ A3  losing claimant gets {ok:false, owner}, never a thrown error                 20,874 ms
+✔ A4  readEvents returns strictly ascending seq                                   100,318 ms
+✔ A5  readEvents caps at 300 when asked for 1000, and logs the cap              1,008,802 ms
+✔ A6  an appended event is never mutated or deleted by a later operation           45,117 ms
+✔ A7  acquireScope rejects intersecting globs and names the conflicts              28,440 ms
+✔ A8  acquireScope allows disjoint globs concurrently                              30,096 ms
+✔ A9  AgentPresence.stale flips true after the 90s timeout                         29,949 ms
+✔ A10 subscribe fires once immediately, before any change                          23,973 ms
+✔ A11 subscribe survives a network drop and resumes from the cursor                27,108 ms
+✔ A12 emoji and 4-byte UTF-8 in durable text is stripped                           22,595 ms
+✔ A13 a snapshot reporting seq < last_written_seq is stale, not lost               36,637 ms
+✔ A14 a revoked token throws StoreAuthError and is not retried                     19,777 ms
+✔ A15 a rate-limited backend throws StoreBusyError and backs off with jitter       17,702 ms
+✔ A16 human layer withheld from an agent read, coordination is not                 23,057 ms
+✔ A17 route G reports an empty unprovisioned list, not an absent one                  777 ms
+
+tests 17   pass 17   fail 0   duration 2,054,911 ms (34m 15s)
+```
+
+**`shared/store/conformance.ts` unmodified.** Only the harness differs from the memory run, which
+is the whole point: a difference in results would be a difference in platforms, not in
+interpretations. Root `npm test` remains exactly 19/19 and no test of mine resolves through
+`shared/`.
+
+**A2 record across every run so far: 50/50, failed once, 50/50, 50/50.** Three clean passes of
+1,000 claims each and one failure with a named, fixed cause that was not the claim mechanism.
+Still reporting the count rather than a verdict — order 0021's rule is that a small number of
+runs does not close an intermittency question, and the honest form is the distribution, not "it
+is reliable now".
+
+Wall clock is the only cost. **Zero quota consumed against any rationed allowance**, because the
+write path is `git push` (unmetered) and the reads are modest. Where Catalyst had to hold A5 back
+as ~15% of a monthly SELECT allowance and Firebase had to exclude A2 as ~20% of two monthly
+allowances, route G ran the entire suite three times in an afternoon and could run it again
+tomorrow. That asymmetry belongs in G6.
+
+The 34-minute figure is the honest other half: **route G is correct and slow.** A5 alone is
+17 minutes because 301 appends are 301 pushes. Neither cloud route pays that.
+
+
 ### Order 0026's edit-size rule, applied retroactively to my own tree
 
 0026: *"I checked the result of the mechanical edit and it looked right, when what I needed to
