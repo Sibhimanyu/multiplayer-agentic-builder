@@ -1083,6 +1083,151 @@ I am not proposing wording. It is a shared file and the ruling is the coordinato
 
 ---
 
+## The CLI, the webhook mapping and the reaper
+
+Built strictly to `agentic-file-contract.md` rather than to another route, because B2 —
+byte-identical trees across builds — is only checkable if each build writes to the spec.
+
+```
+github/cli/agentic.ts     the file contract: tree, framing, cursors, spool
+github/cli/blackboard.ts  the git half -- one file per fact, pointer rewriting
+github/cli/daemon.ts      drain / deliver / heartbeat
+github/cli/cli.ts         connect, start, claim, report, status
+github/webhook/map.ts     GitHub payload -> ledger event
+github/reaper.ts          stale-claim release
+```
+
+**75 offline tests, zero quota.** Root `npm test` remains exactly 19/19.
+
+### Three design points worth the coordinator's attention
+
+**The outbox cursor never advances past a gap.** `drainOutbox` stops advancing at the first
+failure and re-sends from there next pass. Advancing past a failed line to reach a later success
+would silently drop a message *while leaving the queue looking drained*. B7b tests that
+separately from B7, because they are different failures and only one of them is obvious.
+
+**Two independent human-layer checks.** `deliverInbox` filters, and `appendInbox` **refuses**
+outright — including when the `layer` field lies and only the `kind` gives it away. The protocol
+calls that exclusion its most important rule and a single filter is one refactor from removal.
+
+**B9 holds rather than lies.** If a contract blob cannot be fetched, no inbox line is appended
+and `last_seen_seq` does not advance past it. A line whose `body.local` does not exist is worse
+than no line: the agent opens a path that is not there and treats it as a real failure.
+
+### Section D without a webhook, and why that is not a substitution
+
+Route G **delivers GitHub events by polling**. The brief permits it, and route G has no hosted
+endpoint to receive a delivery at — the same fact that makes its provisioning cost zero. Rather
+than declare section D inapplicable, I split it, because only one half is transport:
+
+- **The mapping** (D5, D5a, D5b, D6) is required on *both* paths. Polling `/pulls` and
+  `/check-runs` returns the same `conclusion` and `merged` fields a webhook body carries, so the
+  allowlist and the strict-boolean rule apply identically. One shared mapper is what keeps route
+  G's board semantics identical to the other two rather than accidentally divergent.
+- **The HMAC** (D1, D2, D3) applies only to a received delivery. Implemented and tested anyway,
+  because route G *can* be run with a hosted endpoint via GitHub Actions — and because a verifier
+  that exists but was never exercised is exactly the untested-error-path problem A17 taught me.
+
+All of section D is pure functions over a payload, so it costs nothing to run. 16 tests.
+
+---
+
+## F1–F12 — the Inventory Tracker demo, end to end
+
+Three agents in three separate worktrees, a real ledger, real claims, a contract published to the
+git blackboard, a real branch, a real pull request, a **real CI failure**, a real merge, and the
+reaper releasing a real dead agent's claim.
+
+**Nothing is staged.** F9's red check comes from a CI workflow that genuinely fails because `qty`
+is still a string — the same breaking change F6 publishes — rather than from a check invented to
+be red. F10 makes it pass and merges for real.
+
+### Result — 12/12 clean, real 15-minute reaper timeout
+
+```
+✔ F1  owner creates the project and connects the repo            8,462 ms
+✔ F2  owner invites three builders and assigns their roles      14,121 ms
+✔ F3  each builder has its own .agentic tree and identity        7,841 ms
+✔ F4  architect publishes schema + items-api v1, then exits      8,867 ms
+✔ F5  backend and frontend claim concurrently, no double-claim  14,312 ms
+✔ F6  backend publishes items-api v2, a breaking change          9,783 ms
+✔ F7  frontend reads the contract from disk, reports blocked     9,404 ms
+✔ F8  backend pushes a branch, opens a PR, board updates        23,857 ms
+✔ F9  CI fails and the board shows the badge                     9,409 ms
+✔ F10 owner merges on GitHub, board reaches merged              35,134 ms
+✔ F11 frontend agent dies, reaper releases its claim           944,242 ms
+✔ F12 another agent claims the released task                     2,828 ms
+
+tests 12   pass 12   fail 0
+```
+
+**G3 — wall-clock cost of the full F1–F12 demo: 1,088 s (18 min 8 s).**
+
+That figure is dominated by one number and it should not be read as a system-speed measurement.
+**F11 alone is 944 s of it — 87%** — and F11 is a *deliberate 15-minute wait* for the real
+`CLAIM_TIMEOUT_MS`, not work. Excluding it, F1–F10 plus F12 complete in **144 s**. Both numbers
+matter and neither is the honest one alone: 144 s is what the system takes, 1,088 s is what the
+demo takes, and the difference is a constant this project chose rather than a property of route G.
+
+I ran F11 at the **real** timeout rather than shortening it, because a shorter constant would
+demonstrate the mechanism at a value nobody ships. The file supports `F11_TIMEOUT_MS` for
+iteration and says plainly that a run using it is not F11.
+
+### What the demo caught that nothing else did
+
+**Run 1 — the reaper caught me.** F1–F10 passed; F11 failed with *"a live agent must keep its
+claim"*, one reaped where zero were expected. The reaped claim was the **backend's**, not the
+frontend's — because the backend had stopped heartbeating during F8–F10's CI waits, so by the
+reaper's only definition it was dead, and taking its claim was **correct**.
+
+The reaper was right and my demo was wrong. A running agent beats; I had called `beat()` once in
+F3 and then let three agents go silent for the length of two CI runs. Fixing it also made F11
+discriminating: every *other* agent keeps beating, so the kill is the only thing that changes,
+and the post-kill assertion is *only the dead agent's claim went* rather than *some claim went*.
+
+**Run 2 — two bugs, and the second hid the first.**
+
+F4, F6, F7 and F10 failed, all on the blackboard path, having passed in run 1. The difference:
+run 1 started with an empty blackboard branch and run 2 did not.
+
+*Bug 1: re-publishing an unchanged fact was an error.* `publish` wrote the file, staged it and
+committed. With identical bytes already on the branch nothing is staged, `git commit` exits
+non-zero, and my helper turned that into a thrown error. But the CLI's wire path is deliberately
+at-least-once, so a re-send after a crash lands **exactly here** and must succeed. The two cases
+now get opposite answers: identical bytes → idempotent success returning the original pointer;
+different bytes → **refuse loudly**, because `blackboard.md` says versions are new files, never
+edits, and editing v1 in place destroys the diff a blocked consumer needs most.
+
+*Bug 2, and it is why bug 1 survived a whole run:* `DrainResult.published` conflated *reached the
+ledger* with *gave up on it*. `publishOne` returned a bare boolean meaning "stop retrying", and
+`drainOutbox` counted that as published. So F6 asserted `published === 1`, passed, and the
+contract had never landed. Now `{handled, landed}` and three separate counts.
+
+**Bug 1 was found by the demo. Bug 2 was found by asking why the demo's assertion had not caught
+bug 1.** The second question is the one that mattered, and it is the same question mutation
+testing asks.
+
+**Run 3 — two bugs in my own test, both cases where the system was right.** F5 assumed the
+backend could always take `task_items_api` after the shared race — true only when the backend
+*won*. A test that passes when the coin lands one way looks like flakiness and is a logic error.
+And F10 called `gh pr view --json merged`, which is not a field; it now asserts
+`state === MERGED` with a non-null `mergedAt`, which is strictly better because it distinguishes
+merged from merely closed — the distinction D5b exists to protect.
+
+### One interface question, decided rather than papered over
+
+`claimTask` returned `{ok:false, owner: <yourself>}` when the current owner re-claimed its own
+task, because the claim object embeds `claimed_at`, so a second call builds a different sha and
+the lease rejects it. That tells an agent it **lost a race to itself** — not a state
+`store-interface.md` describes and not one a caller can act on.
+
+Now: if the owner is the caller, `{ok:true}`. The outcome the caller asked about is true, and it
+is idempotent for the same reason releasing a task you do not own is a no-op rather than an
+error. Flagging it because it is a reading of the interface, not just an implementation choice.
+
+
+---
+
 ## Route-G observations for the register (coordinator writes it, not me)
 
 Per orders 0008/0013/0015 I do not edit `docs/handoff/g9-asymmetries.md`. Candidates:
