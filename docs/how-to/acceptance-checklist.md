@@ -332,6 +332,19 @@ file from one no text tool can read.
 Underneath that instance: a hand-rolled composite key where `scopedKey` already existed three
 imports away. Second time in this project that a duplicated helper was the broken copy.
 
+## When you adopt a rule, audit backwards as well as forwards
+
+Route G, on adopting the edit-size rule, **audited every scripted edit it had already made** rather
+than only applying the rule going forward — twelve diffs across notes, source, refs and tests, all
+clean.
+
+> Acknowledging the rule only going forward would have left me never knowing whether the 999-line
+> case had already happened to me.
+
+A rule adopted forward-only leaves the entire pre-adoption period unexamined, and that is exactly
+where the undetected instance would be — the rule exists *because* the failure is silent. When a
+new rule lands, run it over the existing work once. It is usually one command.
+
 ## Check the SIZE of a mechanical edit, not just its result
 
 A scripted fix to a notes file looked correct and had **deleted 999 lines** — a DOTALL regex

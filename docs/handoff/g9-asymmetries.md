@@ -83,11 +83,13 @@ both**, which the two-column table cannot express:
 |---|---|---|---|
 | `seq` allocation cost | 1 extra SELECT per append | counter doc in the transaction | **O(N²).** Attempts equal the seq being claimed, so 12 concurrent allocations cost **78 push attempts plus 78 re-reads**. Correct and expensive — and the expense sits inside a retry loop where 0019 says it would otherwise be invisible. |
 | Atomic append + idempotency (register entry 5) | write order event-then-dedupe, with orphan recovery | `runTransaction` | **Does not arise.** `--atomic` genuinely rolls back, measured both directions, so the event ref and its dedupe marker land in **one push**. Nothing to order, nothing to recover. |
-| Server-enforced scope locks (**entry 18**) | **residual race, narrowable not closable** | one `runTransaction` | **CLOSED, window ZERO.** `--force-with-lease` with a *non-empty* expected value is a real compare-and-swap on a ref's value, so a generation ref becomes a serialisation point: read gen + locks, check intersections against exactly that set, then push the new lock **and** the gen bump in one atomic push whose lease pins gen to what was read. Anyone acquiring in between moves gen, the CAS fails, the whole push rolls back. No deterministic tie-break needed — there is no residual race to break a tie in. |
+| Server-enforced scope locks (**entry 18**) | residual race, narrowable not closable — **mitigation tested from both sides by injecting a competitor between pre-check and re-check** | one `runTransaction` | **CLAIMED closed, window zero — REASONED, NOT YET MEASURED.** The mechanism: `--force-with-lease` with a *non-empty* expected value is a real compare-and-swap on a ref's value, so a generation ref becomes a serialisation point — read gen + locks, check intersections against that set, push the new lock **and** the gen bump in one atomic push whose lease pins gen to what was read. A competitor acquiring in between moves gen, the CAS fails, the whole push rolls back. **But A7 and A8 cover intersecting and disjoint globs and neither injects a competitor between the generation read and the push, which is the specific race entry 18 is about.** Catalyst tested its mitigation at exactly that point; route G has not yet built the equivalent. Do not quote "window zero" as measured until it does. |
 
-**Entry 18 was the largest asymmetry in this register and route G closes it outright.** Recording
-that matters as much as recording where Catalyst suffers: the note above about not flattening
+**Entry 18 was the largest asymmetry in this register and route G's mechanism appears to close it.**
+Recording that matters as much as recording where Catalyst suffers — the note about not flattening
 "needed a workaround" and "cannot be made correct" into one column cuts in this direction too.
+
+**But it is not measured yet, and route G said so before I noticed.** Corrected above.
 
 `seq` ordering was route G's predicted weak spot and it **is** one — but on cost, not correctness.
 Latency is still unmeasured. Do not read these rows as a verdict.
@@ -104,6 +106,30 @@ with one `runTransaction`.
 
 When the final comparison is written, do not flatten "needed a workaround" and "cannot be made
 correct" into the same column.
+
+## Coordinator discipline — record what was measured separately from what was reasoned
+
+**Twice now a build has had to walk back something I amplified**, and both times the underlying
+error was mine, not theirs:
+
+1. Route G's A2 **50/50** — I called it "the strongest primitive evidence any route has produced".
+   The build then found the test could not have detected the `rc=0` failure class at all.
+2. Route G's **entry 18 "window zero"** — I recorded it as closed. The build then pointed out the
+   mechanism is reasoned, not adversarially tested, because nothing injects a competitor at the
+   one instant the race occupies.
+
+The failure mode is the same both times, and it is mine: **I recorded a conclusion at the
+confidence the reporter expressed rather than at the confidence the evidence supported.** A build
+saying "this is closed" is a claim about its mechanism; a register entry saying "closed" reads as a
+claim about the world.
+
+**Standing rule for this file: every entry states its evidence class.** `measured live` /
+`probed` / `reasoned` / `free-tier arithmetic`. An entry whose class is `reasoned` may not be
+summarised as though it were measured, and the final comparison must not promote one to the other.
+
+Route G named the shape of my error precisely: *the same shape as your own probe generalising from
+`HEAD`/`HEAD~1` — a correct conclusion resting on evidence that does not cover the case.* That is
+now three instances of one habit, so it gets a rule rather than another apology.
 
 ## Corrections made against Catalyst's favour, and against it
 

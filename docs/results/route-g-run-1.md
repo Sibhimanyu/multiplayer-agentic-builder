@@ -179,3 +179,53 @@ A heartbeat costs **one ref update and zero rows**, with a storage footprint of 
 per agent forever, because the old one is deleted in the same atomic push. The interface
 constraint — "MUST NOT cost a durable row UPDATE per call" — is satisfied more cheaply than
 either cloud route manages.
+
+---
+
+# Run 2 — full Section A, live
+
+Recorded 2026-08-27. Branch `impl/github-v2`, tip `9c2145b`. `conformance.ts` **unmodified**.
+Root `npm test` still exactly 19/19, and no route-G test resolves through `shared/` — so "both
+builds pass the same suite" is measured by the same command on both branches.
+
+## 17/17 clean, one run, real GitHub remote. 34 m 15 s.
+
+| Test | ms | Test | ms | Test | ms |
+|---|---|---|---|---|---|
+| A1 | 23,011 | A7 | 28,440 | A13 | 36,637 |
+| A2 | 596,328 | A8 | 30,096 | A14 | 19,777 |
+| A3 | 20,874 | A9 | 29,949 | A15 | 17,702 |
+| A4 | 100,318 | A10 | 23,973 | A16 | 23,057 |
+| A5 | **1,008,802** | A11 | 27,108 | A17 | 777 |
+| A6 | 45,117 | A12 | 22,595 | | |
+
+## A2 across every run: 50/50 · failed once · 50/50 · 50/50
+
+Three clean passes of 1,000 claims each, plus one failure with a named and fixed cause that was
+**not** the claim mechanism (a transport transient on the loss path).
+
+The build explicitly **declines to say "A2 is reliable now"**, citing order 0021: a handful of runs
+does not close an intermittency question — and noting that is the rule Firebase broke and then
+wrote. The honest form is the accumulating distribution, so the count keeps being reported.
+
+## G6 — both halves weighted equally
+
+**Zero quota against any rationed allowance.** The write path is `git push`, unmetered; reads are
+modest. It ran the whole suite **three times in one afternoon** and could run it again tomorrow.
+
+Compare: Catalyst had to hold A5 back as ~15% of a monthly SELECT allowance; Firebase excluded A2
+as ~20% of two monthly allowances.
+
+**But route G is correct and slow.** A5 alone is **17 minutes**, because 301 appends are 301
+pushes. Neither cloud route pays that.
+
+> If the final comparison reads "route G wins on cost", it should read **"route G trades latency
+> for cost and setup."** That is what the numbers actually say.
+
+Recorded here so the writeup cannot quietly drop the second half.
+
+## Entry 18 — claimed closed, not yet measured
+
+See the register. The mechanism is sound as reasoned, but A7 and A8 do not inject a competitor
+between the generation read and the push, which is the one instant the race occupies. The
+adversarial test is the build's next task, before the claim is made again.
