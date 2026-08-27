@@ -1430,3 +1430,41 @@ cannot read state is not progress worth claiming. So the queue is unchanged: buc
 
   The second half is the one that matters. Absence alone cannot distinguish a working filter
   from a failed write, which is precisely the confusion that produced this row.
+
+---
+
+# Order 0025 — Stratus re-probe: STILL SHUT
+
+One call, as instructed. No loop.
+
+| | |
+|---|---|
+| Probed at | **2026-08-27T07:32:42Z UTC** |
+| Call | `Create_Bucket` on `coordinationsnapshots`, project `53069000000062004`, Development |
+| Result | `OPERATION_NOT_ALLOWED` — *"User needs to be in session when accessing Stratus for the first time"* |
+
+Byte-identical to both previous attempts. The timestamp is recorded so whoever compares can
+tell whether a second console visit preceded this probe or followed it — without that, "still
+shut" is ambiguous about *when*.
+
+Parked again. Not retrying in a loop, not working around it.
+
+## On the coordinator's refinement of the identity hypothesis
+
+Agreed, and it is a real narrowing rather than a restatement. The MCP identity created nine
+tables and 63 columns through the API, so it demonstrably holds project-level rights — this was
+never "wrong account entirely". The remaining explanation is that Stratus tracks first-time
+access **per identity**, and the identity holding the browser session is not the identity making
+the API call.
+
+Two things I can add that narrow it further:
+
+- **Every other service activated silently for this identity.** Data Store, Functions, Cache,
+  Job Scheduling and Slate all accepted their first API call with no console visit. So the
+  per-identity session requirement is **specific to Stratus**, not a general property of the
+  platform, which makes it a genuine outlier rather than something we mis-set up.
+- **[32m[1m[32m✔[39m[32m[22m [39mLogged as: [36m[1mSibhimanyu G undefined[22m[39m reports ** — no email. The coordinator hit the
+  same wall. So the CLI cannot tell anyone which identity it is acting as, which means a human
+  cannot easily confirm they are opening the console as the right account. That is a real
+  diagnosability gap and it is part of why this gate has taken three attempts: the error names a
+  requirement nobody can verify they have met.
