@@ -834,6 +834,33 @@ reproduced in my own tree, and the duplicate was again the broken one.
 I scanned every other file in my tree for NULs. Clean.
 
 
+### Order 0025's new rule, turned on my own A17
+
+Order 0025 added: **test the operation that is actually restricted, not the nearest one that
+responds**, and before treating a probe as evidence ask *"would this have given the same answer
+in the broken state?"*
+
+Applied to my own work, one thing failed it. My live **A17** asserts route G's
+`UNPROVISIONED_OPERATIONS` is `[]`. That is true, and it is the number this route exists to
+produce — but as a *test* of A17 it is a formality: with an empty list, **nothing ever exercises
+the `NotProvisionedError` machinery**, so it would pass identically if that machinery were
+completely broken.
+
+Catalyst and Firebase each have a real gate, so their A17 exercises the type on the way past.
+Route G has none, so it has to be exercised deliberately — otherwise this route ships an
+**untested error path**, and the first time GitHub introduces a gate (an org policy blocking a
+ref namespace, say) the adapter's response to it will never have run once.
+
+`github/store/provisioning.test.ts` now does that, against a transport spy that **throws** if
+called rather than counting — a counter nobody reads is how a leak gets reported as a pass. It
+asserts the distinct type, the not-retryable answer, zero network calls, and — the half that
+stops the file being the thing it guards against — that a **provisioned** operation is *not*
+blocked. Without that last one, a guard that threw for everything would satisfy every other
+assertion in the file. Same shape as A16 needing both halves.
+
+31 offline tests now, still zero quota.
+
+
 ### FLAG for the coordinator — a timing assumption in the shared suite
 
 Not worked around silently, and `shared/` not touched.
