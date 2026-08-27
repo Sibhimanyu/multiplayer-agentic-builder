@@ -618,6 +618,42 @@ export function createGithubStore(opts: GithubStoreOptions) {
     }
   }
 
+  /** Every live claim, with the sha the reaper must pin its release to. */
+  async function listClaims(
+    project_id: ProjectId,
+  ): Promise<{ task_id: TaskId; agent_id: string; sha: string }[]> {
+    assertNoFault(faults, 'listClaims');
+    const l = layout(project_id);
+    const out: { task_id: TaskId; agent_id: string; sha: string }[] = [];
+    for (const r of await listRefs(l.claimGlob, 'listClaims')) {
+      const { message } = await readCommit(r.sha, 'listClaims');
+      const rec = JSON.parse(message) as { agent_id?: string; task_id?: string };
+      if (typeof rec.agent_id !== 'string' || typeof rec.task_id !== 'string') {
+        throw new StoreError('listClaims: claim payload is malformed');
+      }
+      out.push({ task_id: rec.task_id, agent_id: rec.agent_id, sha: r.sha });
+    }
+    return out;
+  }
+
+  /**
+   * Release a claim the caller does NOT own. The reaper's privileged path.
+   *
+   * Pinned to the sha the reaper read, so if the owner came back and re-claimed
+   * in between, the sha has moved, the lease fails, and a LIVE claim is not
+   * stolen. Returns false for that case rather than throwing -- losing this race
+   * is a normal outcome and the next pass will re-evaluate.
+   */
+  async function forceReleaseClaim(
+    project_id: ProjectId, task_id: TaskId, expect_sha: string,
+  ): Promise<boolean> {
+    assertNoFault(faults, 'forceReleaseClaim');
+    const l = layout(project_id);
+    const ref = l.claimRef(task_id);
+    const res = await push([leaseAt(ref, expect_sha), 'origin', `:${ref}`], 'forceReleaseClaim');
+    return res.code === 0;
+  }
+
   // ---- scope locks ------------------------------------------------------
 
   interface StoredLock { agent_id: string; task_id: string; globs: string[]; acquired_at: string }
@@ -1163,6 +1199,7 @@ export function createGithubStore(opts: GithubStoreOptions) {
     UNPROVISIONED_OPERATIONS,
     stats,
     registerAgent, registerTask, purge, injectEvent, warm,
+    listClaims, forceReleaseClaim,
     /** Highest seq currently allocated. Used by the harness for ledgerSize. */
     async ledgerSize(project_id: ProjectId): Promise<number> {
       const l = layout(project_id);
