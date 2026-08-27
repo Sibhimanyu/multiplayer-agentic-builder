@@ -1607,3 +1607,157 @@ nothing about how it serves a stored object.
 `Get_All_Objects` on `coordinationsnapshots` returns
 `{"key_count":0,"max_keys":1000,"truncated":false,"contents":[]}`. Nothing was created, so
 nothing needed deleting, and `expires-after` was never exercised. The bucket is empty.
+
+---
+
+# Order 0031 — putObject WORKS. C1's cached read does not exist on this DC.
+
+Section 5's order followed exactly. Every latency below names its host, per 0031's new rule.
+
+## Step 1 — bucket before-state, verbatim
+
+`Get_All_Buckets`, **2026-08-27T12:24Z**:
+
+```json
+{"bucket_name":"coordinationsnapshots",
+ "project_details":{"project_name":"multiplayer-agents","id":"53069000000062004","project_type":"Live"},
+ "created_by":{"zuid":60076397019,"email_id":"sibhimanyu.g+t0@zohotest.com",...},
+ "created_time":"Aug 27, 2026 02:38 PM","modified_time":"Aug 27, 2026 02:38 PM",
+ "bucket_meta":{"versioning":false,"caching":{"status":"Disabled"},"encryption":false,"audit_consent":false},
+ "bucket_url":"https://coordinationsnapshots-development.zohostratus.in"}
+```
+
+`Head_Bucket` returns `{"data":[]}` — an empty body, so it is not a usable detail call. The
+listing above is the before-state of record.
+
+## Step 2 — `Update_Bucket` HAS the field. THE DATA CENTRE DOES NOT HAVE THE FEATURE.
+
+The schema exposes exactly what was hoped for: `body.bucket_meta.caching.status`, enum
+`["true","Disabled"]`. So the 0031 stop-condition ("no caching field → stop") did **not** apply,
+and I called it — caching only, with `versioning:false`, `encryption:false`,
+`audit_consent:false` restated at their existing values so a full-replace could not silently
+change anything else.
+
+Verbatim response:
+
+```json
+{"status":"failure","data":{
+  "message":"Invalid operation. Bucket caching feature is not available in current DC.",
+  "error_code":"FORBIDDEN"}}
+```
+
+**This is not a provisioning gate. It is an absent capability.** Bucket caching does not exist
+in this data centre (`catalystserverless.in`, IN). No console click, API call or support ticket
+in my reach changes it, and there is nothing to add to the gate count — a gate can be passed,
+and this cannot.
+
+After-state confirms the failed call changed nothing: `modified_time` still
+`Aug 27, 2026 02:38 PM`, `caching.status` still `Disabled`.
+
+## Step 3 — putObject WORKS. This was the biggest open question and the answer is yes.
+
+`POST /diag/putobject` on the deployed function, **2026-08-27T12:27:49Z**, HTTP 200:
+
+```json
+{"step":"complete","ok":true,"put":true,"head":true,"get_body":"[object Object]",
+ "delete":{"message":"Object Deletion scheduled."},
+ "timings_ms":{"put":142,"head":111,"get":23,"delete":136}}
+```
+
+One key, `_diag/putobject-probe.json`, `{overwrite:true}`, read back, deleted. No parameter
+variation — the first attempt succeeded, so the no-fishing bound never came into play.
+
+Those four timings are **function → Stratus, both inside the IN DC**. They are *not* client
+read latencies and must never be quoted as such. That mislabelling is the whole subject of
+entry 25.
+
+Two honest defects in my own probe: `get_body` came back `"[object Object]"` because I
+`String()`-coerced whatever `getObject` returns rather than reading it as text, so the probe
+proved the call *succeeded* without proving the *bytes* round-tripped. And `deleteObjects`
+returns `"Object Deletion scheduled."` — asynchronous, so a delete confirmed by response is not
+a delete confirmed by absence. I verified absence separately below.
+
+So the earlier `Create_Upload_Signature` failures were about **that surface**, not about
+Stratus writes. The SDK path from inside a function works on the first try.
+
+## Step 4 — cold / warm / headers. The pre-registered reading, applied.
+
+Read through a **pre-signed URL over plain HTTP**, which is the real client path: the bucket is
+Authenticated, not Public. Measuring the SDK's `getObject` instead would have timed a
+function-to-Stratus hop inside one DC and labelled it the client read — the same error as
+inheriting GitHub's 34 ms.
+
+**Host: `coordinationsnapshots-development.zohostratus.in`**, from a laptop in Asia/Kolkata.
+**2026-08-27T12:30:14Z**. Two GETs only — no best-of-N, no warm-up laps.
+
+| | value |
+|---|---|
+| cold | **79 ms** (HTTP 200) |
+| warm | **20 ms** (HTTP 200) |
+| `cache-control` | **`no-store`** |
+| `pragma` | `no-cache` |
+| `expires` | `Thu, 01 Jan 1970 00:00:00 GMT` |
+| `etag` | `"9bf92b0e64750890894627cbf6454cdb"` |
+| `age` / `x-cache` / `cf-cache-status` / `via` / `x-amz-cf-pop` | **all absent** |
+
+### The verdict, per the pre-registration — and warm being faster does NOT change it
+
+Warm is 20 ms against a cold 79 ms, which looks like the "warm ≪ cold" branch. It is not,
+because that branch required **warm ≪ cold *with a cache header*** and there is no cache header
+at all. Three pieces of evidence say the 59 ms came from connection reuse rather than a cache:
+
+1. **`cache-control: no-store`, `pragma: no-cache`, `expires` at the epoch.** Stratus is
+   explicitly instructing clients *not* to cache this object. That is the opposite of a
+   cacheable read path.
+2. **Two different `x-sts-request-id` values** — `ix2-756bfe9d…` cold and `ix2-8faf4502…` warm.
+   Both requests reached the origin and were served there. A cache hit would not mint a second
+   origin request id.
+3. **`connection: keep-alive`, `keep-alive: timeout=20`.** The second GET reused an established
+   TCP+TLS connection, which is exactly the handshake cost that disappears.
+
+**So: C1's read is a plain origin object GET.** Stating it as 0031 requires, without softening:
+
+> **C1's advantage over C2 was never established.** The 34 ms that justified choosing C1 was
+> GitHub's CDN. Stratus, measured for the first time here, serves this object from origin at
+> **79 ms cold / 20 ms warm-connection**, with caching *explicitly disabled by the response* and
+> *unavailable in this data centre at all*.
+
+**C2 is live again, and on this evidence it is probably the better Catalyst route.** C1's whole
+premise was a cached CDN read. That read does not exist here, so C1 is paying for a snapshot
+builder, an Event function, a bucket and a third moving part in order to obtain an origin GET —
+while C2's plain Data Store read needs none of it. C1 would still win on *operation cost* (a
+snapshot read is one object GET against `readEvents`'s 3 SELECTs, and the SELECT quota is the
+binding constraint per G4), so the case for C1 is now **quota, not latency**. That is a much
+weaker and much narrower claim than the one in the design doc, and it should be re-argued rather
+than assumed.
+
+One thing that **does** survive: **ETag is present**, so the `readSnapshot(etag)` → 304 design
+is implementable. That was the other half of the design's read story and it is intact.
+
+## Step 5 — audit of `docs/results/catalyst-run-1.md` for host-less figures
+
+**Two tables, six figures, no host named in either.**
+
+- **G1**: `appendEvent` 202/281 ms, `publish → visible` 318/419 ms.
+- **G2**: claim 127/182/409 ms, max 1,186 ms.
+
+All six were measured against
+`multiplayer-agents-60083782173.development.catalystserverless.in/server/coordination` from a
+laptop in Asia/Kolkata to the IN DC. That host is recorded in these notes but **not in the
+results file's tables**.
+
+Being precise about the severity, because it is *not* the same defect as entry 25: these figures
+were measured on the route that claims them, so they are not borrowed — the host is *unstated*,
+not *wrong*. Attaching it is a labelling fix. The 34 ms was a different and worse thing: correct
+number, correct method, **wrong subject**. Conflating the two would overstate this finding.
+
+I have not edited `docs/results/` — it is coordinator-owned.
+
+## Bucket left as found
+
+`Get_All_Objects` after both probes: `{"key_count":0,"max_keys":1000,"truncated":false,
+"contents":[]}`. Both probe keys deleted, `bucket_meta` unchanged from the before-state.
+
+The `/diag/putobject` and `/diag/readpath` routes remain deployed and are authenticated like
+every other route. They should be deleted once G1 is settled; they are recorded here so they are
+not forgotten.

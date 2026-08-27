@@ -35,6 +35,7 @@ import type { LockRecord, ScopePort } from '../scope/index.ts';
 import { handleHeartbeat, handleListPresence, PRESENCE_SEGMENT } from '../presence/index.ts';
 import { REAPER_STATUS_KEY } from '../reaper/index.ts';
 import type { PresenceDeps, PresencePort } from '../presence/index.ts';
+import { measureSnapshotRead, runPutObjectProbe } from '../diag/index.ts';
 import { resolvePrincipal } from '../_lib/auth.ts';
 import type { AuthPort } from '../_lib/auth.ts';
 import { agentToken, errorResponse, header, json, withCors } from '../_lib/http.ts';
@@ -79,10 +80,20 @@ interface CacheSegment {
   put(key: string, value: string, expiryInHours?: number): Promise<unknown>;
   get(key: string): Promise<unknown>;
 }
+interface StratusBucketApi {
+  putObject(key: string, body: string, opts?: Record<string, unknown>): Promise<unknown>;
+  getObject(key: string, opts?: Record<string, unknown>): Promise<unknown>;
+  deleteObjects(objects: unknown[], ttl?: unknown): Promise<unknown>;
+  headObject(key: string, opts?: Record<string, unknown>): Promise<unknown>;
+  generatePreSignedUrl(
+    key: string, urlAction: string, opts?: Record<string, unknown>,
+  ): Promise<unknown>;
+}
 interface CatalystApp {
   datastore(): Datastore;
   zcql(): { executeZCQLQuery(query: string): Promise<unknown[]> };
   cache(): { segment(name?: string): CacheSegment };
+  stratus(): { bucket(name: string): StratusBucketApi };
 }
 
 /**
@@ -401,6 +412,18 @@ async function route(app: CatalystApp, req: HttpRequest, log: Logger): Promise<H
 
   // Everything below resolves token -> agent -> project -> role, every request.
   const principal = await resolvePrincipal(makeAuthPort(app), agentToken(req));
+
+  // BOUNDED DIAGNOSTIC, order 0031 section 3b. Authenticated like every other
+  // route, so it is not an open write endpoint. Delete once G1 is settled.
+  if (path === '/diag/putobject' && req.method === 'POST') {
+    return json(200, await runPutObjectProbe(app, log));
+  }
+
+  // Order 0031 section 4. Writes one key, measures a cold and a warm read of it
+  // through a pre-signed URL, deletes it. Two GETs only -- no best-of-N.
+  if (path === '/diag/readpath' && req.method === 'POST') {
+    return json(200, await measureSnapshotRead(app, log));
+  }
 
   if (path === '/claim' && req.method === 'POST') {
     return handleClaim(makeClaimPort(app), principal, req.body, () => new Date().toISOString());
