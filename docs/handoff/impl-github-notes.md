@@ -1364,6 +1364,56 @@ runs than writing the adapter.
 
 ---
 
+## G10 — would I choose this again?
+
+**Written before reading anything from the Catalyst or Firebase builds.** I have not opened
+`impl/catalyst-*` or `impl/firebase-*`, and what I know of them is only what the coordinator put
+in orders and the register. That is the point of writing this now rather than later.
+
+**Yes — for an open-source tool, and with one condition I would not waive.**
+
+The case is not the one I expected going in. I assumed setup friction would be the headline and
+latency the cost. Setup friction *is* the headline — one CLI command, zero console steps, zero
+accounts, zero billing, nothing blocked on a human, against three manual gates and two — but the
+number that actually changed my mind is **`claimTask` costing zero metered operations**. The
+atomic primitive, the thing the whole protocol is built on, is free and server-enforced on a
+backend that every contributor already has an account for. That is a strange and good property.
+It means the thing you do most often is the thing you never pay for, which is the opposite of
+how the two cloud routes are shaped.
+
+The second reason is subtler and I only believe it because of how the build went: **the failure
+modes are ones a contributor can already read.** When a claim was silently stolen it was a
+fast-forward. When a listing came back truncated it would have been pagination. When `rc=0` did
+not mean what I thought, the answer was in `git push --porcelain`. Every one of those is
+diagnosable with tools someone already has and a mental model they already own. Compare that with
+the register's entry 19 — a deployed function whose console output is write-only, where two
+deploy cycles went to distinguishing two SDK init forms by elimination. I would rather debug a
+platform I can `git ls-remote` at.
+
+**Where it loses, plainly.** It is slow, and not slightly: 34 minutes for the conformance suite,
+17 of them in one test, because 301 appends are 301 pushes. `seq` allocation is O(N²) under
+contention — 78 push attempts for 12 concurrent allocations — and I have not closed that, only
+measured it. Latency is seconds where the other routes are milliseconds. If this system needed
+sub-second coordination it would be the wrong choice and I would say so.
+
+**The condition I would not waive:** the probes come first, every time. Four of the load-bearing
+facts in this adapter are things the documentation does not say and the obvious reading gets
+backwards — a plain push fast-forwards over a claim; `rc=0` does not mean you won; ref listings
+are lexical; the ETag is media-type dependent. Every one would have shipped as a quiet corruption
+bug. Route G is viable **because** git's semantics are precise, and dangerous for exactly the same
+reason: precise semantics that differ from the ones you assumed produce confident, wrong code.
+I would choose this again only for a team willing to measure before building, which — for an
+open-source coordination tool whose contributors are the kind of people who read `git push
+--porcelain` output — I think is the right bet.
+
+**What would change my answer.** If the write path had to be sub-second, or if a project routinely
+ran more than a dozen concurrent appends, the O(N²) `seq` allocation would stop being a footnote
+and become the design. I would want that solved before recommending it at that scale, and I have
+not solved it.
+
+
+---
+
 ## Route-G observations for the register (coordinator writes it, not me)
 
 Per orders 0008/0013/0015 I do not edit `docs/handoff/g9-asymmetries.md`. Candidates:
