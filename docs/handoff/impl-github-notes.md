@@ -1228,6 +1228,43 @@ error. Flagging it because it is a reading of the interface, not just an impleme
 
 ---
 
+## G1 — publish → visible latency
+
+100 appends, each read back by a **different client** (same-process caching would measure the
+cache, not the platform):
+
+```
+append (write acknowledged)            n=100  min= 2,883  p50= 3,262  p95= 5,186  max= 5,898
+publish -> visible to another client   n=100  min= 5,940  p50= 7,599  p95= 9,922  max=12,345   ms
+
+writer ops: pushes=102  rest=201  transport_retries=0
+append push ATTEMPTS: 100 for 100 appends (1.00 per append)
+```
+
+**Route G's publish→visible p50 is 7.6 s.** That is the honest headline and it is slow. The
+breakdown: ~3.3 s to get the write acknowledged, then the reader's detection cost — a `git fetch`
+of the event namespace plus a ref listing, about two poll cycles.
+
+### This qualifies my own O(N²) `seq` claim, and the qualification matters
+
+Probe K measured 12 concurrent allocators costing 78 push attempts — quadratic. G1 measures
+**1.00 push attempts per append across 100 sequential appends. Zero retries.**
+
+Both are true and they are not in tension: the quadratic cost is a property of **concurrency on
+one counter**, not of appending. A single agent appending in a loop never collides with itself.
+So the honest form of the `seq` finding is:
+
+> Sequential appends cost exactly one push each. Contention on the same project's counter costs
+> O(N²) attempts in N. A project with agents appending independently pays the first; a project
+> with a burst of simultaneous appends pays the second.
+
+I had written the O(N²) number without that qualifier, which would have led a reader to expect
+78 attempts for 12 appends in a demo where they happened to be sequential. Same error shape as
+generalising a probe past what it measured — mine this time, caught by a later measurement rather
+than by a reviewer.
+
+---
+
 ## G4, G5, G6 — operations and cost
 
 ### G4 — operations per store call, measured

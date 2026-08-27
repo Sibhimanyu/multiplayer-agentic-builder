@@ -20,6 +20,8 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 import { systemClock } from '../../shared/clock.ts';
+import { withRetry } from '../../shared/store/retry.ts';
+import { nullLogger } from '../../shared/log.ts';
 import { CapturingLogger } from '../../shared/log.ts';
 import { PROTOCOL_VERSION } from '../../shared/store/types.ts';
 import { createGithubStore } from '../store/github.ts';
@@ -147,22 +149,42 @@ if (LIVE) {
     const winMs: number[] = [];
     const loseMs: number[] = [];
     const releaseMs: number[] = [];
+    // A real DNS outage killed the first attempt at this measurement partway
+    // through 200 iterations. The adapter behaved CORRECTLY -- it mapped the
+    // outage to StoreOfflineError, which the interface defines as retryable --
+    // and it was the harness that had no retry.
+    //
+    // Order 0012: assert the contract, not your expectation of it. So the
+    // harness now retries through the SHARED withRetry, and reports how many
+    // times it had to, because order 0019 says a retry loop that hides its
+    // cost turns a measurement into a lower bound. A sample that needed a retry
+    // is EXCLUDED from the latency distribution: its elapsed time includes a
+    // backoff and would silently inflate p95.
+    let retried = 0;
+    const attempt = async <T>(fn: () => Promise<T>): Promise<{ value: T; clean: boolean }> => {
+      const { value, outcome } = await withRetry(fn, {
+        attempts: 6, base_ms: 500, clock: systemClock, log: nullLogger, op: 'g2',
+      });
+      const clean = outcome.attempts === 1;
+      if (!clean) retried += 1;
+      return { value, clean };
+    };
 
     for (let i = 0; i < G2_N; i += 1) {
       const task = `task_g2_${i}`;
       const t0 = Date.now();
-      const w = await store.claimTask(PROJECT, task, 'agent_g2a');
+      const w = await attempt(() => store.claimTask(PROJECT, task, 'agent_g2a'));
       const t1 = Date.now();
-      assert.equal(w.ok, true, `claim ${i} should win on a fresh task`);
-      winMs.push(t1 - t0);
+      assert.equal(w.value.ok, true, `claim ${i} should win on a fresh task`);
+      if (w.clean) winMs.push(t1 - t0);
 
-      const l = await store.claimTask(PROJECT, task, 'agent_g2b');
+      const l = await attempt(() => store.claimTask(PROJECT, task, 'agent_g2b'));
       const t2 = Date.now();
-      assert.equal(l.ok, false, `claim ${i} should lose on a held task`);
-      loseMs.push(t2 - t1);
+      assert.equal(l.value.ok, false, `claim ${i} should lose on a held task`);
+      if (l.clean) loseMs.push(t2 - t1);
 
-      await store.releaseTask(PROJECT, task, 'agent_g2a');
-      releaseMs.push(Date.now() - t2);
+      const r = await attempt(() => store.releaseTask(PROJECT, task, 'agent_g2a'));
+      if (r.clean) releaseMs.push(Date.now() - t2);
     }
 
     // eslint-disable-next-line no-console
@@ -177,6 +199,11 @@ if (LIVE) {
     );
     // eslint-disable-next-line no-console
     console.log(`claim push attempts: ${store.stats.push_attempts_by_op.claimTask}`);
+    // eslint-disable-next-line no-console
+    console.log(
+      `operations that needed a retry: ${retried} of ${G2_N * 3}`
+      + `${retried === 0 ? ' (nothing is absorbing contention)' : ' -- those samples are EXCLUDED from the distributions above'}`,
+    );
 
     await store.purge(PROJECT);
   });
