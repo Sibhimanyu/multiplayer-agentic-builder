@@ -1468,3 +1468,142 @@ Two things I can add that narrow it further:
   cannot easily confirm they are opening the console as the right account. That is a real
   diagnosability gap and it is part of why this gate has taken three attempts: the error names a
   requirement nobody can verify they have met.
+
+---
+
+# Order 0030 — Stratus write probe. INCONCLUSIVE, and I could not answer either question.
+
+Bucket adopted, not created. `Create_Bucket` deliberately not called, per 0030.
+
+## The bucket exists, verified by listing
+
+`Get_All_Buckets` at **2026-08-27T09:19:59Z** returned `coordinationsnapshots`, created
+`Aug 27, 2026 02:38 PM` by `sibhimanyu.g+t0@zohotest.com`, url
+`https://coordinationsnapshots-development.zohostratus.in`, `bucket_meta`
+`{versioning:false, caching:{status:"Disabled"}, encryption:false, audit_consent:false}`.
+
+That is the state change 0030 asked for: previously `[]`, now one bucket. It is **not**
+evidence of write access — my own rule from 0025.
+
+## 1. THE WRITE IS STILL UNVERIFIED. Not refused — unreachable from here.
+
+**The MCP exposes no `putObject`.** The Stratus group has 18 tools and none of them writes an
+object: `Copy_Object`, `Create_Bucket`, `Create_Upload_Signature`, `Delete_Bucket`,
+`Delete_Objects`, `Delete_Objects_By_Prefix`, `Extract_Zip_Object`, `Generate_Signed_URL`,
+`Get_All_Buckets`, `Get_All_Object_Versions`, `Get_All_Objects`, `Get_Object`,
+`Get_Zip_Extraction_Status`, `Head_Bucket`, `Head_Object`, `Rename_Object`, `Update_Bucket`,
+`Update_Object_Metadata`.
+
+So the only two write paths available were both signature-based, and both failed.
+
+### Attempt A — `Create_Upload_Signature` then REST PUT
+
+Signature returned successfully. Decoded `stsPolicy`:
+
+```json
+{"signingtime":1787831966810,"expiration":3600,
+ "action":["GetObject","PutObject"],
+ "credentials":"60076397019-60085013690",
+ "resource":["srn:::coordinationsnapshots-development/*"],
+ "query":[],"headers":[],
+ "body":{"content-type":"*","content-length":0}}
+```
+
+`action` includes `PutObject` and `resource` is a wildcard, so the grant looks right. But the
+policy pins **`content-length: 0`**, and it did so **regardless of what I passed** — I called
+`Create_Upload_Signature` twice, the second time with
+`body: {"content-type":"application/json","content-length":24}`, and the returned policy was
+identical on those two fields. The MCP tool appears to ignore the body it is given.
+
+PUT verbatim result, at **2026-08-27T11:58:34Z**:
+
+```
+HTTP/1.1 400
+Cache-Control: no-store
+Content-Type: application/json;charset=utf-8
+x-sts-request-id: ix2-36ba4979acc544349405f288a000bada
+
+{"status":400,"code":"invalid_request_parameter"}
+```
+
+Identical 400 across four variations: nested key `probe/write-check.json` and flat
+`writecheck.json`; with and without `Content-Type`; with and without `cache-control`,
+`expires-after` and `overwrite` headers.
+
+### Attempt B — `Generate_Signed_URL` then GET
+
+Returned a URL in a **different shape** to the upload signature — note the `/_signed/` path
+segment and a completely different parameter set:
+
+```
+https://coordinationsnapshots-development.zohostratus.in/_signed/writecheck.json
+  ?organizationId=60085013690&stsDate=1787832024664
+  &stsCredential=60076397019-60085013690&stsExpiresAfter=600
+  &stsSignedHeaders=host&stsSignature=...
+```
+
+GET verbatim result, at **2026-08-27T12:00:38Z**:
+
+```
+HTTP/1.1 400
+{"status":400,"code":"bad_request","message":"Signature didn't match. Request is tampered "}
+```
+
+### What this does and does not establish
+
+It does **not** establish that `putObject` is broken, and I am not reporting it as such. It
+establishes that **Stratus object writes are not reachable through the MCP's signature tools**
+from this session. Two different signing schemes, two different failures.
+
+The operation the snapshot builder will actually use is the **SDK's**
+`stratus().bucket().putObject()`, called from inside a deployed function with the function's own
+credentials and **no pre-signed URL involved**. That is a different code path from both attempts
+above, and verifying it requires deploying code — which this bounded task explicitly forbids.
+So the write remains **unverified**, and the honest status is *untested*, not *failing*.
+
+## 2. THE CACHING QUESTION — the premise does not hold for this SDK
+
+I could not run the live test, because it needs an object that exists. But reading the SDK
+source answers the premise directly, and that is the better evidence anyway — same move as
+`types/job.d.ts` earlier.
+
+`zcatalyst-sdk-node@3.4.0`, `lib/stratus/bucket.js`, `putObject(key, body, uploadOptions)`
+builds exactly these headers:
+
+```js
+const headers = { compress: uploadOptions?.compress || 'false', 'Content-Type': contentType };
+if (uploadOptions?.ttl)       headers['expires-after'] = uploadOptions.ttl;
+if (uploadOptions?.overwrite !== undefined) headers.overwrite = String(uploadOptions.overwrite);
+if (metaData)                 headers['x-user-meta'] = metaData;
+```
+
+**There is no `cache-control` option and no `cache-control` header.** The upload options this
+version supports are `contentType`, `metaData`, `compress`, `ttl`, `overwrite` and
+`extractUpload`. The only cache-related API on the bucket is a bucket-level
+`/bucket/purge-cache` operation.
+
+So the premise — *cache-control is a per-object putObject header* — is **not true of this SDK
+version**. Whether the Stratus REST layer would honour a `cache-control` header supplied by some
+other writer is untested.
+
+Consequences, stated carefully:
+
+- My earlier flag that `caching: "Disabled"` threatens route C1's read path is **neither
+  confirmed nor dismissed**. What has changed is the mechanism: I assumed the fix would be a
+  per-object header, and that lever does not exist in the SDK.
+- `overwrite` and `ttl` **do** exist, so 0030's requirement to pass `{overwrite: true}` on every
+  put is satisfiable, and `expires-after` self-deletion is available.
+- **G1 on the folded-snapshot path cannot yet be reported as designed.** The design claims a
+  CDN-cached read; with bucket caching disabled and no per-object override in the SDK, whether
+  that path is cacheable at all is an open question that must be settled before G1 is measured,
+  not after.
+
+One thing I deliberately did **not** treat as evidence: the 400 responses carry
+`Cache-Control: no-store, max-age=0`. That is Stratus's own error-response header and says
+nothing about how it serves a stored object.
+
+## 3. No litter
+
+`Get_All_Objects` on `coordinationsnapshots` returns
+`{"key_count":0,"max_keys":1000,"truncated":false,"contents":[]}`. Nothing was created, so
+nothing needed deleting, and `expires-after` was never exercised. The bucket is empty.
