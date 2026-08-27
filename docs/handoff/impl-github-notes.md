@@ -489,21 +489,160 @@ that was seen a moment ago, nor "live" for one that never appeared. Not yet desi
 
 ---
 
-## Still open, not yet probed — `seq`
+## `seq` ordering — probed (orders 0016 step 2, 0023). Third primitive.
 
-MB4 requires strictly ascending `seq` from `readEvents`. Git orders by commit, not by counter,
-and the brief flags this as needing real design. **I have not probed it and I am not going to
-claim an answer I do not have.** The obvious candidates and their obvious problems:
+Probes J, K, L. Same treatment as the other two: nothing below is assumed.
 
-- **Commit order on `agentic/ledger`** — `git log` order is topological, and a rebase or a
-  concurrent push retry can reorder. Also requires an object read to sequence.
-- **A lease-allocated counter ref** (`refs/seq/<n>`, create-if-absent, same primitive as the
-  claim) — reuses a mechanism already verified 50/50 above, costs one extra round trip per
-  append, and gaps are already legal under MB4. This is where I would start.
-- **Ref name as the counter**, so the sequence is readable without any object read, the same
-  trick that makes presence work here.
+### The obvious answer is wrong, in the ROWID shape
 
-Next session's first job, before any adapter code.
+**Commit order on a shared branch does not preserve allocation order.** Two workers, A allocates
+first, B second, B pushes first, A retries with `pull --rebase`:
+
+```
+commit timestamps:
+   A: 2026-08-27 11:07:40 +0530     <- allocated FIRST
+   B: 2026-08-27 11:07:42 +0530     <- allocated SECOND
+B pushed first (it was allocated SECOND)
+A's plain push:  ! [rejected] HEAD -> probe-ledger (fetch first)
+A pushed after pull --rebase
+
+resulting branch order, oldest commit first:
+   1081557  2026-08-26 18:12:46 +0530  probe base
+   68a3ea5  2026-08-27 11:07:42 +0530  event B -- allocated SECOND
+   210fe35  2026-08-27 11:07:47 +0530  event A -- allocated FIRST
+```
+
+A reader consuming in branch order gets B before A. **And the commit date is no fallback**: the
+rebase rewrote A's date from `11:07:40` to `11:07:47`, so sorting by date *also* puts B first.
+The retry that makes the push succeed is the same operation that destroys the ordering.
+
+This is `ROWID` again — the obvious ordering key running backwards — and it reinforces order
+0017 ruling 2: `created_at` is metadata, never an ordering key. On this route it is worse than
+Catalyst's second-resolution problem, because a rebase actively rewrites it.
+
+### Ref-name ordering is lexical. Zero-padding is mandatory, not cosmetic.
+
+Both channels return refs in **lexical** order:
+
+```
+-- git ls-remote, as returned --      -- REST matching-refs, as returned --
+   refs/seq/probe/10                     refs/seq/probe/10
+   refs/seq/probe/100                    refs/seq/probe/100
+   refs/seq/probe/2                      refs/seq/probe/2
+   refs/seq/probe/9                      refs/seq/probe/9
+
+-- LEXICAL sort:  10 100 2 9
+-- NUMERIC sort:  2 9 10 100
+```
+
+Exactly the trap `blackboard.md` already documents for ZCQL — *"a string qty put 100 before 9 in
+every ordered query"* — arriving here through a completely different door. **Seq refs are
+zero-padded to fixed width** (`%010d`), so lexical and numeric order coincide and no caller can
+get it wrong by sorting the natural way.
+
+### The mechanism, and it reuses the primitive already verified
+
+Counter in the ref **name**, advanced by one atomic push:
+
+```bash
+git push --atomic --force-with-lease="refs/seq/<proj>/head/<next>:" origin \
+    "$MYSHA:refs/seq/<proj>/head/<next>" ":refs/seq/<proj>/head/<cur>"
+```
+
+Create-if-absent on `<next>` decides the winner; the delete of `<cur>` keeps exactly one ref.
+Reading the current value needs **no object read** — the number is the ref name.
+
+**Per-project allocation is free here.** Order 0005 required Catalyst to allocate `seq`
+*globally* specifically because `is_unique` is table-global and per-project allocation
+deadlocked. Route G has no such coupling: the ref path *is* the scope, so
+`refs/seq/<project>/head/*` is naturally per-project and the deadlock 0005 describes cannot
+arise. Contention is therefore per project, which is the real concurrency unit anyway.
+
+### Measured under contention
+
+12 allocators, distinct commits, released from a shared time barrier:
+
+```
+allocated: 1 2 3 4 5 6 7 8 9 10 11 12
+count=12 distinct=12 expected=12
+attempts:  1 2 3 4 5 6 7 8 9 10 11 12
+false successes caught by the ownership re-check: 0
+RESULT: PASS - 12 distinct seqs, zero duplicates
+```
+
+**Zero duplicates, zero lost allocations, contiguous 1..12.**
+
+**The cost, stated because order 0019 requires it.** `attempts` equals the allocated `seq` for
+every allocator — the winner of seq *N* failed *N−1* times first. That is the correct signature
+of genuine contention on a single counter, and it is **O(N²)**: 12 allocations cost **78 push
+attempts plus 78 counter re-reads**. At ~2 s per push and ~1.3 s per `ls-remote` read that is
+minutes of wall clock for twelve events.
+
+This is the retry loop order 0019 warned about — correct output, cost hidden inside it. **Route
+G's `seq` is correct and expensive, and the expense scales quadratically with concurrent
+appends.** I am reporting the attempt count alongside the result rather than only the result, and
+G4 for this route must carry attempts, not just operations. Mitigations exist (batching an
+allocation range per agent, sharding the counter) but none are probed, so none are claimed.
+
+### A CORRECTION to what I reported last session about the claim primitive
+
+Probe J's losing allocator returned **rc=0**. Isolated in probe L, without a pipe in the way
+this time:
+
+```
+L1  ref EXISTS(->X), loser pushes X   (identical sha)
+  rc=0   out: Everything up-to-date
+
+L2  ref EXISTS(->X), loser pushes Y   (different sha)
+  rc=1   out:  ! [rejected] ... (stale info)
+
+L3  ref ABSENT, pushes X              (the winning case)
+  rc=0   out:  * [new reference] ...
+```
+
+**Pushing a sha to a ref that already equals that sha is a no-op, and the lease is never
+evaluated.** `rc=0`, "Everything up-to-date". It happens on claim refs too:
+
+```
+L4  claim held by X, challenger pushes X (identical sha)   rc=0   Everything up-to-date
+L5  claim held by X, challenger pushes Y (different sha)   rc=1   ! [rejected] (stale info)
+```
+
+**So `rc=0` does not mean "I won the claim".** It means "I won" *or* "the ref already holds
+exactly my commit". Last session I reported the lease as the claim primitive and validated it
+with `rc`. Probe A never exposed this because every agent there carried a distinct commit
+message and therefore a distinct sha — the bug was invisible to the test that was supposed to
+prove the mechanism.
+
+**How easy this is to hit:** any scheme where the pushed object is not unique per claimant. My
+own probes B, E and J all pushed a *fixed* base sha for convenience. Written that way in an
+adapter, **every concurrent claim would return rc=0 and every agent would believe it won** — A2
+would pass 50/50 while the mechanism was entirely inert, because A2 counts `ok:true` results and
+they would all be `true`.
+
+**The fix is order 0017's ruling, again: read the structured field, not the exit code.**
+`--porcelain` distinguishes them where `rc` cannot:
+
+```
+-- fresh create --
+*	27bba93...:refs/seq/head/0000000006	[new reference]     rc=0
+-- same sha again (the no-op) --
+=	27bba93...:refs/seq/head/0000000006	[up to date]        rc=0
+```
+
+`*` is a real create; `=` is the no-op. Same `rc`, different status character.
+
+Two requirements follow, and the adapter implements both rather than choosing:
+
+1. **The claim object must be unique per (agent, task)** — the commit message carries both, so
+   two different agents can never produce the same sha.
+2. **`claimTask` decides on the porcelain status character, never on `rc`.** `*` → won. `=` →
+   the ref already holds my own commit, so confirm ownership before returning `ok:true`. `!` →
+   lost, go read the owner.
+
+Requirement 1 alone would be enough today. It is the kind of invariant a refactor breaks
+silently, and requirement 2 costs nothing, so both.
+
 
 ---
 
@@ -594,14 +733,12 @@ read, written or deleted — in particular nothing under `inventory-tracker-cata
 
 ## Next session, in order
 
-1. **`seq`.** Design and probe it before any adapter code. Start with the lease-allocated
-   counter ref — it reuses the primitive already verified 50/50.
-2. Absent-heartbeat semantics (zero refs for an agent).
-3. `store/github.ts` against `shared/store/types.ts`; pass `shared/store/conformance.ts`
-   **unmodified**.
+1. ~~`seq`~~ — probed, answered above. Counter in a zero-padded ref name, advanced by one
+   atomic create-if-absent push. Correct, and O(N^2) under contention.
+2. `store/github.ts` against `shared/store/types.ts`; pass `shared/store/conformance.ts`
+   **unmodified**. Adopt `NotProvisionedError` and `UNPROVISIONED_OPERATIONS` from `shared/`
+   (orders 0020, 0022).
+3. Absent-heartbeat semantics (zero refs for an agent) — still open.
 4. CLI (`X-Agent-Token`), ledger, locks, presence, reaper.
 5. `client/src/App.tsx` import line + `client/src/store/github.ts`, per `territory.md`.
-6. F1-F12 on `inventory-tracker-github`, then G1-G6.
-
-Nothing above step 1 has been started. No adapter code exists yet, by design — order 0016 step 2
-says push the probe results before building on them, and that is what this commit is.
+6. A16 and A17 against the real backend; F1-F12 on `inventory-tracker-github`; then G1-G6.
