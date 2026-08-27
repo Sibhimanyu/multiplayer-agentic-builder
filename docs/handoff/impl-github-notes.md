@@ -834,6 +834,56 @@ reproduced in my own tree, and the duplicate was again the broken one.
 I scanned every other file in my tree for NULs. Clean.
 
 
+### Run 2 — A5 green, and A2 failed. The cause is mine and it is not the claim mechanism.
+
+Run 2 on the fixed build: **16/17 again**, but a different test. A5 passed (the cap-log fix
+holds). **A2 failed.**
+
+A2 passed **50/50** on run 1 and failed on run 2. Order 0012 is explicit that an intermittent
+test is worse than a failing one, and order 0021's precedent is that Firebase retracted an "A2 is
+flaky" report once it found its own harness was the cause. So the only acceptable answer is a
+named cause, not a re-run until it goes green.
+
+Verbatim:
+
+```
+✖ A2 20 concurrent claimTask -> exactly one winner, 50 consecutive rounds (586,002 ms)
+  Error [StoreOfflineError]: github is unreachable
+      at rest (github/store/github.ts:131:13)
+      at async readCommit (github/store/github.ts:211:17)
+      at async readOwner (github/store/github.ts:542:25)
+      at async Object.claimTask (github/store/github.ts:529:19)
+      at async Promise.all (index 16)
+  { backend_message: 'fetch failed' }
+```
+
+**The claim mechanism did not fail.** The stack lands in `readOwner` — the **loss** path. Exactly
+one winner had already been decided by the lease; claimant 16 of 20 was a loser being told *who*
+won, and a single transient socket failure turned an already-settled normal outcome
+(`{ok:false, owner}`) into a thrown error.
+
+One transient in roughly **1,900 REST calls across 1,000 claims**. That is not a surprising base
+rate for a real network; it is the expected one. And it exposes a genuine shape of this route:
+**at 20-way contention the loss path is REST-heavy**, so over a long run a transient is not a
+possibility to tolerate, it is a certainty to plan for.
+
+**Fixed at the REST chokepoint**, not at the call site: `rest()` now retries **transport
+failures** through the **shared** `withRetry` — reusing the audited helper rather than
+hand-rolling a second backoff, since order 0019's finding is that the duplicated copy is the
+broken one. Four attempts, jittered, logged to `nullLogger` so an internal retry cannot pollute a
+caller's `retry.backoff` assertions.
+
+**Only transport failures retry.** An HTTP status is a real answer and is returned for the caller
+to map — retrying a 401 burns quota and never succeeds.
+
+`stats.transport_retries` counts them, because order 0019's other half is that a retry loop is a
+correctness mechanism *and* a cost-hiding mechanism. A G4 figure from this route has to carry
+that number or it is a lower bound presented as a measurement.
+
+**What I am not claiming.** I am not claiming route G's A2 is now reliable on the strength of
+reasoning. The fix is re-running.
+
+
 ### Order 0025's new rule, turned on my own A17
 
 Order 0025 added: **test the operation that is actually restricted, not the nearest one that

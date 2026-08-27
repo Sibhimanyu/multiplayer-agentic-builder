@@ -40,6 +40,7 @@ import type { Clock } from '../../shared/clock.ts';
 import { systemClock } from '../../shared/clock.ts';
 import type { Logger } from '../../shared/log.ts';
 import { nullLogger } from '../../shared/log.ts';
+import { withRetry } from '../../shared/store/retry.ts';
 import { findGlobConflicts, normalizeGlob } from '../../shared/globs.ts';
 import { sanitizeBody } from '../../shared/sanitize.ts';
 
@@ -72,6 +73,8 @@ export interface AttemptStats {
   pushes: number;
   push_attempts_by_op: Record<string, number>;
   rest_calls: number;
+  /** Transport failures that were retried. Order 0019: a retry loop hides cost. */
+  transport_retries: number;
   conditional_304: number;
   conditional_200: number;
 }
@@ -86,7 +89,8 @@ export function createGithubStore(opts: GithubStoreOptions) {
   const faults: Faultable = newFaults();
 
   const stats: AttemptStats = {
-    pushes: 0, push_attempts_by_op: {}, rest_calls: 0, conditional_304: 0, conditional_200: 0,
+    pushes: 0, push_attempts_by_op: {}, rest_calls: 0, transport_retries: 0,
+    conditional_304: 0, conditional_200: 0,
   };
 
   /** Held-back fold seq for A13. -1 means "not frozen". */
@@ -117,21 +121,50 @@ export function createGithubStore(opts: GithubStoreOptions) {
     };
   }
 
+  /**
+   * Every REST call, with a transport-level retry.
+   *
+   * The retry is here rather than at each call site because of a measured
+   * failure: A2 passed 50/50 on one run and failed on the next with
+   * `StoreOfflineError: fetch failed` raised from the LOSS path's owner lookup,
+   * at claimant 16 of 20. The claim mechanism was not what broke -- exactly one
+   * winner had already been decided. A single transient socket failure, in
+   * roughly 1,900 REST calls across 1,000 claims, turned an already-settled
+   * normal outcome ({ok:false, owner}) into a thrown error.
+   *
+   * That is route G's shape: at 20-way contention the loss path is REST-heavy,
+   * so over a long run a transient is not unlikely, it is expected. A read that
+   * merely reports a decision already made must survive one.
+   *
+   * Uses the SHARED withRetry rather than a hand-rolled loop -- order 0019's
+   * finding was that the duplicated copy of existing logic is the broken one.
+   * Logged to nullLogger so an internal retry cannot pollute a caller's
+   * `retry.backoff` assertions.
+   *
+   * Only TRANSPORT failures retry. An HTTP status is a real answer and is
+   * returned for the caller to map; retrying a 401 burns quota and never
+   * succeeds.
+   */
   async function rest(
     path: string, init: { etag?: string; operation: string },
   ): Promise<HttpResponse> {
-    stats.rest_calls += 1;
     const url = `https://api.github.com/repos/${opts.repo}${path}`;
-    let res: HttpResponse;
-    try {
-      res = await opts.http(url, {
-        headers: headers(init.etag ? { 'If-None-Match': init.etag } : {}),
-      });
-    } catch (err) {
-      throw new StoreOfflineError('github is unreachable', {
-        backend_message: (err as Error)?.message,
-      });
-    }
+    const { value: res } = await withRetry(
+      async () => {
+        stats.rest_calls += 1;
+        try {
+          return await opts.http(url, {
+            headers: headers(init.etag ? { 'If-None-Match': init.etag } : {}),
+          });
+        } catch (err) {
+          stats.transport_retries += 1;
+          throw new StoreOfflineError('github is unreachable', {
+            backend_message: (err as Error)?.message,
+          });
+        }
+      },
+      { attempts: 4, base_ms: 200, clock, log: nullLogger, op: `rest.${init.operation}` },
+    );
     if (res.status === 304) stats.conditional_304 += 1;
     else if (res.status === 200 && init.etag) stats.conditional_200 += 1;
     return res;
