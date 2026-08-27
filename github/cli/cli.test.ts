@@ -172,6 +172,25 @@ test('B5 a payload over 4 KiB spools as one file and is NOT appended', async () 
 
 // ---- B6, B7 ----------------------------------------------------------------
 
+test('drainOutbox distinguishes a publish from a give-up', async () => {
+  // These were one number until a demo run reported published:1 for a contract
+  // that never landed, and the test asserting published===1 passed while the
+  // ledger stayed empty. An observation that cannot tell success from
+  // abandonment is not evidence of either.
+  const f = await fixture();
+  try {
+    await writeFile(
+      f.agentic.p('outbox.jsonl'),
+      `${JSON.stringify({ v: PROTOCOL_VERSION, kind: 'bogus_kind', ts: f.clock.iso(), body: {} })}\n`,
+      'utf8',
+    );
+    const res = await f.daemon.drainOutbox();
+    assert.equal(res.published, 0, 'nothing reached the ledger');
+    assert.equal(res.dropped, 1, 'and the line was abandoned, which is a different fact');
+    assert.equal(await f.store.ledgerSize(PROJECT), 0);
+  } finally { await f.cleanup(); }
+});
+
 test('B6 a crash mid-publish re-sends and the ledger still grows by one', async () => {
   const f = await fixture();
   try {
@@ -210,6 +229,7 @@ test('B7 offline: the outbox grows, the cursor does not move, work continues', a
     const res = await f.daemon.drainOutbox();
     assert.equal(res.published, 0);
     assert.equal(res.deferred, 3);
+    assert.equal(res.dropped, 0, 'nothing may be abandoned merely because the link is down');
     assert.equal(res.cursor_moved, false);
     assert.equal(await f.agentic.readCursor('outbox'), cursorBefore, 'the cursor must not move');
 
@@ -424,7 +444,8 @@ test('an unknown outbox kind is dropped LOUDLY rather than blocking the queue', 
     });
 
     const res = await f.daemon.drainOutbox();
-    assert.equal(res.published, 2, 'a bad line must not wedge the queue behind it');
+    assert.equal(res.published, 1, 'only the GOOD line reached the ledger');
+    assert.equal(res.dropped, 1, 'and the bad one is counted as dropped, not as published');
     assert.ok(f.log.withCode('cli.outbox.unknownKind').length === 1,
       'dropping is acceptable; dropping silently is not');
     const { events } = await f.store.readEvents(PROJECT, 0);

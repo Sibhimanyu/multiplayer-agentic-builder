@@ -38,9 +38,20 @@ export interface DaemonOptions {
 }
 
 export interface DrainResult {
+  /** Lines that genuinely REACHED the ledger. */
   published: number;
   /** Lines that could not be sent this pass. NOT an error -- see B7. */
   deferred: number;
+  /**
+   * Lines abandoned: rejected by the store, or an unknown kind.
+   *
+   * Counted separately from `published` because conflating them is an
+   * observation that cannot distinguish success from giving up. It hid a real
+   * blackboard bug for a whole demo run: `published: 1` was reported for a
+   * contract that never landed, and the test asserting `published === 1`
+   * passed while the ledger stayed empty.
+   */
+  dropped: number;
   cursor_moved: boolean;
 }
 
@@ -62,14 +73,15 @@ export function createDaemon(opts: DaemonOptions) {
     const { lines, spooled } = await agentic.pendingOutbox();
     let published = 0;
     let deferred = 0;
+    let dropped = 0;
     let newCursor: number | null = null;
     let stalled = false;
 
     for (const { line, end_offset } of lines) {
       if (stalled) { deferred += 1; continue; }
       const sent = await publishOne(line);
-      if (sent) {
-        published += 1;
+      if (sent.handled) {
+        if (sent.landed) published += 1; else dropped += 1;
         newCursor = end_offset;
       } else {
         // Stop advancing. Everything from here re-sends next pass, in order.
@@ -82,8 +94,8 @@ export function createDaemon(opts: DaemonOptions) {
     // others; each is deleted only after it lands.
     for (const s of spooled) {
       const sent = await publishOne(s.line);
-      if (sent) {
-        published += 1;
+      if (sent.handled) {
+        if (sent.landed) published += 1; else dropped += 1;
         const { unlink } = await import('node:fs/promises');
         await unlink(s.path);
       } else {
@@ -98,11 +110,15 @@ export function createDaemon(opts: DaemonOptions) {
         project_id, agent_id, deferred, published,
       });
     }
-    return { published, deferred, cursor_moved: newCursor !== null };
+    return { published, deferred, dropped, cursor_moved: newCursor !== null };
   }
 
-  /** True if the line reached the ledger. False means "try again later". */
-  async function publishOne(line: OutboxLine): Promise<boolean> {
+  /**
+   * `handled` = stop retrying this line. `landed` = it actually reached the
+   * ledger. They are NOT the same, and a caller that cannot tell them apart
+   * cannot tell a publish from a give-up.
+   */
+  async function publishOne(line: OutboxLine): Promise<{ handled: boolean; landed: boolean }> {
     try {
       const layer = LAYER_OF[line.kind];
       if (layer === undefined) {
@@ -111,7 +127,7 @@ export function createDaemon(opts: DaemonOptions) {
         log.error('cli.outbox.unknownKind', 'dropping an outbox line with an unknown kind', {
           project_id, agent_id, kind: line.kind,
         });
-        return true;
+        return { handled: true, landed: false };
       }
 
       let body = line.body;
@@ -134,7 +150,7 @@ export function createDaemon(opts: DaemonOptions) {
       if (res.seq > state.last_written_seq) {
         await agentic.writeState({ ...state, last_written_seq: res.seq });
       }
-      return true;
+      return { handled: true, landed: true };
     } catch (err) {
       if (err instanceof StoreAuthError) {
         // The caller must STOP, not retry. Bubble it: a revoked token is not a
@@ -145,14 +161,14 @@ export function createDaemon(opts: DaemonOptions) {
         log.info('cli.outbox.retryLater', 'backend unavailable, keeping the line queued', {
           project_id, agent_id, kind: line.kind, error: (err as Error).name,
         });
-        return false;
+        return { handled: false, landed: false };
       }
       // A named, non-retryable failure. Log it and treat the line as handled,
       // or one malformed message blocks every later one forever.
       log.error('cli.outbox.rejected', 'line rejected by the store, dropping it', {
         project_id, agent_id, kind: line.kind, error: (err as Error).message,
       });
-      return true;
+      return { handled: true, landed: false };
     }
   }
 

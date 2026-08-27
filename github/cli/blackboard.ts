@@ -94,12 +94,50 @@ export function createBlackboard(opts: BlackboardOptions) {
       await ensureBranch();
 
       const abs = join(opts.cwd, relPath);
+
+      // Is this fact already published? A version is IMMUTABLE, so there are
+      // exactly two cases and they need opposite answers.
+      const existing = await opts.git.run(['show', `${BLACKBOARD_BRANCH}:${relPath}`]);
+      if (existing.code === 0) {
+        if (existing.stdout === contents) {
+          // Identical bytes: an idempotent replay. The CLI's wire path is
+          // deliberately at-least-once, so a re-send after a crash lands here
+          // and MUST succeed with the original pointer rather than fail.
+          const sha = await git(
+            ['rev-list', '-1', BLACKBOARD_BRANCH, '--', relPath], 'find the publishing commit',
+          );
+          log.info('blackboard.alreadyPublished', 'identical fact already on the branch', {
+            path: relPath, commit_sha: sha,
+          });
+          return { path: relPath, commit_sha: sha, raw_url: rawUrl(opts.repo, sha, relPath) };
+        }
+        // Different bytes at the same path. blackboard.md: "Versions are new
+        // files, never edits. Editing items-api.v1.yaml in place destroys the
+        // diff that tells a consumer what broke." Refuse loudly.
+        throw new StoreError(
+          `blackboard: ${relPath} already exists with different content. `
+          + 'A version is immutable -- publish a new version rather than editing one.',
+        );
+      }
+
       await mkdir(dirname(abs), { recursive: true });
       await writeFile(abs, contents, 'utf8');
 
       // ONE path. Never `git add -A` -- order 0004, and it is also what keeps a
       // publish from sweeping up an agent's unrelated working-tree mess.
       await git(['add', '--', relPath], `stage ${relPath}`);
+
+      // "Nothing to commit" exits non-zero, and treating that as a failure is
+      // what broke the second demo run after the first had already published
+      // the same fact. Distinguish it from a real commit failure by asking
+      // whether anything is actually staged.
+      const staged = await opts.git.run(['diff', '--cached', '--quiet', '--', relPath]);
+      if (staged.code === 0) {
+        const sha = await git(
+          ['rev-list', '-1', BLACKBOARD_BRANCH, '--', relPath], 'find the publishing commit',
+        );
+        return { path: relPath, commit_sha: sha, raw_url: rawUrl(opts.repo, sha, relPath) };
+      }
       await git(['commit', '-m', message], 'commit');
 
       const push = await opts.git.push(['origin', `HEAD:${BLACKBOARD_BRANCH}`]);
