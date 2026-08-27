@@ -937,6 +937,70 @@ The 34-minute figure is the honest other half: **route G is correct and slow.** 
 17 minutes because 301 appends are 301 pushes. Neither cloud route pays that.
 
 
+### Entry 18, measured — and the mutation testing is the real finding
+
+I told the coordinator that "window zero" was reasoned rather than measured, because A7 and A8
+cover intersecting and disjoint globs and **neither injects a competitor at the one instant the
+race occupies** — between the generation read and the push. Catalyst tested its mitigation from
+both sides; I had not. Order 0028 downgraded the register entry accordingly.
+
+`github/store/scope-race.live.test.ts` now injects exactly there: agent B acquires `src/**` from
+inside agent A's transport, at the moment A finishes reading the locks it is about to reason
+about. A then pushes with a generation that is already stale, holding `src/api/**` — overlapping
+but not identical, the case `is_unique` cannot catch.
+
+```
+✔ entry 18: a competitor injected between the pre-check and the push cannot both win   11,870 ms
+✔ entry 18 control: with NO competitor injected, the same call succeeds                 6,137 ms
+```
+
+A is rejected, its conflict **names `agent_bbb` and carries `src/**`** (correlation, not count),
+and exactly one lock survives. The control test exists so that an `acquireScope` which rejected
+*everything* could not pass the first one.
+
+**Then I mutation-tested it, per order 0025 — and it did not discriminate.**
+
+```
+MUTANT 1  generation ref still pushed, CAS lease REMOVED   -> test PASSED   <-- bad
+MUTANT 2  generation ref removed from the push entirely     -> test FAILED  <-- good
+```
+
+Mutant 2 proves the test is not vacuous: it genuinely detects an open window. But **mutant 1
+proves the CAS is not what closes it.** The window is closed by *two independent* mechanisms:
+
+1. **the explicit CAS lease** — designed, and what I described to the coordinator;
+2. **generation commits being orphans** — accidental.
+
+`mkObject` builds commits with `commit-tree` and **no parent**, so pushing one over an existing
+generation ref is a non-fast-forward and the server rejects it. That is the descendant rule this
+project already measured, quietly doing load-bearing work nobody designed it to do.
+
+**Mechanism 2 is fragile in a plausible way.** Chaining generation commits — parenting each to
+the previous — is an obvious improvement for auditability, and it would make every plain push a
+fast-forward and evaporate mechanism 2 entirely. The CAS would still hold, so nothing would
+break *yet*; but the live race test would still pass either way, so a later regression that
+dropped the CAS would then go undetected. Two protections, one test, no attribution.
+
+`github/store/scope-invariants.test.ts` pins both, offline, and I mutation-tested the pins too:
+
+```
+MUTANT 1  CAS lease removed        -> orphan test PASSES, both CAS tests FAIL
+MUTANT 3  generation commits chained -> orphan test FAILS, both CAS tests PASS
+```
+
+Each mutant is caught by exactly the test that owns it. **That is what I should have had before
+claiming the window was closed**, and the general lesson is sharper than the fix: a passing test
+told me my mechanism worked, and it was true, and it was *not evidence for the mechanism I
+thought it was evidence for*. Redundant protection is indistinguishable from correct protection
+until you remove one.
+
+This is the same habit the coordinator named in order 0028 — recording a conclusion at the
+confidence claimed rather than the confidence the evidence supports — arriving from my side of
+the boundary rather than theirs.
+
+34 offline tests now, still zero quota.
+
+
 ### Order 0026's edit-size rule, applied retroactively to my own tree
 
 0026: *"I checked the result of the mechanical edit and it looked right, when what I needed to
