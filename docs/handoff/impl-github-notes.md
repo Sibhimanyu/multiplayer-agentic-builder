@@ -1265,6 +1265,45 @@ than by a reviewer.
 
 ---
 
+## G2 — claim round-trip, 200 claims
+
+```
+claimTask WIN                        n=200  min=1,883  p50=2,182  p95=2,805  max= 3,452  mean=2,272
+claimTask LOSE (incl. owner lookup)  n=199  min=1,811  p50=2,096  p95=2,692  max= 4,134  mean=2,191
+releaseTask                          n=200  min=2,545  p50=2,943  p95=3,488  max=36,293  mean=3,163   ms
+
+ops: pushes=603  rest=801  transport_retries=0
+claim push ATTEMPTS: 401 for 400 claims (1.0025 per claim)
+operations that needed a retry: 1 of 600 -- that sample EXCLUDED from the distributions
+```
+
+**The 36,293 ms `releaseTask` outlier is reported, not averaged away.** One sample in 200, at
+**10× p95**. Order 0012's rule was written for exactly this shape — *"a claim that occasionally
+stalls over a second is user-visible and a mean of 139 ms hides it."* Note the mean (3,163) sits
+above p50 (2,943) purely because of that one sample, which is why p50/p95 are the summary and the
+mean is shown only so the distortion is visible.
+
+I am not calling 36 s a ceiling or a threshold. It is one observation, on a real network, of a
+`git push` that stalled. What generalises is that this route's tail is **long** — a push can hang
+far past its median, and any caller with a user waiting on it needs a timeout of its own.
+
+### `claimTask` is essentially uncontended here — and that qualifies probe G
+
+401 push attempts for 400 claims. Contention is not what makes this route slow; **round-trip
+latency is**, and it is remarkably flat: min 1,883 and p95 2,805 on the winning path.
+
+**Losing (2,096 ms) is now marginally faster than winning (2,182 ms), which looks like it
+contradicts probe G — and does not.** Probe G measured the raw `git push` alone: reject 1,084 ms
+vs create 2,165 ms, and a rejected push is genuinely cheaper because nothing transfers. G2
+measures the whole **adapter operation**, and the loss path additionally does the owner lookup
+(2 REST calls, ~1.1 s) that turns `{ok:false}` into `{ok:false, owner}`. Add those and the two
+paths land within 4% of each other.
+
+Both figures are correct for what they measured, and neither should be quoted as "the claim
+latency" without saying which. The number a caller experiences is **G2's**.
+
+---
+
 ## G4, G5, G6 — operations and cost
 
 ### G4 — operations per store call, measured
