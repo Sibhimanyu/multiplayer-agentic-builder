@@ -1228,6 +1228,142 @@ error. Flagging it because it is a reading of the interface, not just an impleme
 
 ---
 
+## G4, G5, G6 — operations and cost
+
+### G4 — operations per store call, measured
+
+Not estimated from the code. Instrumented counters, one call each, against the real remote:
+
+```
+operation                     git pushes   REST calls   retries
+appendEvent                            1            2         0
+claimTask (win)                        1            0         0
+claimTask (lose)                       1            2         0
+releaseTask                            1            2         0
+heartbeat (first)                      1            1         0
+heartbeat (subsequent)                 1            0         0
+listPresence                           0            4         0
+readEvents                             0            1         0
+readEvents (unchanged ledger)          0            1         0
+readSnapshot                           0            7         0
+acquireScope                           1            2         0
+```
+
+**The two columns are not the same currency, and that is the whole G5/G6 story.**
+
+`git push` is **unmetered**. There is no per-push quota on GitHub, so every write in the left
+column costs nothing against any allowance. Only the REST column counts, against 5,000/hour —
+and a conditional GET returning 304 costs **zero** of those (measured: 10 × 304 → counter
+unchanged; 10 × 200 → counter −10).
+
+**`claimTask` on the winning path costs one push and ZERO metered operations.** The primitive
+Catalyst pays 5 SELECTs + 2 INSERTs for, and Firebase pays a transaction for, route G gets for
+free. That is the single sharpest number this route produced.
+
+`readSnapshot` at 7 REST calls is the expensive read, and it is the one a dashboard polls. At a
+5 s poll that is 5,040 calls/hour — **over the limit on its own**. Which is exactly why
+`subscribe` uses a conditional GET: unchanged state returns 304 and costs nothing, so the poll
+is only expensive when something actually changed. If the `Accept` header ever drifts (probe H),
+that 7-call read becomes 7 *metered* calls every 5 s and the hour's quota is gone in twelve
+minutes. The chokepoint is not tidiness; it is the difference between viable and not.
+
+### G5 — extrapolated monthly cost
+
+**$0, at 2 people and at 10 people.**
+
+Not an extrapolation from a rate card, because there is no rate card to apply: route G uses a
+private GitHub repository, `gh auth login`, and nothing else. There is no billing account, no
+project, no metered service, and nothing to attach a card to. GitHub's free tier includes
+unlimited private repositories and 2,000 Actions minutes/month; route G's only Actions use is the
+reaper (one scheduled job) and the demo's CI.
+
+Per order 0017's standard I will not convert anything to money without a verified rate card. Here
+the honest statement is not a converted figure — it is that **no meter exists on the write path
+at all**.
+
+The real ceiling is the **5,000 REST calls/hour** rate limit, which is per-user and not per-repo.
+That is a concurrency ceiling, not a bill: exceeding it is a 403 that clears within the hour,
+mapped to `StoreBusyError` and retried with backoff.
+
+### G6 — free-tier headroom after the demo
+
+**Effectively untouched, and this is the asymmetry route G exists to demonstrate.**
+
+The entire section A suite ran **three times** in one afternoon, plus the F1–F12 demo four times,
+plus every probe. Nothing was rationed and nothing had to be held back.
+
+Against the other two routes as recorded in the register: Catalyst had to hold A5 as ~15% of a
+**monthly** SELECT allowance and could afford roughly eight suite runs a month; Firebase excluded
+A2 as ~20% of two monthly allowances. Route G ran everything, repeatedly, and could run it all
+again tomorrow.
+
+**The honest other half:** what route G spends instead is **wall clock**. A5 alone is 17 minutes
+because 301 appends are 301 pushes. The full suite is 34 minutes. Neither cloud route pays that.
+If the final comparison reads "route G wins on cost", it must read **"route G trades latency for
+cost and setup"**.
+
+---
+
+## G7 — lines of code
+
+```
+the adapter (what G7 asks for)
+  github/store/github.ts       1,259
+  github/store/refs.ts           175
+  github/store/transport.ts      308
+                               -----
+                               1,742   of which 1,105 code, 476 comment, 161 blank
+
+everything else in my tree, for context
+  github/cli/**                1,179
+  github/webhook/map.ts          267
+  github/reaper.ts               159
+  tests                        2,649
+```
+
+**1,742 lines for the adapter, 1,105 of them code.** The comment fraction is 27% and deliberately
+high: most of it records a *measured* result and why the obvious alternative is wrong — the `rc=0`
+no-op, `--atomic` rollback, lexical ref ordering, the media-type-dependent ETag. Those are the
+findings that cost the most to obtain and are the easiest for a later refactor to undo silently.
+
+**Tests are 1.5× the adapter.** That ratio is not padding: 75 of them run offline at zero quota,
+which is what makes it possible to change the adapter without spending a suite run to find out.
+
+---
+
+## G8 — build hours, honestly
+
+From my own commits on this branch — first route-G commit to now:
+
+```
+span                                18.02 h   (includes overnight)
+session breaks (gaps > 30 min)      15.54 h
+ACTIVE                               2.48 h   over 18 commits
+```
+
+**And most of the active time was waiting, not building.** Summing the runs I actually timed:
+
+```
+section A, three full runs              6,084 s
+A5 re-run + A2 re-run                   1,616 s
+F1-F12, four runs                       3,630 s
+probes (primitives, seq, atomic)        1,500 s
+                                       ------
+                                       12,830 s = 3.56 h of measurement
+```
+
+That exceeds the 2.48 h of "active" commit-gap time because runs overlapped with writing — but
+the shape is unambiguous: **the dominant cost of building route G was waiting for its own
+measurements, not writing its code.** A5 at 17 minutes and F11 at 15 minutes are single tests.
+
+I am reporting this as a *shape* rather than a precise figure, because commit gaps measure wall
+clock between commits and not effort, and I cannot separate thinking from waiting after the fact.
+What is defensible: 18 commits, ~2.5 h of active elapsed time, and more of it spent watching live
+runs than writing the adapter.
+
+
+---
+
 ## Route-G observations for the register (coordinator writes it, not me)
 
 Per orders 0008/0013/0015 I do not edit `docs/handoff/g9-asymmetries.md`. Candidates:
