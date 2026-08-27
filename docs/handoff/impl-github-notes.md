@@ -646,6 +646,131 @@ silently, and requirement 2 costs nothing, so both.
 
 ---
 
+## `store/github.ts` — the adapter
+
+Files, all in my own tree per `territory.md`. Root `npm test` is untouched at exactly 19/19 and
+no test of mine resolves through `shared/`.
+
+```
+github/store/refs.ts         ref layout, padding, composite keys
+github/store/transport.ts    injectable git + REST seam, error mapping
+github/store/github.ts       the adapter
+github/store/refs.test.ts        \  26 tests, no network, zero quota
+github/store/transport.test.ts   /
+github/store/github.live.test.ts registers shared/store/conformance.ts UNMODIFIED
+tsconfig.github.json         a NEW file, per order 0006 section 4
+```
+
+### The event ref IS the seq allocator
+
+The obvious shape is "allocate a seq, then write the event" — two contended round trips. Here
+they are one: `refs/agentic/<proj>/ev/<0000000042>` is created with the create-if-absent lease,
+so **winning the ref and owning the seq are the same event**. A rejection means someone took that
+number; increment and retry, never re-read the same candidate (the spin order 0005 warned about).
+
+### MB1b does not arise on this route, rather than being solved
+
+Order 0008 had to rule on Catalyst's write order: event first carrying its own dedupe key, then
+the dedupe row, with orphan recovery for a crash between them. That whole problem is a
+consequence of not having a transaction.
+
+Probe M measured that `--atomic` genuinely rolls back — on a partial rejection *neither* ref
+lands, verified in both directions. So the event ref and the dedupe ref go in **one push** and
+there is no window in which one exists without the other. Nothing to order, nothing to recover.
+
+Without `--atomic` the same collision leaks an orphan, measured — so it is load-bearing, not
+decorative.
+
+### The scope-lock race — closed, and this is route G's strongest result
+
+Order 0018 calls Catalyst's scope-lock race the largest asymmetry in the register, and is
+careful about why: entry 2 cost a naming convention, but entry 18 costs a **residual correctness
+window that can be narrowed but not closed**, because the primitive needed to close it does not
+exist. Two agents with overlapping-but-not-identical globs can both pass the pre-check, and
+`is_unique` cannot stop them because their keys differ.
+
+**Route G closes it.** The reason is a property I had not needed until now:
+`--force-with-lease=<ref>:<sha>` with a **non-empty** expected value is a genuine
+compare-and-swap on a ref's value, not merely create-if-absent. That turns a generation ref into
+a serialisation point:
+
+1. read `locks-gen` and the locks it describes,
+2. check glob intersections against exactly that set,
+3. push the new lock **and** the generation bump in one `--atomic` push whose lease pins
+   `locks-gen` to the sha read in step 1.
+
+Anyone who acquired in between moved the generation, so the CAS fails and the whole push rolls
+back. The window is **zero**, not narrow. No deterministic tie-break is needed because there is
+no residual race left to break a tie in.
+
+To be clear about what this is and is not: it is optimistic concurrency control, the same idea as
+a version column, and it costs a retry under contention. It is not magic and it is not free. But
+"needed a workaround" and "cannot be made correct" must not end up in the same column, and on
+this row route G is in the first.
+
+### Everything else, briefly
+
+- **`claimTask`** decides on the `--porcelain` status character, never `rc` — the correction
+  above. The claim object carries `agent_id` *and* `task_id`, so two agents cannot build the same
+  sha. Both defences, not either.
+- **`releaseTask`** is a lease pinned to the owner's sha; its rejection is swallowed because the
+  interface defines releasing what you do not own as a no-op. **No plain-delete fallback** — the
+  fallback is the vulnerability.
+- **`heartbeat`** is one ref update and zero durable rows, timestamp in the ref name.
+- **`readEvents`** does one `git fetch` of the event namespace and then reads objects locally.
+  One network round trip regardless of page size, and safe to cache forever because an event is
+  immutable (MB3).
+- **Error mapping** is one chokepoint on structured fields only: HTTP status for REST,
+  `--porcelain` flag plus exit code for git, and `rc=128` — which collapses auth, offline, DNS
+  and missing-repo — resolved by one REST call rather than by reading git's prose. 25 tests
+  through an injected transport per order 0020, zero quota, covering a 429 carrying `Retry-After`
+  and a mid-flight transport drop.
+- **Credentials** (order 0024): route G reads its token from `gh auth token` at call time. There
+  is no key file, nothing in the repo, and nothing to place outside it. Compliant by
+  construction rather than by discipline.
+
+### Two bugs my own tests caught, both worth keeping
+
+**1. `padSeq` threw on the first real heartbeat.** Epoch milliseconds are 13 digits and
+`SEQ_WIDTH` is 10, so the guard refused to emit a truncated name. It was right and the caller was
+wrong. Fixed by giving timestamps their own named width — **not** by widening `SEQ_WIDTH` to make
+the error go away, which would have been fixing the guard instead of the tooling (order 0009).
+Had it wrapped instead of thrown, a live agent would have sorted below a dead one.
+
+**2. A11 caught my read-your-own-writes fold feeding a subscriber whose own link was down.**
+After a successful append the adapter folds its own acknowledged event into its cached snapshot
+and notifies — real read-your-own-writes, and what a live client wants. But `seedEvent`, which
+models *another* client writing, went through the same path, so an event written during a
+simulated outage was delivered to the very subscriber that is supposed to be blind. Suppressed
+for foreign writes. The test found a genuine defect, not a harness artefact.
+
+### FLAG for the coordinator — a timing assumption in the shared suite
+
+Not worked around silently, and `shared/` not touched.
+
+**A10 and A11 assert a delivery within `settle()` — four microtasks.** No network-backed adapter
+can answer that: any read on this route is a ~1 s round trip, so a cold `subscribe` delivers
+nothing inside four microtasks no matter what it does.
+
+They pass here because the adapter keeps a snapshot cache and the harness warms it after seeding.
+That is the real client lifecycle — render with `readSnapshot`, then `subscribe` — made explicit.
+**Nothing is fabricated:** the cache is filled by a real `readSnapshot` of the real backend, and
+A10 asserts the delivered snapshot actually contains the seeded task, so order 0020's concern
+about "a `subscribe` firing with an empty `Snapshot`" would still fail exactly as intended.
+
+Two reasons I am raising it rather than leaving it as my private workaround:
+
+1. It will bite **Catalyst** the moment its `subscribe` is unstubbed, since C1 is also poll-mode.
+   Better a known thing than a surprise mid-run.
+2. If the intended reading is that `subscribe` may fire from cache, that should be stated in
+   `store-interface.md` rather than discovered independently by each poll-mode route — which is
+   the "two different interpretations" failure the shared suite exists to prevent.
+
+I am not proposing wording. It is a shared file and the ruling is the coordinator's.
+
+
+---
+
 ## Route-G observations for the register (coordinator writes it, not me)
 
 Per orders 0008/0013/0015 I do not edit `docs/handoff/g9-asymmetries.md`. Candidates:
