@@ -31,14 +31,33 @@ human to get started.
 
 Probed against the real GitHub remote before this brief was written.
 
-**The trap:** a plain `git push origin <sha>:refs/claims/task-42` to an existing claim ref
-**SUCCEEDS** as a fast-forward. Agent 2 silently steals agent 1's claim. Verbatim:
+**The trap — and my original statement of it was wrong in an important way.**
+
+I first wrote that a plain `git push origin <sha>:refs/claims/task-42` to an existing claim ref
+**always** succeeds. **Corrected 2026-08-26 by measurement:** it succeeds only when the
+challenger's SHA is a **descendant** of the holder's.
 
 ```
-   72d448f..3fb9169  ... -> refs/claims/probe-task-42
+challenger is a SIBLING     -> ! [rejected] (non-fast-forward)   holder retained
+challenger is a DESCENDANT  ->   c620ebe..aa35396                CLAIM SILENTLY STOLEN
 ```
 
-That is the racy read-verify-write class the protocol forbids, wearing a git hat.
+My probe used `HEAD` and `HEAD~1` — two commits on one line — so I measured the descendant case
+and generalised it to "any existing ref".
+
+**Why the wrong reason is more dangerous than no reason.** If you believe "naive push always
+fails on an existing ref", you conclude the naive form is *safe* — it visibly rejects — and ship
+it. And the descendant case is not exotic: an agent claiming with its current branch tip, in a
+repo where agents share history, produces descendant SHAs constantly. It is a claim-steal that
+surfaces only once two agents happen to be on the same line of history, which is the worst
+possible reproduction profile.
+
+Two design consequences:
+
+- Build claim commits as **fresh commits made for the claim** (`git commit-tree` off a fixed
+  base), never the agent's working branch tip. That makes all claim commits siblings.
+- **Use the lease anyway.** "Siblings by construction" is an invariant a future refactor can
+  quietly break; the lease does not depend on it.
 
 **The correct primitive** is a lease with an *empty* expected value, meaning "only if absent":
 
@@ -55,6 +74,19 @@ B2  ref exists  -> ! [rejected] ... (stale info)           REJECTED
 
 Server-enforced, atomic, no database. This is your `claimTask`. A rejection is
 `{ok:false, owner}` — a normal outcome, not an error. Read the owner from the ref's commit.
+
+**The lease needs no prior fetch.** `--force-with-lease` normally requires a remote-tracking ref;
+with an explicit *empty* expected value it does not. So `claimTask` is a single round trip with
+**no read step and therefore no read-verify-write window at all** — verified against a client that
+had never seen the ref. Neither cloud route achieves that.
+
+**`releaseTask` has a trap the first version of this brief missed.** The obvious
+`git push origin :refs/claims/<task>` lets **any agent release any other agent's claim**, rc=0.
+Release must be a lease **pinned to the owner's sha**. Ownership then becomes server-enforced for
+free. But the pinned delete returns rc=1 for *both* "you do not own it" and "it was already gone",
+and the interface requires releasing a task you do not own to be a no-op rather than an error — so
+the adapter must **swallow** that rejection, and must **never** fall back to a plain delete to
+force rc=0. The fallback is the vulnerability.
 
 **Probe it yourself before building on it.** I ran it sequentially; you should run it
 concurrently, and A2 requires 20 concurrent claimants with exactly one winner, 50 rounds.
@@ -90,9 +122,22 @@ The agent creates the new ref then deletes the old one. `git ls-remote refs/hear
 conditional API call returns every heartbeat with **no object reads at all** — the timestamp is
 the ref name. Each agent owns its own namespace, so there is zero contention.
 
-The create-then-delete pair is not atomic, so a reader may briefly see two refs for one agent.
-**Take the max.** It may also see zero for a moment; treat absent-but-recently-seen carefully
-and never as "instantly offline".
+**Improved on by measurement — it does not have to be two pushes.** A single
+`git push --atomic` performs the create and the delete together, so the two-ref window does not
+exist:
+
+```
+git push --atomic origin $SHA:refs/heartbeats/$A/<new> :refs/heartbeats/$A/<old>
+```
+
+Measured over 80 reader observations across 5 concurrently-heartbeating agents, while a 20-way
+claim race saturated the same remote: **always exactly one ref. Never two, never zero.**
+
+Keep take-the-max at the reader regardless — it costs nothing and guards against a partial push
+from an older client — but the transient is eliminated at the source rather than tolerated.
+
+The timestamp is read **entirely from the ref name**, so no object is ever fetched to answer "is
+this agent alive". That is the property that makes presence viable here.
 
 If you find something better, say so in a commit message. If this cannot satisfy A9, that is a
 real finding — report it rather than weakening the test.

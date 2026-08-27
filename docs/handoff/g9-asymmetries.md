@@ -62,6 +62,22 @@ is for. It would also distort G7 (adapter LOC) and G8 (build hours) in Catalyst'
 General rule: **a workaround for a platform deficiency stays in that platform's tree.** If it
 lands in `shared/`, the deficiency stops being visible.
 
+## Route G has data now — three rows where it beats both cloud routes
+
+The table above is Catalyst versus Firebase. Route G (GitHub-only) is measured in
+`docs/results/route-g-run-1.md`. Three findings belong here because route G does **better than
+both**, which the two-column table cannot express:
+
+| Guarantee | Catalyst | Firebase | **Route G** |
+|---|---|---|---|
+| Manual console gates to first deploy | **3** — project, Stratus, Slate | **2** — project, service-account key | **0.** One CLI command, zero accounts, zero billing, nothing blocked on a human. |
+| Atomic claim | `is_unique` insert conflict, plus a **residual scope-lock race** it can narrow but not close | `runTransaction` | A **lease with an empty expected value**, needing no prior fetch — so a single round trip with **no read step and therefore no read-verify-write window at all** |
+| Ownership check on release | application code | application code | **server-enforced for free** by pinning the lease to the owner's sha |
+| Presence / heartbeat | Cache PUT with TTL, zero rows | one field write per beat | **one ref update, zero rows**, storage footprint exactly one ref per agent forever |
+
+Route G's weak spots are still expected to be `seq` ordering and latency, neither yet measured.
+Do not read the rows above as a verdict.
+
 ## The largest asymmetry so far
 
 Entry 18 is bigger than the composite-key scheme in entry 2, and the difference in kind matters
