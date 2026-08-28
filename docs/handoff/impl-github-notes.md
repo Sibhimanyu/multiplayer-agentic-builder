@@ -23,8 +23,11 @@ Everything below is measured against the real GitHub remote unless it says other
 | **A2** | 50/50, once failed, 50/50, 50/50 — 1,000 claims per pass |
 | **Sections B, D** | 75 offline tests, **zero quota** |
 | **F1–F12** | **12/12 clean**, real 15-minute reaper timeout |
-| **G1** publish → visible | p50 **7,599 ms**, p95 9,922 (n=100) |
-| **G2** claimTask win | p50 **2,182 ms**, p95 2,805 (n=200) |
+| **G1** appendEvent | p50 **3,262 ms**, p95 5,186 (n=100), flat as the ledger grows |
+| **G1** publish→visible, floor | p50 **7,599 ms** (tight loop, no subscriber, n=100) |
+| **G1** publish→visible, subscriber | p50 **8,551 ms** (poll @ 5,000 ms, n=12) |
+| **G2** claim, **contended** | p50 **4,532 ms**, p95 5,353, p99 5,891 (20 racers × 50 rounds) |
+| **G2** claim, uncontended | p50 **2,182 ms**, p95 2,805 (n=200) |
 | **G3** full demo | 1,088 s — **but 944 s of it is F11's deliberate wait**; 144 s without it |
 | **G4** claimTask (win) | 1 git push, **0 metered operations** |
 | **G5** monthly cost | **$0**, at 2 people and at 10. No meter exists on the write path. |
@@ -34,10 +37,15 @@ Everything below is measured against the real GitHub remote unless it says other
 | **Provisioning** | **1 CLI command, 0 console steps, 0 accounts, 0 billing** |
 
 **Where route G wins:** setup cost, and the fact that its atomic primitive is free and
-server-enforced. **Where it loses:** latency — seconds, not milliseconds — and a long tail
-(one `releaseTask` in 200 took 36 s). **The condition:** every load-bearing fact here had to be
-probed, because four of them are things the documentation does not say and the obvious reading
-gets backwards.
+server-enforced — `claimTask` costs one git push and **zero** metered requests, against
+Catalyst's one Stratus Upload from a 2,000/month allowance. **Where it loses: every latency row,
+and not narrowly** — claim 2,182 ms against Catalyst's 127 ms, subscriber propagation 8,551 ms
+against Firebase's 191 ms — plus a long tail (one `releaseTask` in 200 took 36 s).
+**The condition:** every load-bearing fact here had to be probed, because four of them are things
+the documentation does not say and the obvious reading gets backwards.
+
+**Every figure above names its host and its mechanism**, and the comparability audit further down
+marks explicitly which rows may sit beside the other two routes and which may not. Three may not.
 
 ### Things I got wrong and found myself
 
