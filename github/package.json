@@ -11,6 +11,7 @@
     "g": "GITHUB_LIVE=1 node --test --test-timeout=7200000 demo/g-series.live.test.ts",
     "g1": "GITHUB_LIVE=1 node --test --test-timeout=7200000 --test-name-pattern=G1 demo/g-series.live.test.ts",
     "g2": "GITHUB_LIVE=1 node --test --test-timeout=7200000 --test-name-pattern=G2 demo/g-series.live.test.ts",
-    "g34": "GITHUB_LIVE=1 node --test --test-timeout=7200000 --test-name-pattern=G3 demo/g-series.live.test.ts"
+    "g34": "GITHUB_LIVE=1 node --test --test-timeout=7200000 --test-name-pattern=G3 demo/g-series.live.test.ts",
+    "live:a4": "GITHUB_LIVE=1 node --test --test-timeout=900000 --test-name-pattern=\"A1 |A4 |A6 \" store/github.live.test.ts"
   }
 }
