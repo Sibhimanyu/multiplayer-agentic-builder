@@ -1761,3 +1761,185 @@ I have not edited `docs/results/` — it is coordinator-owned.
 The `/diag/putobject` and `/diag/readpath` routes remain deployed and are authenticated like
 every other route. They should be deleted once G1 is settled; they are recorded here so they are
 not forgotten.
+
+---
+
+# Orders 0032 + 0034 — `is_unique` DOES NOT HOLD UNDER CONCURRENCY
+
+Three debts. The second one produced a finding that outranks everything else in these notes,
+including its own order, so it is first.
+
+## THE HEADLINE: the claim primitive does not provide mutual exclusion
+
+**5 agents, 5 distinct tokens, racing for one task. n=200 tasks, 1,000 requests.**
+**2026-08-28T04:21:56Z**, host `multiplayer-agents-60083782173.development.catalystserverless.in`.
+
+```
+tasks with exactly one winner   31/200
+violations (0 or >1 winners)   169/200
+transport failures                0
+winners counted                 547   across 200 tasks
+```
+
+**An 84.5% violation rate.** On average 2.7 of the 5 racers were each told `{"ok":true}` for the
+same task.
+
+### Verified against durable state, not just my harness
+
+My harness could have been miscounting, so I checked the table:
+
+```
+SELECT COUNT(ROWID) FROM task_claims  ->  554
+```
+
+554 rows for 205 distinct task ids (200 + a 5-task smoke run). The two sources agree exactly —
+547 + 7 = 554. **349 rows exist that the schema says are impossible.** Two examples, verbatim:
+
+```
+proj_inventory:task_race_mtcg2082_2  agent_race02  ROWID ...098033
+proj_inventory:task_race_mtcg2082_2  agent_race04  ROWID ...101027
+proj_inventory:task_race_mtcg2082_4  agent_race01  ROWID ...096026
+proj_inventory:task_race_mtcg2082_4  agent_race03  ROWID ...103030
+```
+
+And the constraint is genuinely declared on the live table — `List_All_Columns` on
+`task_claims` reports `claim_key`, `varchar(255)`, **`is_unique: true`**, `is_mandatory: true`.
+
+So this is not my handler misreporting and not a schema drift. **Catalyst Data Store's
+`is_unique` rejects duplicates sequentially but does not enforce them under concurrent insert.**
+
+### Why this is a route-level finding, not a row-level one
+
+The original handoff's stack table says: *"Ledger + claims | Data Store | `is_unique` gives
+atomic claim without transactions."* That premise is false in the only case that matters. My
+day-one probe (P2) proved rejection **sequentially**, and I recorded it as establishing the
+atomic primitive. It did not. Sequential rejection and concurrent mutual exclusion are different
+properties and I tested the easy one.
+
+That is the same defect class as everything else in this register — a probe that could not
+distinguish the passing case from the failing one — and it sat undetected for the whole build
+because **every claim test I ran was uncontended**. The dry run's "20 concurrent claims produce
+exactly one winner" passed against a *double* that enforced uniqueness correctly. The double was
+faithful to the documented behaviour; the platform is not.
+
+**Scope, stated precisely.** I measured this for `task_claims`. The identical mechanism backs
+every other atomic guarantee on this route:
+
+| Guarantee | Column | Measured? |
+|---|---|---|
+| exactly-one claim (A2) | `task_claims.claim_key` | **measured — FAILS at 84.5%** |
+| idempotent append (A1) | `request_dedupe.dedupe_key` | not measured, same mechanism |
+| strictly ascending seq (MB4) | `events.seq` | not measured, same mechanism |
+| scope locks (A7) | `scope_locks.lock_key` | not measured, same mechanism |
+| agent identity | `agents.agent_id` | not measured, same mechanism |
+
+I am **not** reporting those four as broken. They share the mechanism, so they are *presumed
+affected and unverified* — which is exactly the distinction this register keeps insisting on.
+
+**A2 cannot pass on this route as designed.** No amount of adapter code fixes it, because the
+platform primitive the design selected does not have the property the design requires.
+
+### The latency numbers, which are now secondary
+
+Reported because 0034 asked, and with no mean per its instruction:
+
+| | n | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|
+| winners | 547 | 122 ms | 140 ms | 188 ms | 230 ms |
+| losers | 453 | 129 ms | 155 ms | 205 ms | 246 ms |
+| all attempts | 1,000 | 126 ms | 144 ms | 196 ms | 246 ms |
+
+Wall clock 27 s. Winners and losers are reported separately because they are different
+operations — a loser returns as soon as the constraint rejects it, a winner waits for its INSERT
+to commit — and averaging them would be a third measurement-shape artifact.
+
+**These figures should not go in the scoreboard.** A claim latency is only meaningful for an
+operation that performs a claim, and 84.5% of these did not. The contended row that 0034 asked
+for cannot be filled by this route until the primitive works.
+
+Notably the contended p50 of 126 ms is *indistinguishable* from the uncontended 127 ms — which
+is itself the tell. A working exclusive-claim primitive should show contention somewhere in the
+distribution. This one shows none, because it was not excluding anything.
+
+**Quota spent:** 2,000 SELECT (2 auth × 1,000 requests) and 1,000 INSERT attempts, of which the
+platform committed 554. That is 20% of the monthly SELECT allowance and 20% of INSERT.
+`task_claims` was truncated afterwards.
+
+## Debt 1 — order 0032: the Stratus quota question. THE AXES ARE COMMENSURABLE.
+
+0032 anticipated that Stratus might be metered on a different axis and told me to stop rather
+than convert. **It is not.** Both are metered **per request**, from
+`catalyst-pricing/references/pricing-basics.md` (verified May 2026):
+
+| | free tier / month | unit price | unit |
+|---|---|---|---|
+| **Stratus Download** | **10,000 requests** | $0.0000004 | per request |
+| **Stratus Upload** | **2,000 requests** | $0.000005 | per request |
+| **Data Store SELECT** | **10,000 requests** | $0.00006 | per request |
+| Data Store INSERT | 5,000 requests | $0.0001 | per request |
+
+Same axis, same unit, no conversion required.
+
+### The comparison
+
+- **C1 read** = 1 Stratus Download. The signed URL is per-key and reusable until it expires, so
+  at a 600 s expiry and 5 s polling the auth SELECTs amortise across ~120 polls — negligible.
+- **C2 read** = 3 SELECTs (2 auth + 1 events query), measured in G4.
+
+| | per read | free-tier reads/month |
+|---|---|---|
+| C1 snapshot GET | $0.0000004 | **10,000** |
+| C2 `readEvents` | $0.00018 | **3,333** |
+
+**C1 is 450× cheaper per read and has 3× the free-tier headroom.** At the design's own polling
+rate — one dashboard at 5 s for 30 days, 518,400 reads — that is **$0.20 against $92.71**.
+
+### The ruling
+
+The interpretation was **pre-registered by the coordinator in 0032 §2, before anyone had seen
+these numbers**, so this is their rule applied rather than one I wrote after the fact:
+
+> *Stratus GETs materially cheaper against quota → C1's narrowed case survives.*
+> *Comparable or incommensurable → C2 wins.*
+
+450× and 3× headroom is materially cheaper on any reading. **By the pre-registered rule, C1's
+narrowed quota case survives.**
+
+**But it survives into a route whose claim primitive does not work.** That is the more important
+fact, and it is why this ruling changes nothing about what to build next. C1 vs C2 is a choice
+between two read paths on a foundation that has just failed underneath both of them — the claim
+primitive is shared by C1 and C2 alike. Deciding the read path now would be optimising the roof
+of a building whose foundation is the open question.
+
+Two things that qualify the C1 win even on its own terms, recorded so nobody quotes the 450×
+alone:
+
+- **C1's write side has the tightest quota in the system.** Every rebuild is 1 SELECT + 1
+  Stratus Upload, and Upload's free tier is **2,000/month** — a fifth of the read allowance and
+  the smallest number in the whole pricing table for this design.
+- **The cross-region penalty is unchanged (entry 28).** 79 ms was same-region best case with no
+  edge cache, and bucket caching is unavailable in this DC, so a US agent pays full RTT on every
+  snapshot read with nothing to absorb it.
+
+## Debt 3 — publish→visible is relabelled
+
+Now **`ledger propagation, tight-loop floor, no subscriber`**, in the code comment, the emitted
+`metric` field and the result key, with the mechanism stated inline:
+
+```
+metric: 'ledger propagation, tight-loop floor, no subscriber'
+mechanism: 'poll with zero backoff; subscribe throws NotProvisionedError;
+            a real subscriber adds up to poll_ms on top of this'
+```
+
+The 318 ms is a floor that polling can never beat, not a latency anything experiences. `subscribe`
+throws `NotProvisionedError`, so this route has no push path at all, and a real subscriber polling
+at `poll_ms` = 5,000 ms would add up to a full interval. Against Firebase's listener push it
+flattered this route by omitting the poll interval entirely — the borrowed-number error in a new
+costume: right number, wrong mechanism.
+
+## What I did not do
+
+Did not build the snapshot builder or the Event function (0032). Did not start F1–F12. Did not
+run A5 — and the case for holding it is now stronger than when 0034 wrote it, because A2 cannot
+pass and a conformance run would spend ~1,505 SELECTs to discover that.

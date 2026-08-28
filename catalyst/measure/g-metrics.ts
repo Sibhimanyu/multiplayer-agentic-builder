@@ -106,11 +106,24 @@ export async function g2(n: number): Promise<{ stats: Stats; samples: Sample[] }
 }
 
 /**
- * G1: publish -> visible latency.
+ * LEDGER PROPAGATION, TIGHT-LOOP FLOOR, NO SUBSCRIBER.
  *
- * Measured as append-returns to readable-by-a-fresh-reader, which is the
- * honest definition for this build: there is no snapshot publisher yet, so this
- * is the ledger read path, not the folded-snapshot path. Recorded as such.
+ * RENAMED from "publish -> visible" per order 0034. The old name put this figure
+ * in the same scoreboard row as Firebase's live-listener push, and the two
+ * measure different mechanisms:
+ *
+ *   - There is NO PUSH PATH on this route. `subscribe` throws
+ *     NotProvisionedError, so nothing here was ever notified of anything.
+ *   - The loop below polls with ZERO BACKOFF. A real subscriber polls at
+ *     `poll_ms` (5,000 ms) and would therefore wait up to a full interval on top
+ *     of whatever propagation costs. This number is the FLOOR that polling can
+ *     never beat, not the latency any subscriber experiences.
+ *   - It is the ledger read path, which is route C2's path. The folded-snapshot
+ *     path has never been measured.
+ *
+ * Quote it only with that label attached. Compared against a push figure it
+ * flatters this route by omitting the poll interval entirely, which is the
+ * borrowed-number error in a new costume: right number, wrong mechanism.
  */
 export async function g1(n: number): Promise<{ stats: Stats; samples: Sample[]; visible: Stats }> {
   const stamp = Date.now().toString(36);
@@ -167,8 +180,10 @@ async function main(): Promise<void> {
   if (what === 'g1') {
     const out = await g1(n || 100);
     console.log(JSON.stringify({
-      metric: 'G1 publish to visible', base: BASE,
-      append: out.stats, publish_to_visible: out.visible,
+      metric: 'ledger propagation, tight-loop floor, no subscriber', base: BASE,
+      mechanism: 'poll with zero backoff; subscribe throws NotProvisionedError; '
+        + 'a real subscriber adds up to poll_ms on top of this',
+      append: out.stats, ledger_propagation_tight_loop_floor: out.visible,
     }, null, 2));
     return;
   }
