@@ -144,6 +144,107 @@ with one `runTransaction`.
 When the final comparison is written, do not flatten "needed a workaround" and "cannot be made
 correct" into the same column.
 
+## Entry 37 — THE HEADLINE: Catalyst's `is_unique` does not enforce under concurrent insert
+
+**The Catalyst route's founding premise is false.** `impl-catalyst.md` chose Data Store because
+"`is_unique` gives atomic claim without transactions." It does not.
+
+```
+5 agents racing ONE task, n=200 tasks, 1,000 requests
+tasks with exactly one winner    31/200
+tasks with a violation          169/200   =  84.5%
+winners counted                    547    across 200 tasks
+```
+
+### Five independent confirmations
+
+1. **Key construction excludes `agent_id`** — `claimKeyFor(project_id, task_id)` returns
+   `compositeKey(project_id, task_id.toLowerCase())` (`functions/claim/index.ts:38`). Five agents
+   racing one task therefore build the **identical** `claim_key`. Verified by the coordinator
+   directly, because if the key had included `agent_id` the five rows would have been legitimately
+   distinct and there would be no finding at all.
+2. **Harness**: 547 winners across 200 tasks.
+3. **Durable state**: `SELECT COUNT(ROWID) FROM task_claims` → **554 rows for 205 task ids**,
+   agreeing exactly with the harness (547 + 7 from a smoke run). Not the handler misreporting one
+   insert — the duplicate `claim_key` rows carry **different `agent_id`s**.
+4. **Live metadata**: `List_All_Columns` confirms `claim_key` is `is_unique: true, is_mandatory:
+   true` on the live table. The constraint is declared and ignored.
+5. **The tell**: contended p50 **126 ms** against uncontended **127 ms**. Indistinguishable —
+   because nothing was being excluded. A working constraint would have shown a loser path.
+
+### The error shape, and it is the sharpest one yet
+
+The build's day-one P2 probe tested **sequential** rejection — insert, then insert again, second one
+fails — and recorded that as establishing the atomic primitive. **Sequential rejection and concurrent
+mutual exclusion are different properties, and it tested the easy one.**
+
+Worse: the dry run's "20 concurrent claims, one winner" **passed against a test double that enforced
+correctly.** The test proved the mock was right. It could never have failed.
+
+**Rule: a concurrency test that passes against a double proves nothing about the platform.** The
+double encodes the behaviour you *assumed*; running it back confirms your assumption to itself. Any
+claim of atomicity must be measured against the live service, contended, with durable state counted
+afterwards.
+
+**My share of this is larger than the build's.** I ruled on composite keys, on `is_unique` being
+table-global, on cross-tenant DoS via `unique(task_id)` — four orders of detailed reasoning about
+*what to make unique* — and never once asked whether the constraint was **enforced under
+concurrency**. I carried "atomic claim without transactions" unexamined for 30-plus orders. The
+build tested the wrong property; I never asked for the right one.
+
+### Scope — what is NOT being claimed
+
+The same primitive backs `events.seq`, `request_dedupe.dedupe_key`, `scope_locks.lock_key` and
+`agents.agent_id`. The build listed them as **presumed affected and explicitly did not report them
+as broken, because it only measured claims.** That is exactly right, and it is the discipline my own
+claim-primitive over-generalisation (0023) should have taught earlier: measure the case you name.
+
+### What it does to the comparison
+
+| route | claim primitive | status |
+|---|---|---|
+| Firebase | `runTransaction` | **holds** — 40 won / 160 lost, exactly one winner per task |
+| Route G | `push --force-with-lease` | **holds** — atomic server-side, 50/50 ×3 |
+| **Catalyst** | `is_unique` on insert | **fails — 84.5% violation** |
+
+**Two of three routes have a working atomic claim. Catalyst does not, via the mechanism it chose.**
+
+**A2 cannot pass on this route as designed, and no adapter code fixes it.** The contended G2
+distribution (winners p50 122, losers p50 129, all p50 126) **must not enter the scoreboard**: 84.5%
+of those requests did not perform a claim. `task_claims` was truncated afterwards.
+
+## Entry 38 — the Stratus quota ruling went C1's way, and the pre-registration is why it counts
+
+0032 pre-registered the interpretation before anyone saw a number. The axes turned out
+**commensurable** — both metered per request, so no conversion was needed:
+
+| | free/month | per request |
+|---|---|---|
+| Stratus Download | 10,000 | $0.0000004 |
+| Data Store SELECT | 10,000 | $0.00006 |
+
+C1 read = 1 Download. C2 read = 3 SELECTs (measured, G4). **450× cheaper per read, 3× the free-tier
+headroom.** One dashboard at the design's own 5 s poll for 30 days: **$0.20 vs $92.71.**
+
+So **C1's narrowed case survives** — and it matters that this ruling favoured the route under
+suspicion. A pre-registration that only ever confirms the coordinator's hunch is not a
+pre-registration. This one could have gone either way and went against my expectation.
+
+**It is also moot for now.** C1 and C2 share the broken claim primitive, so the ruling changes
+nothing about what to build next. Two qualifiers so the 450× is never quoted bare: **Stratus Upload
+is 2,000/month free — the tightest quota in the entire system**, and the cross-region penalty is
+unchanged, since 79 ms was same-region best case with no edge cache to absorb RTT.
+
+## Entry 39 — the relabel makes the subscriber gap 26×, not 1.7×
+
+`publish → visible` is now **"ledger propagation, tight-loop floor, no subscriber"** in the doc
+comment, the emitted `metric` field and the result key.
+
+The number that matters is the one the old label hid: **`poll_ms` = 5,000 ms.** A real Catalyst
+subscriber waits up to a full poll interval on top of propagation. Against Firebase's **191 ms**
+listener push, the honest gap is **up to ~5.2 s versus 191 ms — roughly 26×**, not the 318-vs-191
+that sat in the register. The old label omitted the poll interval entirely.
+
 ## Entry 30 — Firebase has numbers, and three of the four rows are not comparable to Catalyst's
 
 First real-Firestore measurements, `asia-south1` (Mumbai) verified via `firestore:databases:get`
