@@ -1658,7 +1658,25 @@ specifically the 301-event case.
 
 I am saying so rather than implying a full green, because "A1/A4/A6 pass" and
 "section A passes" are different claims and only one of them is mine to make.
-A5 is running; the result goes here either way.
+
+**Attempted and stopped.** A5 alone ran for ~60 minutes against a previous
+17-minute baseline, consuming ~1.8 REST calls/minute — genuinely slow in a way
+`appendEvent` measured in isolation is not (flat 3.3 s, n=60, the same
+afternoon, with `git push` at 2.0 s and `ls-remote` at 1.2 s). I stopped it and
+purged the 279 refs it left rather than leave a half-finished run behind.
+
+**So there is a second open question**, and I would rather name it than bury it:
+`appendEvent` in a tight loop measures 3.3 s, and A5 — which is a tight loop of
+`appendEvent` — does not. One of those two observations is not measuring what I
+think it is. I have not resolved which, and after mis-diagnosing three times
+today from proxies I am not going to guess a fourth. The next step is to
+instrument A5's own loop rather than reason about the difference.
+
+**What this does and does not put at risk.** The G-figures are unaffected: none
+of them comes from A5, and all of them were measured directly with the counters
+they report. What is at risk is the claim "section A is 17/17" — that was true
+of the adapter *before* today's two read-path changes, and I have re-established
+only A1, A4 and A6 since.
 
 
 ---
