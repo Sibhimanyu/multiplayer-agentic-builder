@@ -1641,6 +1641,28 @@ the register as three sentences, not three numbers in one column.
 
 ---
 
+## Outstanding, stated rather than glossed
+
+**A5 has not been re-verified since the ranged-read change.**
+
+The `readEvents` range fix touches the exact code path A5 asserts on — the
+300-row cap, `has_more`, and the `limit + 1` over-fetch that answers `has_more`
+without materialising the rest of the ledger. It is the single most relevant
+test to that change and I have **not** got a green from it post-change.
+
+What I *have* verified live since the change: **A1, A4 and A6 pass** at normal
+timings (22.2 s / 98.2 s / 43.5 s, against 23.0 / 100.3 / 45.1 before it). A4 in
+particular reads a 25-event ledger back repeatedly, which is the shape the fix
+altered. So the change is not unverified — it is under-verified, and the gap is
+specifically the 301-event case.
+
+I am saying so rather than implying a full green, because "A1/A4/A6 pass" and
+"section A passes" are different claims and only one of them is mine to make.
+A5 is running; the result goes here either way.
+
+
+---
+
 ## Comparability — which of my rows may sit next to the other two, and which may not
 
 Order 0036 asks for this explicitly. Entry 30/33's rule: before two numbers go in
