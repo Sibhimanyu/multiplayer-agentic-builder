@@ -144,6 +144,98 @@ with one `runTransaction`.
 When the final comparison is written, do not flatten "needed a workaround" and "cannot be made
 correct" into the same column.
 
+## Entry 40 — Catalyst DOES have an atomic primitive, and it is not in the database
+
+**Stratus `putObject` with `overwrite: false` holds: 200/200 tasks, exactly one winner, zero
+violations.** 5 racers × 200 tasks, live service. Primitive-only p50 **36 ms**.
+
+Reconciled twice against sources that were **not** the harness — the rule that a double proves
+nothing, applied to the confirmation as well as the failure:
+
+1. `Get_All_Objects` → `key_count 200, truncated false`.
+2. **Stratus's etag *is* the content MD5**, so five sampled objects were hashed and each matched
+   exactly the racer that had been told it won. That is durable proof of *which* racer won, not
+   merely that one did.
+
+**Eliminated, with the reason:** **Cache** — `put` overwrote an existing key with no contention at
+all, so it cannot exclude a racer; no SETNX and no atomic increment on the SDK surface.
+
+**Not probed, stated so nobody reads silence as absence:** **Circuits** — documented US-DC-only, this
+project is IN. **Queue single-writer** — a queue is asynchronous and a claim is a synchronous
+question; polling the outcome returns to the store that just failed. The build labelled that "an
+argument, not a measurement," which is the correct filing.
+
+## Entry 41 — Data Store compare-and-set fails WORSE than `is_unique`, and silently
+
+`UPDATE … WHERE` CAS, same 5×200 contended shape: **17/200 tasks with exactly one winner, 658
+winners reported.** Five racers each received `affected: 1` on the same row, MODIFIEDTIMEs 1 ms apart.
+
+And here is what makes it worse than entry 37: **durable state is perfect.** 200 rows, exactly one
+holder each. So **458 agents hold a claim they do not own, and no audit of the database can find
+them.** With `is_unique` the duplicates at least existed as extra rows a `COUNT` would surface.
+
+**A silent violation is worse than a visible one.** This is the strongest argument in the register
+for measuring the reply *and* the durable state separately: either check alone passes here.
+
+## Entry 42 — the free tier is a hard wall, not a billing threshold — and Catalyst is currently down
+
+```
+FREE_USAGE_LIMIT_REACHED
+"You have exhausted the free tier allowance for Datastore - Fetch."
+```
+
+Every authenticated route spends 2 SELECTs resolving token→agent→project before its own work (G4),
+so **every route on the Catalyst build is now failing.** Not degraded, not billed — refused.
+
+**This corrects entry 38's framing, though not its ranking.** Entry 38 priced C2 at $92.71/month
+against C1's $0.20 and treated the free tier as the point where money starts. It is not. At ~10,000
+free SELECTs/month — about **3,333 authenticated requests** at 3 SELECTs each — C2 does not get more
+expensive, **it stops**, and it takes every other Data Store consumer in the project down with it.
+
+That is the same lesson as entry 35 from the other direction: **the *shape* of exhaustion matters
+more than the price.** Firebase throttles on a daily allowance that resets. Catalyst hits a monthly
+wall that does not, and one service's exhaustion becomes every service's outage.
+
+## Entry 43 — the fix works, and it moves the route onto its scarcest resource
+
+Adopting Stratus locks means every atomic guarantee — claim, scope lock, dedupe, `events.seq` —
+leaves the database for object storage. The `CoordinationStore` contract and every handler above the
+port boundary are unchanged, which is the port boundary earning its keep.
+
+**But each atomic operation becomes one Stratus Upload, and Upload's 2,000/month free tier is the
+tightest meter in the entire system.** Arithmetic, labelled as such, from measured G6 figures:
+
+| | measured | free/month | share |
+|---|---|---|---|
+| Data Store INSERT | 403 | ~5,000 (403 = 8.1%) | 8.1% |
+| **the same 403 as Stratus Uploads** | 403 | **2,000** | **20.2%** |
+
+**Roughly 2.5× worse headroom, and `events.seq` needs one per event** — so a single conformance run
+consumes a fifth of the monthly allowance. The route survives the correctness question and walks
+straight into a quota question.
+
+## Entry 44 — the strongest candidate is unprobed because it is console-gated
+
+**NoSQL conditional insert** (`condition` + `attribute_exists` + `negate`) is the best candidate on
+paper and was **not measured.** The service is reachable but has **zero tables**, there is no SDK
+create-table, and **none of the 186 Catalyst MCP tools mentions NoSQL.** It is console-only.
+
+The contended harness is written and would run unchanged against one console-created table. This is a
+real hole in the probe, recorded as a hole rather than as an absence — and it is the third time on
+this route that the blocking step has been a **browser session a human must perform** (entry 17:
+project creation, Stratus activation, Slate activation).
+
+## Entry 45 — `String()` on an SDK wrapper, twice now
+
+An automated read-back reported **48 durable contradictions** that did not exist: `String()` applied
+to a wrapper object yielded `"[object Object]"`. Caught before it became a finding and fixed to
+unwrap explicitly.
+
+**Second occurrence of the identical bug** — the `putObject` probe in entry 27 had `getObject`'s
+return `String()`-coerced the same way, proving the *call* succeeded without proving the *bytes*
+round-tripped. **Rule: never `String()` an SDK return value in a probe.** Assert on a named field, or
+the probe reports the shape of your coercion instead of the state of the system.
+
 ## Entry 37 — THE HEADLINE: Catalyst's `is_unique` does not enforce under concurrent insert
 
 **The Catalyst route's founding premise is false.** `impl-catalyst.md` chose Data Store because
@@ -171,6 +263,19 @@ winners counted                    547    across 200 tasks
    true` on the live table. The constraint is declared and ignored.
 5. **The tell**: contended p50 **126 ms** against uncontended **127 ms**. Indistinguishable —
    because nothing was being excluded. A working constraint would have shown a loser path.
+
+### Misread, not a broken promise — and the tell was in the same schema
+
+`WebFetch`/`WebSearch` were not granted, so the public help pages were **not** opened and are not
+characterised. Two offline sources, verbatim. The live `Create_Column` schema says `is_unique`:
+**"Whether the column enforces unique values"** — a genuine enforcement claim. But in that same
+schema `is_mandatory` reads **"NOT NULL constraint"**, naming its SQL guarantee, and `is_unique`
+declines to name one. Zoho's official Data Store reference never mentions `is_unique` at all; its
+only concurrency-adjacent guidance is that Data Store has no transactions and recommends
+**optimistic concurrency**.
+
+**Ruling: we misread it.** Zoho's wording invites the inference; it does not make it. Not a defect to
+report as a broken promise — though the documentation gap is worth telling them about.
 
 ### The error shape, and it is the sharpest one yet
 
