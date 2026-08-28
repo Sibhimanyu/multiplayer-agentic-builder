@@ -1405,42 +1405,78 @@ different claims, and only one of them belongs in a results table.
 
 ## G4, G5, G6 — operations and cost
 
-### G4 — operations per store call, measured
+### G3/G4 — operation cost, measured against the authoritative counter
 
-Not estimated from the code. Instrumented counters, one call each, against the real remote:
+**Host:** writes go to `github.com` (git push over HTTPS); reads to
+`api.github.com` (REST).
+**Counter:** `X-RateLimit-Remaining` from each operation's own response, not
+`GET /rate_limit` — see the instrument bugs above.
+**Clean run:** `charged == sent` on every row, so nothing else was spending the
+token during the measurement. The contamination guard asserts this.
 
 ```
-operation                     git pushes   REST calls   retries
-appendEvent                            1            2         0
-claimTask (win)                        1            0         0
-claimTask (lose)                       1            2         0
-releaseTask                            1            2         0
-heartbeat (first)                      1            1         0
-heartbeat (subsequent)                 1            0         0
-listPresence                           0            4         0
-readEvents                             0            1         0
-readEvents (unchanged ledger)          0            1         0
-readSnapshot                           0            7         0
-acquireScope                           1            2         0
+operation             git pushes   REST sent   REST CHARGED
+appendEvent                    1           2             2
+claimTask (win)                1           0             0
+claimTask (lose)               1           2             2
+releaseTask                    1           2             2
+heartbeat (first)              1           1             1
+heartbeat (steady state)       1           0             0
+listPresence                   0           4             4
+readEvents                     0           1             1
+readSnapshot                   0           7             7
+acquireScope                   1           2             2
 ```
 
-**The two columns are not the same currency, and that is the whole G5/G6 story.**
+### The binding limit, and it is not the one that matters most
 
-`git push` is **unmetered**. There is no per-push quota on GitHub, so every write in the left
-column costs nothing against any allowance. Only the REST column counts, against 5,000/hour —
-and a conditional GET returning 304 costs **zero** of those (measured: 10 × 304 → counter
-unchanged; 10 × 200 → counter −10).
+**`core` = 5,000 requests/hour, per user, rolling window.** Verified against the
+live counter across all fifteen rate-limit resources GitHub exposes for this
+token.
 
-**`claimTask` on the winning path costs one push and ZERO metered operations.** The primitive
-Catalyst pays 5 SELECTs + 2 INSERTs for, and Firebase pays a transaction for, route G gets for
-free. That is the single sharpest number this route produced.
+**`git push` and `git fetch` appear in NO rate-limit resource.** The write path
+— every claim, heartbeat, event append and lock acquisition — is unmetered.
 
-`readSnapshot` at 7 REST calls is the expensive read, and it is the one a dashboard polls. At a
-5 s poll that is 5,040 calls/hour — **over the limit on its own**. Which is exactly why
-`subscribe` uses a conditional GET: unchanged state returns 304 and costs nothing, so the poll
-is only expensive when something actually changed. If the `Accept` header ever drifts (probe H),
-that 7-call read becomes 7 *metered* calls every 5 s and the hour's quota is gone in twelve
-minutes. The chokepoint is not tidiness; it is the difference between viable and not.
+**`claimTask` on the winning path costs one push and ZERO metered requests.**
+Catalyst's only surviving claim primitive turned out to live in object storage
+and costs **one Stratus Upload against a 2,000/month free tier**, the tightest
+meter in that system. Route G's costs a push against no per-operation quota at
+all.
+
+### What actually binds: the dashboard, not the agents
+
+```
+a dashboard polling readSnapshot every 5,000 ms:
+  720 polls/hour x 7 charged = 5,040/hour against 5,000  -- OVER THE LIMIT
+```
+
+**Route G cannot currently honour its own advertised `stale_ms: 5000`.** By
+0.8%, but over is over, and I would rather report it than round it away.
+
+Agents are nearly free by comparison. A running daemon ticks every 20 s:
+heartbeat costs 0 charged in steady state (the previous timestamp is cached), and
+`deliverInbox` costs 1. So **an active agent is ~180 requests/hour and a
+dashboard is ~5,040.**
+
+The minimum dashboard poll interval that fits, by team size:
+
+| team | agent load | budget left | min dashboard interval |
+|---|---|---|---|
+| 2 people, light (60 s tick) | 120/h | 4,880/h | **5.2 s** |
+| 2 people, active (20 s tick) | 360/h | 4,640/h | **5.4 s** |
+| 10 people, active (20 s tick) | 1,800/h | 3,200/h | **7.9 s** |
+
+So a small team needs ~5.2 s and a ten-person team ~8 s. That is a real
+constraint and a mild one — but it is a constraint the advertised default
+violates.
+
+**The fix I have NOT implemented, stated as unimplemented rather than claimed:**
+`readSnapshot`'s seven internal `matching-refs` calls are unconditional. Making
+them conditional would return 304 on unchanged state at **zero** charge, which
+would take the dashboard's cost to near-nothing when nothing is happening — which
+is most of the time. The conditional path exists and is measured (probe H); it is
+simply not wired into those seven internal calls. Until it is, the table above is
+the honest cost.
 
 ### G5 — free-tier runway: a THIRD shape, and it is incommensurable
 
@@ -1464,15 +1500,19 @@ The ceiling is **5,000 core requests/hour, per user, rolling.** Verified against
 the live counter, not the docs. The three team sizes, using the measured
 per-operation costs:
 
-| team | steady REST/hour | vs 5,000 | outcome |
+| team | agents | + one dashboard at 5 s | vs 5,000/hour |
 |---|---|---|---|
-| 2 people, light | see the run below | | |
-| 2 people, active | see the run below | | |
-| 10 people, active | see the run below | | |
+| 2 people, light (60 s tick) | 120/h | 5,160/h | **over** — needs a 5.2 s poll |
+| 2 people, active (20 s tick) | 360/h | 5,400/h | **over** — needs a 5.4 s poll |
+| 10 people, active (20 s tick) | 1,800/h | 6,840/h | **over** — needs a 7.9 s poll |
 
-Those rows are filled by the measured run rather than by arithmetic on my part,
-so they are left blank here until the clean G3/G4 lands and the projection can be
-computed from it. **What is already established** and does not depend on it:
+Every row is over **because of the dashboard**, not the agents — an active agent
+is ~180 requests/hour against the dashboard's ~5,040. Nudging the poll interval
+to 5.2 s / 5.4 s / 7.9 s brings each row under, and none of those is a painful
+number. Route G's ceiling constrains **how often you may look at the board**, not
+how many agents may work.
+
+**What this route never runs out of:**
 
 - **The write path is unmetered.** `git push` and `git fetch` appear in **no**
   rate-limit resource GitHub exposes for this token — I enumerated all fifteen.

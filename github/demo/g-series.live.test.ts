@@ -138,26 +138,48 @@ if (LIVE) {
     // The figure a real subscriber experiences: subscribe() polls, and a poll
     // adds up to a full interval on top of propagation. Measured separately
     // rather than inferred, and it is the one comparable to a listener push.
+    // The resolve condition is pinned to the seq the append ACTUALLY received,
+    // read from the append's own return value.
+    //
+    // My first version captured a "baseline" from whichever delivery arrived
+    // first and waited for `seq > baseline`. If that first delivery landed
+    // AFTER the append, the baseline was already the post-append seq and the
+    // condition could never become true -- the run hung and I killed it after
+    // 25 minutes. A wait whose success condition depends on delivery ordering
+    // is not a measurement, it is a coin flip with one side that never lands.
     const subMs: number[] = [];
     const SUB_N = 10;
     for (let i = 0; i < SUB_N; i += 1) {
-      let resolve: (ms: number) => void;
-      const seen = new Promise<number>((r) => { resolve = r; });
-      let baseline: number | null = null;
+      let target = Number.MAX_SAFE_INTEGER;
       let t0 = 0;
+      let resolve!: (ms: number) => void;
+      let reject!: (e: Error) => void;
+      const seen = new Promise<number>((res, rej) => { resolve = res; reject = rej; });
       const unsub = reader.subscribe(PROJECT, 0, (s) => {
-        if (baseline === null) { baseline = s.seq; return; }   // the immediate fire
-        if (t0 !== 0 && s.seq > baseline) resolve(Date.now() - t0);
+        if (t0 !== 0 && s.seq >= target) resolve(Date.now() - t0);
       });
-      // Let the immediate fire land before starting the clock.
-      await new Promise((r) => setTimeout(r, 1_500));
+      // Let the immediate fire land and the first poll settle before timing.
+      await new Promise((r) => setTimeout(r, 1_000));
+
       t0 = Date.now();
-      await writer.appendEvent(PROJECT, {
+      const written = await writer.appendEvent(PROJECT, {
         layer: 'coordination', kind: 'task_completed', actor_type: 'agent', actor_id: 'agent_g1',
         body: { task_id: 'task_g1', sub: i },
       }, `g1sub-${PROJECT}-${i}`);
-      subMs.push(await seen);
-      unsub();
+      target = written.seq;
+
+      // A bounded wait, so a missed delivery FAILS rather than hanging. An
+      // unbounded wait turns a bug into an overnight run.
+      const guard = setTimeout(
+        () => reject(new Error(`subscriber never saw seq ${written.seq} within 60s`)),
+        60_000,
+      );
+      try {
+        subMs.push(await seen);
+      } finally {
+        clearTimeout(guard);
+        unsub();
+      }
     }
 
     // eslint-disable-next-line no-console
