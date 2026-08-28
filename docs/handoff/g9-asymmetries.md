@@ -144,6 +144,121 @@ with one `runTransaction`.
 When the final comparison is written, do not flatten "needed a workaround" and "cannot be made
 correct" into the same column.
 
+## Entry 30 — Firebase has numbers, and three of the four rows are not comparable to Catalyst's
+
+First real-Firestore measurements, `asia-south1` (Mumbai) verified via `firestore:databases:get`
+rather than inferred from the creation command, client Asia/Kolkata. No emulator figure in any
+table. Spend $0.00, ~3% of the daily free allowance.
+
+| | Catalyst | Firebase | comparable? |
+|---|---|---|---|
+| `appendEvent` p50 | 202 ms | **186 ms** | **no** — see entry 31 |
+| publish→visible p50 | 318 ms | **191 ms** | **no** — see entry 33 |
+| claim p50, uncontended | **127 ms** | 257 ms | yes |
+| claim p50, contended | **not measured** | 1,955 ms | Catalyst owes this |
+| presence write cost | **0 UPDATEs** | 1 read + 1 write | yes — see entry 34 |
+| free-tier runway | 2 active ≈ 17 days | **indefinite** | **no** — see entry 35 |
+
+Only two rows in that table survive as a like-for-like race, and they split: Catalyst wins the
+uncontended claim, Catalyst wins presence. The two rows that looked like Firebase wins are both
+measurement-shape artifacts.
+
+## Entry 31 — G1 append is not a like-for-like race: Firebase skips a hop Catalyst cannot
+
+Flagged by the Firebase build itself, caveat 3. **Spark plan means no Cloud Functions**, so nothing
+in its numbers traverses an HTTP API or a webhook — these are **adapter→Firestore direct**. Catalyst's
+202 ms is **client → Advanced I/O Function → Data Store**, an extra network hop plus a function cold
+path, and 2 SELECTs of token→agent→project resolution before its own work (G4).
+
+So `186 vs 202` does not mean "same operation, Firebase 8% faster." Firebase is doing **strictly
+less work per call**, and Catalyst *cannot* drop the hop — Data Store has no client-reachable
+fine-grained auth, which is why the function exists.
+
+This is a real architectural asymmetry and it favours Firebase — fewer moving parts, one less
+failure domain — but it is **not a latency win**, and reporting it as one would repeat entry 25's
+error with the roles reversed.
+
+## Entry 32 — G2 was never comparable, and Catalyst's contended case does not exist
+
+The Firebase build caught this and it is the sharpest cross-route correction so far:
+**`catalyst-run-1.md` reports "200/200 claims won."** If every claim won, no two claims ever
+contended for the same task — so **Catalyst's 127 ms is the *uncontended* figure**, and it had been
+sitting in the register opposite a number that was never its counterpart.
+
+| | n | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|
+| Catalyst, uncontended | 200 | **127** | 182 | 409 | 1,186 |
+| Firebase, uncontended (isolated) | 40 | **257** | 278 | 308 | 308 |
+| Firebase, contended 5-way | 200 | 1,955 | 2,859 | 3,135 | **3,205** |
+| **Catalyst, contended** | — | **unmeasured** | — | — | — |
+
+Exactly one winner per task held on the Firebase side: 40 won, 160 lost, no mean reported.
+
+**Catalyst wins the uncontended claim, 127 against 257.** The contended row — the one that decides
+whether a claim primitive is usable under real multi-agent load — has a number for one route only.
+Until Catalyst measures it, the claim comparison is half-finished.
+
+## Entry 33 — publish→visible is two different mechanisms, and Catalyst has no subscriber at all
+
+Catalyst's `subscribe` **throws `NotProvisionedError`** (`catalyst/store/catalyst.ts:250`). There is
+no push path on that route.
+
+Its 318 ms came from `g-metrics.ts`: append, then a **tight read loop** — `for attempt < 20`, zero
+backoff — hitting `/events` until the seq appears. The 116 ms delta over the 202 ms append is one
+read round trip, so it typically became visible on the first attempt. That is an **honest floor for
+ledger propagation** and the code comment says so plainly — but it is **not what any subscriber will
+experience**, because the real `subscribe` polls at `poll_ms`, and a poll adds up to a full interval.
+
+Firebase's 191 ms is a **live-listener push**, and it contains the append rather than adding to it.
+It is what a real subscriber gets.
+
+So the two figures answer different questions, and the production gap is **wider than 318 vs 191**,
+not narrower. Neither number may be quoted without its mechanism.
+
+The Firebase build reached this by correcting the identical error in itself: its first
+publish→visible polled `readSnapshot`, which measures *how fast its own loop notices*. It called
+that "the borrowed-number error in miniature," which is exactly right.
+
+## Entry 34 — presence: 0 UPDATEs against 48% of a daily write allowance
+
+Catalyst's design writes **zero UPDATEs** for presence — Cache TTL expiry *is* the staleness signal
+— and G6 confirmed it in production. Firebase's `heartbeat` costs **1 read + 1 write** every beat. At
+10 active agents that is **48% of the daily free write allowance on presence alone**, with total
+writes at 57%.
+
+Recorded because the Firebase build found it **in its own disfavour, on the exact axis order 0033
+singled out**: its op counter wrapped only `runTransaction`, so the first run reported
+`heartbeat: 0 writes`. That is false, and it flattered this route precisely where it was being
+watched. Entry 17's correction was meant to encourage this and it worked.
+
+## Entry 35 — G5 is incommensurable: a daily allowance that resets is not a budget that depletes
+
+Firestore's free tier **resets daily**. Catalyst's 1,000 UPDATEs/month **depletes**. That is why
+Catalyst's runway is expressible in days at all (2 active ≈ 17 days, 10 active ≈ 3.3 days) and
+Firebase's is **indefinite** at all three scenarios.
+
+**Reporting both as "days of runway" would flatten the actual difference into a fake ratio.** G5 as
+specified assumed a depleting budget and only one route has one. Same shape as the Stratus quota
+question in 0032: when the axes differ, say so rather than converting between them to force a
+comparison.
+
+The honest statement: **Firebase cannot be exhausted by this workload; Catalyst can.** But Firebase
+can be *throttled* daily at 57% headroom for 10 agents, so it is not unlimited either — it fails
+differently, not less.
+
+## Entry 36 — an anomaly tested, disproven, and left unexplained
+
+Firebase's first uncontended claim run gave p50 **1,167 ms**, 6× its own append despite being two
+reads and one write more. It hypothesised counter-document backlog from the preceding 100 appends,
+then **tested it**: claim with no prior appends 257, append in the same namespace 170, claim after
+40 appends 259. A and C identical, so **the hypothesis is wrong.**
+
+It reported the defensible figure (~257 ms), said "don't quote 1,167," and declined to name a
+mechanism it had not established. That is 0028 and 0029 applied without being asked.
+
+**Open:** whether the contended row carries the same unexplained inflation. If it does, 1,955 ms is
+too pessimistic. Re-measuring contention in isolation is owed.
+
 ## Entry 29 — the coordinator made the rc=0 error while enforcing it
 
 Order 0032 was issued, pushed, and spawned. The spawned process printed
