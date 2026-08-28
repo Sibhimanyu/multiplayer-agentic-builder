@@ -36,6 +36,10 @@ import { handleHeartbeat, handleListPresence, PRESENCE_SEGMENT } from '../presen
 import { REAPER_STATUS_KEY } from '../reaper/index.ts';
 import type { PresenceDeps, PresencePort } from '../presence/index.ts';
 import { measureSnapshotRead, runPutObjectProbe } from '../diag/index.ts';
+import {
+  attemptCachePut, attemptDatastoreCas, attemptStratusPutIfAbsent, readbackStratus,
+  runInventory, seedCasRows,
+} from '../diag/atomics.ts';
 import { resolvePrincipal } from '../_lib/auth.ts';
 import type { AuthPort } from '../_lib/auth.ts';
 import { agentToken, errorResponse, header, json, withCors } from '../_lib/http.ts';
@@ -79,6 +83,8 @@ interface Datastore {
 interface CacheSegment {
   put(key: string, value: string, expiryInHours?: number): Promise<unknown>;
   get(key: string): Promise<unknown>;
+  getValue(key: string): Promise<unknown>;
+  delete(key: string): Promise<unknown>;
 }
 interface StratusBucketApi {
   putObject(key: string, body: string, opts?: Record<string, unknown>): Promise<unknown>;
@@ -94,6 +100,10 @@ interface CatalystApp {
   zcql(): { executeZCQLQuery(query: string): Promise<unknown[]> };
   cache(): { segment(name?: string): CacheSegment };
   stratus(): { bucket(name: string): StratusBucketApi };
+  // Optional because the order 0035 inventory's job is to find out whether they
+  // are there. Declaring them as present would presume the answer.
+  nosql?: () => { getAllTable(): Promise<unknown[]> };
+  circuit?: () => unknown;
 }
 
 /**
@@ -383,6 +393,21 @@ function normaliseCacheValue(v: unknown): string | null {
 
 // ---- routing -------------------------------------------------------------
 
+/**
+ * Read a probe-supplied identifier for the order 0035 diagnostics.
+ *
+ * These values reach ZCQL by string interpolation, so the allowed alphabet is
+ * the guard: letters, digits and `_./-` only, nothing that can close a quote or
+ * open a comment. Everything the harness sends is machine-generated and fits it.
+ */
+function diagToken(body: unknown, field: string): string {
+  const v = (body as Record<string, unknown> | null)?.[field];
+  if (typeof v !== 'string' || !/^[A-Za-z0-9_./-]{1,120}$/.test(v)) {
+    throw new HttpError(400, 'BAD_DIAG_TOKEN', `${field} must match [A-Za-z0-9_./-]{1,120}`);
+  }
+  return v;
+}
+
 async function route(app: CatalystApp, req: HttpRequest, log: Logger): Promise<HttpResponse> {
   // req.path is the raw request target, query string included. Matching against
   // it whole made /events?since_seq=0 a 404 while /events worked.
@@ -423,6 +448,34 @@ async function route(app: CatalystApp, req: HttpRequest, log: Logger): Promise<H
   // through a pre-signed URL, deletes it. Two GETs only -- no best-of-N.
   if (path === '/diag/readpath' && req.method === 'POST') {
     return json(200, await measureSnapshotRead(app, log));
+  }
+
+  // Order 0035 section 2. One racer's attempt per request; the five-way race is
+  // driven from outside as five concurrent requests, so no connection pool in
+  // here can serialise them into looking atomic.
+  //
+  // Authenticated like every other route -- these are writes. The auth path
+  // costs 2 SELECTs a request and is NOT part of what is being measured, so each
+  // handler times the primitive call alone and reports that separately.
+  if (path.startsWith('/diag/atomic/') && req.method === 'POST') {
+    if (path === '/diag/atomic/inventory') return json(200, await runInventory(app, log));
+    if (path === '/diag/atomic/seed') {
+      const prefix = diagToken(req.body, 'prefix');
+      const n = Math.min(Number((req.body as { n?: unknown } | null)?.n ?? 0) || 0, 500);
+      const keys = Array.from({ length: n }, (_, i) => `${prefix}_${i}`);
+      return json(200, { requested: n, ...await seedCasRows(app, keys) });
+    }
+    if (path === '/diag/atomic/readback') {
+      return json(200, await readbackStratus(app, diagToken(req.body, 'key')));
+    }
+    const key = diagToken(req.body, 'key');
+    const holder = diagToken(req.body, 'holder');
+    if (path === '/diag/atomic/cas') return json(200, await attemptDatastoreCas(app, key, holder));
+    if (path === '/diag/atomic/cache') return json(200, await attemptCachePut(app, key, holder));
+    if (path === '/diag/atomic/stratus') {
+      return json(200, await attemptStratusPutIfAbsent(app, key, holder));
+    }
+    return json(404, { error: 'not_found' });
   }
 
   if (path === '/claim' && req.method === 'POST') {

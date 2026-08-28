@@ -1943,3 +1943,361 @@ costume: right number, wrong mechanism.
 Did not build the snapshot builder or the Event function (0032). Did not start F1–F12. Did not
 run A5 — and the case for holding it is now stronger than when 0034 wrote it, because A2 cannot
 pass and a conformance run would spend ~1,505 SELECTs to discover that.
+
+---
+
+# Order 0035 — Catalyst HAS an atomic primitive. It is not in the database.
+
+Four mechanisms probed contended against the live service, 5 racers × 200 keys each. Three
+fail. One holds perfectly. The one that holds is **Stratus object storage**, and both of the
+Data Store mechanisms — the unique constraint and the conditional UPDATE — fail.
+
+## 1. What Zoho actually promises for `is_unique`
+
+**Access note first, so the sourcing is legible.** `WebFetch` and `WebSearch` were not granted
+in this session, so I could not open `docs.catalyst.zoho.com`. Everything below is quoted from
+two offline sources that are Zoho's own: the **live Catalyst API's machine-readable tool
+schema**, and the **official Zoho Catalyst plugin skill bundle v2.0.0**. The public help pages
+remain unread and I am not going to characterise them.
+
+### Verbatim, from the live `CatalystbyZoho_Create_Column` schema
+
+Tool description:
+
+> "Creates a new column in the specified table with the defined data type, constraints, and
+> properties such as mandatory, unique, or search indexing."
+
+The `is_unique` property, identically on all three data types that accept it (`varchar`, `int`,
+`bigint`):
+
+> `is_unique`: "Whether the column enforces unique values"
+
+And, for contrast, the property beside it:
+
+> `is_mandatory`: "Whether the column requires a value (NOT NULL constraint)"
+
+### Verbatim, from `catalyst-datastore/references/datastore-basics.md` (Zoho plugin v2.0.0)
+
+The word "unique" appears **once** in the entire Data Store reference, and it is about a
+different thing:
+
+> "`ROWID` — unique row identifier (bigint, auto-increment)"
+
+`is_unique` is never mentioned. Not in Column Types, not in Common Errors, not anywhere. The
+only concurrency-adjacent section is this one, quoted in full:
+
+> ## Transactions
+>
+> Data Store does NOT support multi-statement transactions.
+>
+> **Workarounds:**
+> - Use single ZCQL statements for bulk operations
+> - Use optimistic concurrency: read `MODIFIEDTIME`, verify before writing
+> - Use Circuits for multi-step workflows with saga patterns — **US DC only**; Circuits is not
+>   available in EU, AU, IN, JP, SA, or CA data centers
+
+### The ruling, in 0035's own terms
+
+**Not documented as concurrency-safe. We misread it, and the register says so in those words.**
+
+There is no sentence anywhere promising that `is_unique` holds under concurrent writes. There
+is no mention of a UNIQUE constraint, of atomicity, of isolation, or of locking. The one
+paragraph that touches concurrency says the opposite of what we assumed: no transactions, and
+the suggested workaround is *optimistic concurrency* — read, then verify before writing — which
+is what you recommend when the store will not serialise for you.
+
+Two things worth being precise about, since the order said not to paraphrase toward a
+convenient reading:
+
+- **"enforces unique values" is an enforcement claim, and it is stronger than "advisory."** It
+  is not nothing. Read on its own it is easy to hear as a UNIQUE constraint.
+- **But `is_mandatory` names its SQL constraint and `is_unique` does not.** "requires a value
+  (NOT NULL constraint)" against "enforces unique values" — one line reaches for the database
+  guarantee, the neighbouring line declines to. That asymmetry is visible in the same schema,
+  and I did not notice it.
+
+So: Zoho's wording invites the inference. It does not make it. **My composite-key rulings
+across four orders assumed an enforcement guarantee that no document states**, and the failure
+is a misread, not a false promise. It is not a defect worth reporting to Zoho as a broken
+guarantee — though the gap between "enforces unique values" and what actually happens under
+five concurrent inserts is worth reporting to them as documentation that misleads.
+
+## 2. Every primitive probed, and every one I did not
+
+| Mechanism | Tested how | Contended result | Durable state |
+|---|---|---|---|
+| Data Store `is_unique` INSERT | live, 5×200 (entry 37) | **31/200** exactly-one | 554 rows for 205 keys |
+| Data Store CAS `UPDATE…WHERE` | live, 5×200 | **17/200** exactly-one | 200 rows, 1 holder each |
+| Cache put-if-absent | sequential inventory | **eliminated before spending** | n/a |
+| Stratus `putObject overwrite:false` | live, 5×200 | **200/200 exactly-one** | 200 objects, MD5 5/5 |
+| NoSQL conditional insert | **NOT PROBED** | — | — |
+| Circuits | **NOT PROBED** | — | — |
+| Queue single-writer | **NOT PROBED** | — | — |
+
+### The inventory pass, and the asymmetry that makes it legitimate
+
+Before spending on any contended run I ran one cheap sequential pass
+(`POST /diag/atomic/inventory`). Its licence is narrow and worth stating, because getting this
+backwards is exactly what produced entry 37:
+
+- **Sequential rejection proves nothing about concurrency.** That was the original mistake. My
+  day-one P2 probe rejected a duplicate insert sequentially and I recorded it as establishing an
+  atomic primitive. It did not.
+- **Sequential acceptance, however, is decisive in the negative.** A mechanism that cheerfully
+  overwrites an existing key when there is *no contention at all* cannot exclude a racer under
+  contention. There is nothing left for concurrency to break.
+
+So the inventory may eliminate a candidate. It may never promote one to "works" — everything it
+promotes goes to a contended live run.
+
+### Cache put-if-absent — ELIMINATED, no contended run needed
+
+`segment.put(key, 'FIRST', 1)` then `segment.put(key, 'SECOND', 1)`. The second call **did not
+throw**, returned a normal cache record, and `getValue` afterwards returned `"SECOND"`.
+
+`put` is an unconditional write. There is no SETNX here. The SDK segment surface is exactly
+`put / update / getValue / get / delete` — no put-if-absent, no add-only, and **no atomic
+increment either**, so the increment variant the order asked about does not exist to be tested.
+Eliminated on the cheap pass, which saved 1,000 requests.
+
+### Data Store compare-and-set — FAILS, and it fails silently
+
+The cheapest possible adoption path: same service, same tables, no new dependency. A row is
+seeded `holder='FREE'`, and each racer runs the classic conditional update:
+
+```sql
+UPDATE cas_probe SET holder = '<agent>' WHERE cas_key = '<key>' AND holder = 'FREE'
+```
+
+The inventory first confirmed the mechanism can even report a verdict — a matching UPDATE
+returns the changed row (`affected=1`), a non-matching one returns `[]` (`affected=0`). They are
+distinguishable, so a caller *can* be told whether it won. Promoted.
+
+**2026-08-28T05:09:47Z**, host `multiplayer-agents-60083782173.development.catalystserverless.in`:
+
+```
+shape: 5 agents racing for ONE key, n=200 keys = 1000 attempts
+keys with EXACTLY ONE winner    17/200
+keys with ZERO winners           0
+keys with MORE THAN ONE winner 183          <-- 91.5%
+transport failures               0
+winners  n=658
+```
+
+Verbatim from one key, five racers, all five told they won:
+
+```
+cas_mtchsme3_2: 5 winners
+ {"won":true,"affected":1,"raw":[{"cas_probe":{...,"MODIFIEDTIME":"2026-08-28 10:39:47:715",
+   "cas_key":"cas_mtchsme3_2","holder":"agent_race01",...}}]}
+ {"won":true,"affected":1,"raw":[{"cas_probe":{...,"MODIFIEDTIME":"2026-08-28 10:39:47:716",
+   "cas_key":"cas_mtchsme3_2","holder":"agent_race02",...}}]}
+ ... three more, all affected:1
+```
+
+Two MODIFIEDTIMEs one millisecond apart on the same row, each returned to a different caller as
+that caller's own successful update. The `WHERE holder = 'FREE'` guard is evaluated
+non-atomically — read, then write, with no row lock in between.
+
+**And this is worse than entry 37, in the way that matters most.** Durable state afterwards:
+
+```
+SELECT COUNT(ROWID) FROM cas_probe                       -> 200
+SELECT cas_key, holder FROM cas_probe WHERE cas_key='cas_mtchsme3_2'
+                                                         -> holder = agent_race04
+```
+
+**200 rows. Exactly one holder each. The table is perfect.** And 658 racers were told they won,
+so **458 agents hold a claim they do not own and nothing in the data shows it.** With
+`is_unique` the duplicates were at least visible as extra rows — a durable-state audit caught
+it. Here an audit passes: 200 keys, 200 holders, no anomaly. The entire failure lives in what
+the platform told the callers, and it is invisible after the fact.
+
+Latency, no mean, winners and losers separate:
+
+| | n | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|
+| winners, end to end | 658 | 122 | 145 | 230 | 284 |
+| losers, end to end | 342 | 115 | 141 | 233 | 330 |
+| winners, primitive only | 658 | **24** | 35 | 49 | 61 |
+
+"Primitive only" is timed inside the handler around the ZCQL call alone, excluding HTTP and the
+2-SELECT auth path. Those are not what is being measured, and reporting only the end-to-end
+number would have attributed the platform's request overhead to the primitive.
+
+### Stratus conditional put — HOLDS, 200/200
+
+`putObject(key, body, { overwrite: false })`. The SDK documents `overwrite` as "Whether to
+overwrite an existing object", and order 0030 had already established that a put over an
+existing key fails without it. The inventory confirmed a real refusal with a real error:
+
+```
+statusCode: 409
+message: {"status":409,"code":"key_already_exists",
+          "message":"key is already associated with another object in the bucket"}
+```
+
+**2026-08-28T05:10:42Z**, same host:
+
+```
+shape: 5 agents racing for ONE key, n=200 keys = 1000 attempts
+keys with EXACTLY ONE winner   200/200
+keys with ZERO winners           0
+keys with MORE THAN ONE winner   0
+transport failures               0
+wall clock 28s
+```
+
+| | n | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|
+| winners, end to end | 200 | 133 | 153 | 264 | 346 |
+| losers, end to end | 800 | 130 | 152 | 244 | 345 |
+| winners, primitive only | 200 | **36** | 45 | 78 | 225 |
+
+**Durable state, two independent sources, neither of them my harness.**
+
+`Get_All_Objects` on the prefix, through the Catalyst MCP:
+
+```
+prefix "_race/mtchtxl8/"  key_count 200  truncated false   (200 distinct keys)
+```
+
+200 keys raced, 200 objects, 200 declared winners. Exact reconciliation.
+
+Then the stronger check, because *exactly one winner* is necessary but not sufficient — a
+service could hand out one success and still let a rejected racer's bytes land. **Stratus
+returns an etag, which is the MD5 of the stored content**, so the winner's claim can be checked
+against the bytes without trusting any code of mine:
+
+| key | etag returned by Stratus | = MD5 of | racer told "you won" | |
+|---|---|---|---|---|
+| `0.txt` | `4aa3856e8b5c70ff884520d1066623af` | `agent_race01` | agent_race01 | ✓ |
+| `1.txt` | `9120f1ebd4fa0d3360ab02c78fbeaaba` | `agent_race04` | agent_race04 | ✓ |
+| `2.txt` | `21238c127b6c539ae2f35207f0034f62` | `agent_race02` | agent_race02 | ✓ |
+| `3.txt` | `c3ef8813f7aa83b9f76fbf8360a5d835` | `agent_race05` | agent_race05 | ✓ |
+| `4.txt` | `4aa3856e8b5c70ff884520d1066623af` | `agent_race01` | agent_race01 | ✓ |
+
+Five for five. Every object holds exactly the racer the platform told it had won.
+
+**Catalyst has an atomic compare-and-set. It is in the object store, not the database.**
+
+### A void run, recorded because it looked like a finding and was my bug
+
+A second Stratus pass was run to add automated per-key read-back. It reported *48 durable
+contradictions* and, from key 48 onward, zero winners. **Both are mine, and neither is a
+platform finding.** The read-back called `String()` on `getObject`'s return, which is a wrapper
+object, not a Buffer — so all 48 "stored values" were the literal text `[object Object]`. The
+run is void. The reconciliation above was redone against Stratus's own content MD5 instead,
+which is better evidence anyway. `readbackStratus` now unwraps explicitly and reports the
+object's shape on failure rather than a stringified placeholder, so the next failure here reads
+as a bug rather than as a data mismatch.
+
+This is the second time in two orders that a mechanical mistake of mine produced an
+impressive-looking negative result. Both were caught by asking "is this the platform or is this
+me?" before writing it down, which is the only reason neither reached the register as a finding.
+
+### The reason that run died at key 48
+
+```
+FREE_USAGE_LIMIT_REACHED
+"You have exhausted the free tier allowance for Datastore - Fetch.
+ Please set up a payment method to continue using this resource."
+```
+
+**The Catalyst free tier is a hard wall, not a billing threshold.** The service stops. It does
+not meter into an invoice. Every authenticated route on this build spends 2 SELECTs resolving
+token → agent → project, so **every route except `/health` is currently down**, including the
+ones I would need to re-run G2.
+
+**This corrects entry 38.** That entry priced C2's ledger read at $92.71/month against C1's
+$0.20 and treated the difference as money. It is not only money: at 3,333 free reads a month C2
+does not get more expensive, it **stops**, and takes every other Data Store consumer in the
+project down with it, because the quota is per-project and not per-caller. The ranking in entry
+38 stands and gets sharper; the framing was wrong.
+
+### What I did NOT probe, stated so nobody reads silence as absence
+
+**NoSQL conditional insert — the strongest candidate on paper, and untested.**
+`INoSQLInsertItem` carries an optional `condition`, and `INoSQLConditionFunction` supports
+`function_name: 'attribute_exists'` with a `negate` flag — a genuine DynamoDB-style conditional
+put. If it works it would beat Stratus outright: typed, queryable, and on a different meter.
+
+I could not test it. `app.nosql().getAllTable()` returns `[]` — the service is reachable and the
+project has **zero tables**. The Node SDK exposes only `getTable`, `getAllTable` and `table`;
+there is **no create-table method**. And **none of the 186 tools in the Catalyst MCP surface
+mentions NoSQL** — I listed all of them to check. A NoSQL table can only be created from the
+console.
+
+This is a real hole in the answer and I am not going to paper over it. The harness is written
+and generic; one console-created table with a partition key would let it run unchanged.
+
+**Circuits — not probed.** `app.circuit()` is present on the SDK, but Zoho's own Data Store
+reference says Circuits is "**US DC only**; not available in EU, AU, IN, JP, SA, or CA data
+centers." This project is in the **IN** data centre — confirmed independently by the console URL
+the org API returns, `https://console.catalyst.zoho.in/baas/60083782173/index`. Ruled out on
+documentation plus a checkable fact, not on a measurement, and it is also console-provisioned.
+
+**Queue single-writer — not probed, and reasoned rather than measured.** `lib/queue` exists
+(queue / topic / consumer). A single-consumer queue would serialise writes, but it does not
+answer the caller: a claim is a synchronous question — *do I own this task?* — and a queue is
+asynchronous. Making it a claim primitive needs a second round trip to poll the outcome, and
+that read would go back to the Data Store, whose answers are exactly what has just been shown
+untrustworthy. Also console-provisioned. **This is an argument, not a measurement**, and it
+should be read as one.
+
+**Cache atomic increment — nothing to probe.** The SDK segment surface has no increment method.
+
+## 3. The ruling
+
+**0035 branch 1 applies: an atomic primitive exists, so the route is not eliminated.** It is
+`putObject(key, body, { overwrite: false })` on Stratus — 200/200 under contention, reconciled
+against durable state twice.
+
+I am recording this against my own expectation. I went into this pass expecting to write the
+other ruling, and the sentence "Catalyst cannot support atomic claim" would have been the more
+striking result. It is not what the measurements say.
+
+**But the primitive is in the wrong service, and that is the finding, not a footnote.** Every
+atomic guarantee this route needs — exactly-one claim, monotonic `seq`, idempotent append, scope
+locks, agent identity — has to move out of the database and into object storage. The database
+keeps only what it can be trusted with: bulk reads and replay.
+
+### The rewrite cost, honestly
+
+An **estimate**, and flagged as one — I could not run it, because the Data Store quota wall
+means no authenticated route currently works.
+
+- **New:** a `stratus-lock` module — acquire is one conditional put, release is one delete,
+  expiry rides `expires-after`. Small, and it replaces logic that already exists.
+- **Changed:** claim, scope-lock, request-dedupe and seq allocation all swap their backing
+  primitive. `seq` is the least disruptive: allocate-on-collision against `seq/<n>` is exactly
+  the increment-on-collision loop already built and tested, pointed at a different store.
+- **Dropped:** four `is_unique` columns come off the schema, and the composite-key design
+  reasoning behind them — four orders of it — becomes moot. `<project_id>:<task_id>` stays, but
+  as an object key, where the table-global-uniqueness problem it was invented to solve does not
+  exist.
+- **Unchanged:** the `CoordinationStore` contract, the conformance suite, every handler above
+  the port boundary. The adapter seam that made this bearable was worth building.
+
+**The quota cost of the fix is the part to look at hardest.** Every claim becomes one Stratus
+Upload, and **Stratus Upload's free tier is 2,000/month — the tightest quota in the system**,
+against Data Store INSERT's 5,000. Adopting the primitive that works moves the route onto the
+scarcest meter it has. And per the wall above, that ceiling stops the service rather than
+billing for it. Route C would be correct and would run out sooner.
+
+### Owed, and blocked
+
+**Contended G2 has not been re-run against the adopted primitive.** 0035 asks for it and I have
+not done it: adoption is a code change, and the quota wall means I cannot exercise any
+authenticated route to verify one. The Stratus figures above are the primitive measured
+directly; they are not G2. Recorded as owed rather than quietly folded into the Stratus numbers,
+which would be the same borrowed-number error in a third costume.
+
+Held as instructed: **F1–F12 unstarted, A5 unspent.**
+
+### Cleanup
+
+`cas_probe` table dropped. The `_race/` prefix deleted from `coordinationsnapshots`. The four
+`/diag/atomic/*` routes remain deployed and are authenticated like every other route; they
+should be deleted once the primitive question is closed, and are recorded here so they are not
+forgotten alongside `/diag/putobject` and `/diag/readpath`.
