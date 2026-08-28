@@ -1428,6 +1428,16 @@ readSnapshot                   0           7             7
 acquireScope                   1           2             2
 ```
 
+**One cost this table does not capture, and it is route G's worst.**
+`readEvents` re-reads **every event object** on any change to the ledger, one
+`git cat-file` subprocess per event. So it is 1 REST + 1 `git fetch` + **N
+subprocess spawns**, and it grows with ledger size rather than page size. It
+does not cost quota — subprocesses are free — but it is why the G1 tight-loop
+readback slows measurably as the ledger fills, and it would be the first thing I
+fixed (a single `git cat-file --batch` instead of N spawns). Reporting it
+because a cost that is invisible to the quota column is exactly the kind that
+gets left out of a comparison.
+
 ### The binding limit, and it is not the one that matters most
 
 **`core` = 5,000 requests/hour, per user, rolling window.** Verified against the

@@ -368,7 +368,14 @@ if (LIVE) {
     await measure('claimTask (win)', () => store.claimTask(PROJECT, 'task_g4', 'agent_g4'));
     await measure('claimTask (lose)', () => store.claimTask(PROJECT, 'task_g4', 'agent_zz'));
     await measure('releaseTask', () => store.releaseTask(PROJECT, 'task_g4', 'agent_g4'));
-    await measure('heartbeat', () => store.heartbeat(PROJECT, 'agent_g4', 'working', null, null));
+    await measure('heartbeat (first)', () => store.heartbeat(PROJECT, 'agent_g4', 'working', null, null));
+    // The second heartbeat is the one that matters: a running daemon does this
+    // one every 20 s forever, and the first only once per process. Measured
+    // rather than inferred -- the previous version of this table carried a
+    // steady-state row copied from an earlier run, which is exactly the sort of
+    // borrowed number entry 25 is about.
+    await new Promise((r) => setTimeout(r, 1_100));
+    await measure('heartbeat (steady)', () => store.heartbeat(PROJECT, 'agent_g4', 'working', null, null));
     await measure('listPresence', () => store.listPresence(PROJECT));
     await measure('readEvents', () => store.readEvents(PROJECT, 0));
     await measure('readSnapshot', () => store.readSnapshot(PROJECT));
@@ -408,7 +415,7 @@ if (LIVE) {
       + perHour + '/hour against ' + q.limit + ' -- ' + verdict,
     );
 
-    assert.equal(rows.length, 9);
+    assert.equal(rows.length, 10);
     // Fail rather than publish an inflated number. "Could not measure cleanly"
     // and "this is the cost" are different claims and only one of them is
     // useful.
