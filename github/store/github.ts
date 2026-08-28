@@ -75,6 +75,21 @@ export interface AttemptStats {
   rest_calls: number;
   /** Transport failures that were retried. Order 0019: a retry loop hides cost. */
   transport_retries: number;
+  /**
+   * `X-RateLimit-Remaining` from the LAST response, and the authoritative read
+   * of the quota.
+   *
+   * NOT from `GET /rate_limit`. Measured 2026-08-28: that endpoint reported
+   * `remaining == limit == 5000` for every resource while live responses on the
+   * same token in the same second reported `remaining=2856, used=2144` and
+   * decremented by one per call. The summary endpoint and the per-response
+   * header are two different claims about one counter and they disagreed; the
+   * header is the one that tracks reality.
+   *
+   * -1 means no response has been seen yet.
+   */
+  rate_limit_remaining: number;
+  rate_limit_limit: number;
   conditional_304: number;
   conditional_200: number;
 }
@@ -90,6 +105,7 @@ export function createGithubStore(opts: GithubStoreOptions) {
 
   const stats: AttemptStats = {
     pushes: 0, push_attempts_by_op: {}, rest_calls: 0, transport_retries: 0,
+    rate_limit_remaining: -1, rate_limit_limit: -1,
     conditional_304: 0, conditional_200: 0,
   };
 
@@ -165,6 +181,12 @@ export function createGithubStore(opts: GithubStoreOptions) {
       },
       { attempts: 4, base_ms: 200, clock, log: nullLogger, op: `rest.${init.operation}` },
     );
+    // Record the authoritative quota reading from the response itself.
+    const rem = res.headers['x-ratelimit-remaining'];
+    const lim = res.headers['x-ratelimit-limit'];
+    if (rem !== undefined && /^\d+$/.test(rem)) stats.rate_limit_remaining = Number(rem);
+    if (lim !== undefined && /^\d+$/.test(lim)) stats.rate_limit_limit = Number(lim);
+
     if (res.status === 304) stats.conditional_304 += 1;
     else if (res.status === 200 && init.etag) stats.conditional_200 += 1;
     return res;

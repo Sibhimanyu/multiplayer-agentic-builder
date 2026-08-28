@@ -1311,44 +1311,97 @@ than by a reviewer.
 
 ---
 
-## G2 — claim round-trip, 200 claims
+## G2 — claim round-trip, CONTENDED
+
+**Host:** `github.com` (git push over HTTPS) decides the claim. A loser's owner lookup adds
+`api.github.com` (REST).
+**Mechanism:** `push --force-with-lease` with an **empty expected value** (create-if-absent).
+**Contended:** 20 racers × 50 rounds = **1,000 claims, all racers on ONE task per round.**
 
 ```
-claimTask WIN                        n=200  min=1,883  p50=2,182  p95=2,805  max= 3,452  mean=2,272
-claimTask LOSE (incl. owner lookup)  n=199  min=1,811  p50=2,096  p95=2,692  max= 4,134  mean=2,191
-releaseTask                          n=200  min=2,545  p50=2,943  p95=3,488  max=36,293  mean=3,163   ms
-
-ops: pushes=603  rest=801  transport_retries=0
-claim push ATTEMPTS: 401 for 400 claims (1.0025 per claim)
-operations that needed a retry: 1 of 600 -- that sample EXCLUDED from the distributions
+claim, ALL racers        n=1000  min=2,572  p50=4,532  p95=5,353  p99=5,891  max=6,821  ms
+claim, the WINNER        n=  50  min=2,572  p50=2,909  p95=3,245  p99=3,868  max=4,439  ms
+claim, a LOSER           n= 950  min=3,629  p50=4,565  p95=5,364  p99=5,962  max=6,821  ms
 ```
 
-**The 36,293 ms `releaseTask` outlier is reported, not averaged away.** One sample in 200, at
-**10× p95**. Order 0012's rule was written for exactly this shape — *"a claim that occasionally
-stalls over a second is user-visible and a mean of 139 ms hides it."* Note the mean (3,163) sits
-above p50 (2,943) purely because of that one sample, which is why p50/p95 are the summary and the
-mean is shown only so the distortion is visible.
+No mean, per order 0036. 1,000 push attempts for 1,000 claims — exactly one push each, no retry
+storm under contention.
 
-I am not calling 36 s a ceiling or a threshold. It is one observation, on a real network, of a
-`git push` that stalled. What generalises is that this route's tail is **long** — a push can hang
-far past its median, and any caller with a user waiting on it needs a timeout of its own.
+### Reply and durable state, measured separately
 
-### `claimTask` is essentially uncontended here — and that qualifies probe G
+```
+replies saying ok:true        50  (expected 50)
+rounds where the ref agreed   50
+disagreements                  0
+```
 
-401 push attempts for 400 claims. Contention is not what makes this route slow; **round-trip
-latency is**, and it is remarkably flat: min 1,883 and p95 2,805 on the winning path.
+Measured as two independent checks on purpose. Catalyst's Data Store CAS returned `affected: 1`
+to five racers while the table held exactly one correct row — **either check alone passes** and
+only the pair catches it. Here the *reply* is the porcelain status character and the *durable
+state* is which agent's commit the ref actually holds, read back afterwards by a different store
+instance. They agreed 50/50.
 
-**Losing (2,096 ms) is now marginally faster than winning (2,182 ms), which looks like it
-contradicts probe G — and does not.** Probe G measured the raw `git push` alone: reject 1,084 ms
-vs create 2,165 ms, and a rejected push is genuinely cheaper because nothing transfers. G2
-measures the whole **adapter operation**, and the loss path additionally does the owner lookup
-(2 REST calls, ~1.1 s) that turns `{ok:false}` into `{ok:false, owner}`. Add those and the two
-paths land within 4% of each other.
+### The winner is faster than a loser, and that is the shape not an anomaly
 
-Both figures are correct for what they measured, and neither should be quoted as "the claim
-latency" without saying which. The number a caller experiences is **G2's**.
+A winner's push creates the ref and returns (p50 2,909 ms). A loser is queued behind 19
+concurrent pushes to the same ref *and* then pays the owner lookup — 2 REST calls on
+`api.github.com` — to turn `{ok:false}` into `{ok:false, owner}` (p50 4,565 ms).
 
----
+### Contended against uncontended, for this route only
+
+My earlier G2 was **uncontended** and order 0036 is right that it was the wrong row. Both, so
+the difference is visible rather than substituted:
+
+| | p50 | p95 | mechanism |
+|---|---|---|---|
+| uncontended (n=200, one racer per task) | 2,182 ms | 2,805 ms | same push, no competitor |
+| **contended (n=1,000, 20 racers per task)** | **4,532 ms** | **5,353 ms** | same push, 19 competitors |
+
+Contention roughly doubles it. The uncontended figure is kept only as the paired counterpart;
+**the contended one is the row for the scoreboard.**
+
+## Two instrument bugs found while measuring G3/G4, before publishing either
+
+Both would have shipped a wrong number, and both were caught by the same
+question — *do my two readings of the same thing agree?*
+
+### 1. `GET /rate_limit` does not report the real counter
+
+My first G3/G4 read `GET /rate_limit` either side of each operation and reported
+**CHARGED = 0 for all nine operations** — including a `readSnapshot` that my own
+counter said sent seven calls. Two claims about one counter, disagreeing, so
+neither was publishable.
+
+Measured directly, same token, same second:
+
+```
+GET /rate_limit         ->  remaining 5000, limit 5000, used 0   (every resource)
+live response header    ->  remaining 2856, limit 5000, used 2144, -1 per call
+```
+
+**`/rate_limit` reported a full bucket while the bucket was 43% spent.** The
+authoritative reading is the `X-RateLimit-Remaining` header the operation's own
+response carries, and the adapter now records it on every call.
+
+Had I published the first version, **G4 would have said route G's reads are free
+and G5 would have been built on top of it** — which is the shape of entry 25,
+where a number that was never what it claimed to be became the stated reason one
+route beat another.
+
+### 2. A concurrent run was spending the same token
+
+The corrected instrument then reported `charged > sent` on four of nine rows —
+`readSnapshot` sent 7 and was charged 9. That is not possible for a single
+operation, and it was not: a backgrounded G1 run was still hammering the API
+with the same token, and its traffic was landing inside my measurement window.
+
+This is Firebase's readiness-probe failure in another costume: asking *"did the
+counter move"* rather than *"did MY operation move it"*.
+
+`measure()` now carries a **contamination guard** — it expects
+`charged === sent − (conditional 304s)` and **fails the test** when they differ,
+naming the cause. "Could not measure cleanly" and "this is the cost" are
+different claims, and only one of them belongs in a results table.
 
 ## G4, G5, G6 — operations and cost
 

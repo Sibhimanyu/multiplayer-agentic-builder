@@ -7,6 +7,10 @@
     "test": "node --test \"store/*.test.ts\" \"cli/*.test.ts\" \"webhook/*.test.ts\" \"reaper.test.ts\"",
     "test:unit": "node --test store/transport.test.ts store/refs.test.ts store/provisioning.test.ts store/scope-invariants.test.ts cli/cli.test.ts webhook/map.test.ts reaper.test.ts",
     "test:live": "GITHUB_LIVE=1 node --test store/github.live.test.ts",
-    "typecheck": "tsc --noEmit -p ../tsconfig.github.json"
+    "typecheck": "tsc --noEmit -p ../tsconfig.github.json",
+    "g": "GITHUB_LIVE=1 node --test --test-timeout=7200000 demo/g-series.live.test.ts",
+    "g1": "GITHUB_LIVE=1 node --test --test-timeout=7200000 --test-name-pattern=G1 demo/g-series.live.test.ts",
+    "g2": "GITHUB_LIVE=1 node --test --test-timeout=7200000 --test-name-pattern=G2 demo/g-series.live.test.ts",
+    "g34": "GITHUB_LIVE=1 node --test --test-timeout=7200000 --test-name-pattern=G3 demo/g-series.live.test.ts"
   }
 }
