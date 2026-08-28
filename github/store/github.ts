@@ -433,35 +433,72 @@ export function createGithubStore(opts: GithubStoreOptions) {
   }
 
   /**
-   * Fetch the event namespace once, then read every object locally.
+   * Materialise events. `range` restricts the work to the page actually asked
+   * for; without it, the whole ledger.
    *
-   * One network round trip regardless of how many events are read. Safe to
-   * cache because an event is immutable (MB3) -- a subsequent fetch only ever
-   * transfers objects that did not exist before.
+   * WHY THE RANGE EXISTS. The first version always materialised everything:
+   * fetch N refs, list N refs, read N objects, parse N JSON blobs -- on every
+   * call, no matter how small the requested page. `readEvents(since, 1)` did
+   * O(ledger) work, so a loop that appends and reads back is O(N^2).
+   *
+   * Measured, and it is the second time this bug bit: after switching to one
+   * `git cat-file --batch` the G1 readback still degraded from ~17 s to ~200 s
+   * per append by the 15th event. The batch fixed the process spawns and left
+   * the real problem, which was doing the whole ledger's work for one event.
+   *
+   * It charges ONE REST call either way, which is exactly why neither version
+   * shows up in the G4 quota table. Same lesson as before, learned twice: the
+   * column you are tabulating cannot see the cost that matters.
+   *
+   * The seq is in the ref NAME, so the range filter runs on the listing before
+   * anything is fetched or parsed.
    */
   const eventMirrorState = new Map<string, string>();
   const eventCache = new Map<string, StoredEvent[]>();
 
-  async function loadEvents(l: RefLayout, operation: string): Promise<StoredEvent[]> {
+  async function loadEvents(
+    l: RefLayout, operation: string,
+    range?: { since_seq: Seq; limit: number },
+  ): Promise<StoredEvent[]> {
     // One cheap listing tells us whether a fetch is needed at all. Events are
     // append-only and immutable (MB3), so an unchanged ref set means an
     // unchanged ledger -- there is no in-place edit that could hide behind the
     // same names.
-    const refs = await listRefs(l.eventGlob, operation);
+    const all = await listRefs(l.eventGlob, operation);
+
+    // Narrow BEFORE any fetch or parse. parseSeq throws on an unreadable name
+    // rather than defaulting, so a malformed ref cannot silently drop out of
+    // the page.
+    const refs = range === undefined
+      ? all
+      : all
+        .map((r) => ({ ...r, seq: parseSeq(refTail(r.ref)) }))
+        .filter((r) => r.seq > range.since_seq)
+        .sort((a, b) => a.seq - b.seq)
+        .slice(0, range.limit);
+
     const fingerprint = refs.map((r) => `${r.ref}:${r.sha}`).sort().join('|');
+    // The cache is keyed per project, so it is only valid for a full load.
+    // A ranged load answers a different question and must not read or write it.
+    const cacheable = range === undefined;
     const cached = eventCache.get(l.project_id);
-    if (cached && eventMirrorState.get(l.project_id) === fingerprint) return cached;
+    if (cacheable && cached && eventMirrorState.get(l.project_id) === fingerprint) return cached;
 
     if (refs.length === 0) {
-      eventMirrorState.set(l.project_id, fingerprint);
-      eventCache.set(l.project_id, []);
+      if (cacheable) {
+        eventMirrorState.set(l.project_id, fingerprint);
+        eventCache.set(l.project_id, []);
+      }
       return [];
     }
 
-    const local = `refs/local-mirror/${l.project_id}/ev/*`;
+    // Fetch ONLY the refs in the page. A full-namespace refspec makes git
+    // negotiate every ref in the ledger on every call, which is the other half
+    // of the O(N) problem and is invisible from the caller's side.
+    const local = (ref: string) => ref.replace('refs/agentic/', 'refs/local-mirror/');
+    const specs = refs.map((r) => `+${r.ref}:${local(r.ref)}`);
     const f = await opts.git.run([
-      'fetch', '--quiet', '--prune', '--no-tags', 'origin',
-      `+${l.eventGlob}:${local}`,
+      'fetch', '--quiet', '--no-tags', 'origin', ...specs,
     ]);
     if (f.code === GIT_PUSH_FATAL || f.code !== 0) {
       throw await classifyGitFatal(
@@ -473,18 +510,10 @@ export function createGithubStore(opts: GithubStoreOptions) {
         operation, f.stderr,
       );
     }
-    const listed = await opts.git.run([
-      'for-each-ref', '--format=%(refname)\t%(objectname)', `refs/local-mirror/${l.project_id}/ev`,
-    ]);
-    if (listed.code !== 0) {
-      throw new StoreError(`${operation}: could not list mirrored event refs`, {
-        backend_message: listed.stderr,
-      });
-    }
-    const lines = listed.stdout.split('\n').filter(Boolean);
-    if (lines.length === 0) return [];
 
-    const shas = lines.map((line) => line.split('\t')[1] ?? '').filter(Boolean);
+    // The shas came from the listing, so they are already known -- no second
+    // enumeration needed, and no chance of the two disagreeing.
+    const shas = refs.map((r) => r.sha);
 
     // ONE `git cat-file --batch` for the whole page, not one spawn per event.
     //
@@ -516,8 +545,10 @@ export function createGithubStore(opts: GithubStoreOptions) {
     // order or commit date -- probe K measured that a rebase reorders commits
     // and rewrites their dates.
     out.sort((a, b) => a.seq - b.seq);
-    eventMirrorState.set(l.project_id, fingerprint);
-    eventCache.set(l.project_id, out);
+    if (cacheable) {
+      eventMirrorState.set(l.project_id, fingerprint);
+      eventCache.set(l.project_id, out);
+    }
     return out;
   }
 
@@ -538,9 +569,13 @@ export function createGithubStore(opts: GithubStoreOptions) {
     const requested = limit ?? LIMITS.events;
     const applied = Math.max(1, Math.min(requested, LIMITS.events));
 
-    const all = (await loadEvents(l, 'readEvents')).filter(
-      (e) => e.project_id === project_id && e.seq > since_seq,
-    );
+    // Ask for ONE MORE than the page, so `has_more` is answered without
+    // materialising the rest of the ledger. This is the whole reason the range
+    // exists: `readEvents(since, 1)` used to do O(ledger) work.
+    const fetched = await loadEvents(l, 'readEvents', {
+      since_seq, limit: applied + 1,
+    });
+    const all = fetched.filter((e) => e.project_id === project_id && e.seq > since_seq);
     const page = all.slice(0, applied);
     const has_more = all.length > page.length;
 
