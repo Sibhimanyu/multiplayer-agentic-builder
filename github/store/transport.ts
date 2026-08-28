@@ -64,6 +64,16 @@ export interface GitRunner {
   push(args: string[]): Promise<PushResult>;
   /** Run any other git command. Used for fetch, cat-file, commit-tree. */
   run(args: string[]): Promise<{ code: number; stdout: string; stderr: string }>;
+  /**
+   * Read many objects through ONE `git cat-file --batch` process.
+   *
+   * Reading N objects with N `git cat-file` invocations is N process spawns,
+   * and it made `readEvents` grow with ledger size rather than page size: the
+   * G1 tight-loop readback degraded to ~77 s per append by the 50th event and
+   * was measuring my subprocess overhead rather than GitHub. `--batch` takes
+   * the shas on stdin and streams every object back over one pipe.
+   */
+  catFileBatch(shas: string[]): Promise<Map<string, string>>;
 }
 
 const PUSH_FLAGS = new Set<string>(['*', '=', '!', '-', ' ', '+']);
@@ -117,6 +127,53 @@ export function createGitRunner(cwd: string, env: NodeJS.ProcessEnv = {}): GitRu
       return { code: r.code, refs: parsePorcelain(r.stdout), stderr: r.stderr };
     },
     run: exec,
+
+    async catFileBatch(shas) {
+      const out = new Map<string, string>();
+      if (shas.length === 0) return out;
+      return new Promise((resolve, reject) => {
+        const child = spawn('git', ['cat-file', '--batch'], {
+          cwd,
+          env: { ...process.env, ...env, GIT_TERMINAL_PROMPT: '0' },
+        });
+        const chunks: Buffer[] = [];
+        let stderr = '';
+        child.stdout.on('data', (d: Buffer) => chunks.push(d));
+        child.stderr.on('data', (d) => { stderr += d; });
+        child.on('error', reject);
+        child.on('close', () => {
+          // --batch emits, per object: "<sha> <type> <size>\n<contents>\n".
+          // Parse by the DECLARED SIZE rather than by scanning for a
+          // delimiter -- a commit message can contain anything, including a
+          // line that looks like the next header.
+          const buf = Buffer.concat(chunks);
+          let i = 0;
+          while (i < buf.length) {
+            const nl = buf.indexOf(0x0a, i);
+            if (nl === -1) break;
+            const header = buf.subarray(i, nl).toString('utf8');
+            const parts = header.split(' ');
+            if (parts.length < 3) {
+              // "<sha> missing" -- report it rather than skipping silently.
+              reject(new Error(`git cat-file --batch: ${header} (stderr: ${stderr.slice(0, 200)})`));
+              return;
+            }
+            const sha = parts[0]!;
+            const size = Number(parts[2]);
+            if (!Number.isFinite(size)) {
+              reject(new Error(`git cat-file --batch: unparseable size in "${header}"`));
+              return;
+            }
+            const start = nl + 1;
+            out.set(sha, buf.subarray(start, start + size).toString('utf8'));
+            i = start + size + 1; // trailing newline
+          }
+          resolve(out);
+        });
+        child.stdin.write(shas.join('\n') + '\n');
+        child.stdin.end();
+      });
+    },
   };
 }
 

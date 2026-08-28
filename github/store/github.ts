@@ -485,16 +485,25 @@ export function createGithubStore(opts: GithubStoreOptions) {
     if (lines.length === 0) return [];
 
     const shas = lines.map((line) => line.split('\t')[1] ?? '').filter(Boolean);
+
+    // ONE `git cat-file --batch` for the whole page, not one spawn per event.
+    //
+    // The previous version spawned a process per object, which made this grow
+    // with LEDGER SIZE rather than page size. Measured: the G1 tight-loop
+    // readback degraded to ~77 s per append by the 50th event, and at that
+    // point the figure was measuring my subprocess overhead rather than
+    // anything about GitHub. It costs no quota, which is precisely why it would
+    // never have shown up in the G4 table.
+    const objects = await opts.git.catFileBatch(shas);
     const out: StoredEvent[] = [];
     for (const sha of shas) {
-      const r = await opts.git.run(['cat-file', 'commit', sha]);
-      if (r.code !== 0) {
-        throw new StoreError(`${operation}: could not read event object ${sha}`, {
-          backend_message: r.stderr,
-        });
+      const raw = objects.get(sha);
+      if (raw === undefined) {
+        throw new StoreError(`${operation}: could not read event object ${sha}`);
       }
-      const blank = r.stdout.indexOf('\n\n');
-      const message = blank === -1 ? '' : r.stdout.slice(blank + 2);
+      // A commit object is "<headers>\n\n<message>".
+      const blank = raw.indexOf('\n\n');
+      const message = blank === -1 ? '' : raw.slice(blank + 2);
       let parsed: StoredEvent;
       try {
         parsed = JSON.parse(message) as StoredEvent;

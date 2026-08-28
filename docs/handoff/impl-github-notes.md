@@ -1428,15 +1428,26 @@ readSnapshot                   0           7             7
 acquireScope                   1           2             2
 ```
 
-**One cost this table does not capture, and it is route G's worst.**
-`readEvents` re-reads **every event object** on any change to the ledger, one
-`git cat-file` subprocess per event. So it is 1 REST + 1 `git fetch` + **N
-subprocess spawns**, and it grows with ledger size rather than page size. It
-does not cost quota — subprocesses are free — but it is why the G1 tight-loop
-readback slows measurably as the ledger fills, and it would be the first thing I
-fixed (a single `git cat-file --batch` instead of N spawns). Reporting it
-because a cost that is invisible to the quota column is exactly the kind that
-gets left out of a comparison.
+**One cost this table cannot see, found while measuring G1 — and fixed.**
+
+`readEvents` re-read **every event object** on any change to the ledger, one
+`git cat-file` subprocess per event. That is 1 REST + 1 `git fetch` + **N
+subprocess spawns**, growing with *ledger size* rather than page size.
+
+It cost **zero quota**, which is exactly why it would never have appeared in the
+table above — and it was route G's worst real cost. Measured: the G1 tight-loop
+readback degraded to **~77 s per append by the 50th event**, at which point the
+figure was measuring my own subprocess overhead rather than anything about
+GitHub. I killed that run rather than publish it.
+
+Fixed: one `git cat-file --batch` for the whole page, parsing by the **declared
+object size** rather than scanning for a delimiter — a commit message can
+contain a line that looks like the next header, and this adapter puts arbitrary
+JSON in commit messages.
+
+The lesson generalises past this bug: **a cost invisible to the column you are
+tabulating is the kind that never reaches a comparison.** The quota column was
+right and complete and still hid the thing that actually made the route slow.
 
 ### The binding limit, and it is not the one that matters most
 

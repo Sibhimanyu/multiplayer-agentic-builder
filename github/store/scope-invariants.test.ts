@@ -47,6 +47,8 @@ interface Recorded { run: string[][]; push: string[][] }
 
 function fakeGit(rec: Recorded): GitRunner {
   return {
+    // No object reads happen on the acquireScope path these tests drive.
+    async catFileBatch() { return new Map<string, string>(); },
     async run(args) {
       rec.run.push(args);
       if (args[0] === 'commit-tree') {
