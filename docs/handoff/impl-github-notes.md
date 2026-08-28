@@ -1449,7 +1449,34 @@ The lesson generalises past this bug: **a cost invisible to the column you are
 tabulating is the kind that never reaches a comparison.** The quota column was
 right and complete and still hid the thing that actually made the route slow.
 
-### The binding limit, and it is not the one that matters most
+### A correction to how I justified the second fix
+
+Two fixes went into the read path and **only the first was justified by a
+reading I had actually made correctly.**
+
+1. **The spawn fix was real and measured.** The G1 tight-loop readback genuinely
+   degraded to ~77 s per append by the 50th event, with one `git cat-file`
+   process per object. One `--batch` call fixed it.
+
+2. **The ranged-read fix was correct, and my reason for making it right then was
+   a measurement error.** I re-ran G1, watched the repository's ref count, and
+   concluded it was *still* degrading to ~200 s per append. It was not. I was
+   counting `refs/agentic/*` across **two project namespaces** — the live run's,
+   and a leftover one from a run I had killed earlier and not purged. The live
+   run was progressing normally the whole time.
+
+`readEvents` **was** genuinely O(ledger) rather than O(page), so the fix stands
+on its own merits and I have kept it. But I reached for it on the strength of a
+count that could not distinguish *my* refs from *someone else's leftovers* —
+which is the same shape as the contamination that inflated the first G3/G4 run,
+in the same hour, and I did not recognise it the second time.
+
+The check I should have run first, and now do: **`ls-remote` the primitive
+directly.** `git push` 1,938–2,034 ms and `git ls-remote` 1,223–1,273 ms, live,
+matching probe G's earlier 2,165 / 1,340. github.com was never slow; my reading
+was wrong.
+
+### The binding limit, and it is not the one that matters most### The binding limit, and it is not the one that matters most
 
 **`core` = 5,000 requests/hour, per user, rolling window.** Verified against the
 live counter across all fifteen rate-limit resources GitHub exposes for this
