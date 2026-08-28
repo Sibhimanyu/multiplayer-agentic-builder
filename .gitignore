@@ -30,3 +30,6 @@ ui-debug.log
 
 # local Firebase web config for the dashboard
 client/.env.local
+
+# scratch commit-message file; the sandbox blocks writing to /tmp
+.commitmsg
