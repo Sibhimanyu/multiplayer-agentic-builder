@@ -478,3 +478,11 @@ Fail any of these and the build is not done, regardless of everything else.
 - [ ] Every capped list logs what it dropped.
 - [ ] Emoji behaviour is identical across adapters.
 - [ ] `G10` written independently, before comparing.
+
+
+## Verifying a spawned run — artifact, not exit status
+
+A spawned agent run that hits a quota or session limit prints a message and **exits 0**; the
+notification says `completed (exit code 0)` and no work was done. Confirm all three before reading
+the report as a finding: the branch head moved, files changed with a clean worktree, and the output
+contains no limit message (`grep -i "session limit\|quota\|rate limit"`). See entry 29.

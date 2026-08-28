@@ -144,6 +144,35 @@ with one `runTransaction`.
 When the final comparison is written, do not flatten "needed a workaround" and "cannot be made
 correct" into the same column.
 
+## Entry 29 — the coordinator made the rc=0 error while enforcing it
+
+Order 0032 was issued, pushed, and spawned. The spawned process printed
+
+```
+You've hit your session limit · resets 7:20pm (Asia/Calcutta)
+```
+
+and **exited 0**. The task notification read `completed (exit code 0)`. Total work performed: none.
+`impl/catalyst-v1` never moved off `71c5b59`, the worktree stayed clean, and for a short while the
+order looked delivered.
+
+This is **order 0027's rule, verbatim, applied to me**: `rc=0` is not a verdict; read structured
+fields, never exit codes. I have issued that rule four times to two builds. My own orchestration
+took a subprocess exit status as evidence of work — and a spawn harness returns 0 on a total no-op,
+which is precisely the failure the rule exists to catch.
+
+Worth being exact about the shape: this is not "the tool lied." The exit code faithfully reported
+that the *process* terminated normally. It was never a claim about the *task*. Reading it as one is
+the same substitution as reading a 400's `Cache-Control` header as a property of the data path
+(entry 24) — a true signal about the wrong subject. Third instance of that shape in three orders.
+
+**Rule: a spawned run's result is verified by artifact, never by exit status.** Specifically —
+did the branch head move, did the files change, and does the output contain a quota or limit
+message? Check all three before reading a single word of the report as a finding.
+
+Entry 27's `putObject` result survives this: it was verified against a moved head (`71c5b59`), a
+recorded bucket before/after, and self-reported probe defects — not against an exit code.
+
 ## Entry 26 — Stratus bucket caching does not exist in the IN data centre
 
 `Update_Bucket` **does** expose `bucket_meta.caching.status` (enum `["true","Disabled"]`), so this
