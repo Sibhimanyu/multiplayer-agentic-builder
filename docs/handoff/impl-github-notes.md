@@ -1274,40 +1274,63 @@ error. Flagging it because it is a reading of the interface, not just an impleme
 
 ---
 
-## G1 — publish → visible latency
+## G1 — appendEvent, and publish→visible in TWO mechanisms
 
-100 appends, each read back by a **different client** (same-process caching would measure the
-cache, not the platform):
+Every figure carries its host and its mechanism, per order 0036.
+
+### appendEvent
+
+**Host:** `github.com` (git push over HTTPS) for the write, `api.github.com`
+(REST) for the dedupe check and seq read.
+**Mechanism:** 1 git push + 2 REST, **uncontended**.
 
 ```
-append (write acknowledged)            n=100  min= 2,883  p50= 3,262  p95= 5,186  max= 5,898
-publish -> visible to another client   n=100  min= 5,940  p50= 7,599  p95= 9,922  max=12,345   ms
-
-writer ops: pushes=102  rest=201  transport_retries=0
-append push ATTEMPTS: 100 for 100 appends (1.00 per append)
+appendEvent   n=100   min=2,883   p50=3,262   p95=5,186   max=5,898  ms
 ```
 
-**Route G's publish→visible p50 is 7.6 s.** That is the honest headline and it is slow. The
-breakdown: ~3.3 s to get the write acknowledged, then the reader's detection cost — a `git fetch`
-of the event namespace plus a ref listing, about two poll cycles.
+**It does not degrade with ledger size.** Measured separately, n=60, appending
+into a growing ledger:
 
-### This qualifies my own O(N²) `seq` claim, and the qualification matters
+```
+ledger size    0     10     20     30     40     50     59
+append ms   2,903  3,355  3,050  3,237  3,328  3,110  3,065      2 REST throughout
+```
 
-Probe K measured 12 concurrent allocators costing 78 push attempts — quadratic. G1 measures
-**1.00 push attempts per append across 100 sequential appends. Zero retries.**
+Flat. `appendEvent` reads only the dedupe ref and the max seq, both single REST
+calls whose cost does not grow with the ledger. Worth stating because the
+*read* path did have an O(ledger) problem (twice), and it would be reasonable to
+assume the write path shared it. It does not.
 
-Both are true and they are not in tension: the quadratic cost is a property of **concurrency on
-one counter**, not of appending. A single agent appending in a loop never collides with itself.
-So the honest form of the `seq` finding is:
+### publish→visible — and there are TWO numbers, not one
 
-> Sequential appends cost exactly one push each. Contention on the same project's counter costs
-> O(N²) attempts in N. A project with agents appending independently pays the first; a project
-> with a burst of simultaneous appends pays the second.
+Order 0034 corrected Catalyst for putting a tight-loop read floor in a row
+headed the same as Firebase's listener push. Both of mine are below, labelled,
+so they cannot be confused.
 
-I had written the O(N²) number without that qualifier, which would have led a reader to expect
-78 attempts for 12 appends in a demo where they happened to be sequential. Same error shape as
-generalising a probe past what it measured — mine this time, caught by a later measurement rather
-than by a reviewer.
+**(a) The floor.** What the ledger can physically do.
+**Host:** `api.github.com`.
+**Mechanism:** tight read loop, **zero backoff, NO subscriber**.
+
+```
+publish->visible FLOOR   n=100   min=5,940   p50=7,599   p95=9,922   max=12,345  ms
+```
+
+**(b) What a subscriber experiences.** The number a caller actually sees.
+**Host:** `api.github.com`.
+**Mechanism:** **POLL at a 5,000 ms interval**, through `subscribe()`.
+
+```
+publish->visible SUBSCRIBER   n=12   min=8,228   p50=8,551   p95=9,048   p99=9,083   max=9,092  ms
+```
+
+**The interval is inside the number.** A change landing just after a poll waits
+a full interval for the next one, which is why the subscriber figure is both
+higher than the floor and much tighter — the poll clock dominates the variance.
+
+**Comparability:** (a) is comparable to Catalyst's 318 ms, which is the same
+tight-loop shape. **Neither is comparable to Firebase's 191 ms listener push
+without naming the mechanism** — (b) is the honest counterpart and route G loses
+that row structurally, because a poll cannot beat a push.
 
 ---
 
@@ -1476,7 +1499,35 @@ directly.** `git push` 1,938–2,034 ms and `git ls-remote` 1,223–1,273 ms, li
 matching probe G's earlier 2,165 / 1,340. github.com was never slow; my reading
 was wrong.
 
-### The binding limit, and it is not the one that matters most### The binding limit, and it is not the one that matters most
+### Ref counts are not a progress meter — three mis-diagnoses in one session
+
+Recording this because it is the most repeated mistake I made today and none of
+the three was subtle in hindsight.
+
+I used `git ls-remote | wc -l` as a proxy for "how far has the run got". It
+misled me three times:
+
+1. It counted a **killed run's leftover namespace** alongside the live one, so a
+   run that was progressing normally looked stalled. On the strength of that I
+   made a second read-path fix — a correct fix, for a wrong reason.
+2. It counted **across a harness transition**, so one test finishing and the next
+   starting read as one test crawling.
+3. It suggested `appendEvent` had regressed **17×** to ~57 s. Measured directly:
+   **flat at 3.0–3.4 s across a 60-event ledger, 2 REST throughout.** No
+   regression at all.
+
+Each time, the direct measurement took about three minutes and was unambiguous;
+each time, I reached for the proxy first because it was one command. A count that
+cannot distinguish *my* work from *someone else's leftovers*, or *this test* from
+*the next one*, is not a measurement — it is the same class of error as reading
+`/rate_limit` instead of the response header, and as watching a counter that
+another process is also moving.
+
+`github/probes/pushtime.py` now answers "is it me or is it them" in thirty
+seconds against the primitives directly, which is the check that should have come
+first all three times.
+
+### The binding limit, and it is not the one that matters most### The binding limit, and it is not the one that matters most### The binding limit, and it is not the one that matters most
 
 **`core` = 5,000 requests/hour, per user, rolling window.** Verified against the
 live counter across all fifteen rate-limit resources GitHub exposes for this
@@ -1590,9 +1641,9 @@ myself where the answer is no.
 
 | row | route G figure | host | mechanism | comparable? |
 |---|---|---|---|---|
-| `appendEvent` p50 | *(see G1)* | `github.com` + `api.github.com` | 1 git push + 2 REST, uncontended | **YES** — same shape as both |
-| publish→visible, **floor** | *(see G1)* | `api.github.com` | tight read loop, zero backoff, **no subscriber** | **NO** — comparable only to Catalyst's 318 ms, which is the same tight-loop shape. **Not** to Firebase's listener push. |
-| publish→visible, **subscriber** | *(see G1)* | `api.github.com` | **POLL at 5,000 ms** | **PARTIALLY** — same *question* as Firebase's 191 ms listener push, but poll vs push is a different mechanism and route G will lose it structurally. Put them in one row only with both mechanisms named. |
+| `appendEvent` p50 | **3,262 ms** (p95 5,186, n=100) | `github.com` + `api.github.com` | 1 git push + 2 REST, uncontended | **YES** — same shape as both |
+| publish→visible, **floor** | **7,599 ms** (p95 9,922, n=100) | `api.github.com` | tight read loop, zero backoff, **no subscriber** | **NO** — comparable only to Catalyst's 318 ms, which is the same tight-loop shape. **Not** to Firebase's listener push. |
+| publish→visible, **subscriber** | **8,551 ms** (p95 9,048, n=12) | `api.github.com` | **POLL at 5,000 ms** | **PARTIALLY** — same *question* as Firebase's 191 ms listener push, but poll vs push is a different mechanism and route G loses it structurally. One row only with both mechanisms named. |
 | claim p50, **uncontended** | 2,182 ms | `github.com` | push, no competitor | **YES** — against Catalyst 127 ms, Firebase 257 ms |
 | claim p50, **contended** | **4,532 ms** | `github.com` (+`api.github.com` on loss) | push, 19 competitors | **YES** — against Firebase 1,955 ms. Catalyst owes this row. |
 | claim cost | **1 push, 0 metered** | `github.com` | unmetered write path | **YES, and it is the row that matters** — against Catalyst's 1 Stratus Upload / 2,000 per month |
@@ -1601,9 +1652,11 @@ myself where the answer is no.
 
 ### Three things I want said against my own numbers
 
-1. **My claim latency is the worst of the three and it is not close.** 2,182 ms
-   uncontended against Catalyst's 127 ms. Route G wins the *cost* row and loses
-   the *latency* row, and both belong in the register at the same size.
+1. **Route G is the slowest of the three on every latency row, and it is not
+   close.** Claim 2,182 ms uncontended against Catalyst's 127 ms. Subscriber
+   propagation 8,551 ms against Firebase's 191 ms. Route G wins the *cost* rows
+   and loses every *latency* row, and both belong in the register at the same
+   size. If the summary reads "route G wins", it is wrong.
 
 2. **The publish→visible floor is not a subscriber figure**, and I am reporting
    it only alongside the subscriber one so it cannot be mistaken for it. That is

@@ -202,6 +202,109 @@ if (LIVE) {
     await writer.purge(PROJECT);
   });
 
+  // ---- appendEvent, broken down by phase ----------------------------------
+
+  test('appendEvent phase breakdown as the ledger grows', async () => {
+    // A5 ran at ~57 s per append where it had previously run at ~3.3 s, and I
+    // was about to blame the network again. The primitives measured normal
+    // (push ~2.0 s, ls-remote ~1.2 s), so the cost is inside appendEvent and
+    // this finds out WHERE rather than inferring it from a ref count.
+    const store = await makeStore();
+    const P = PROJECT + '-phase';
+    await store.purge(P);
+    await store.registerAgent(P, {
+      agent_id: 'agent_ph', role_slug: 'backend', member_label: 'Phase',
+    });
+
+    // eslint-disable-next-line no-console
+    console.log('\n================ appendEvent phase breakdown ================');
+    // eslint-disable-next-line no-console
+    console.log('  ledger   append ms   REST sent   listRefs(ev) bytes');
+
+    for (let i = 0; i < 60; i += 1) {
+      const r0 = store.stats.rest_calls;
+      const t0 = Date.now();
+      await store.appendEvent(P, {
+        layer: 'coordination', kind: 'task_completed', actor_type: 'agent', actor_id: 'agent_ph',
+        body: { task_id: 'task_ph', n: i },
+      }, `ph-${P}-${i}`);
+      const ms = Date.now() - t0;
+      const sent = store.stats.rest_calls - r0;
+      if (i % 10 === 0 || i === 59) {
+        // eslint-disable-next-line no-console
+        console.log(
+          '  ' + String(i).padStart(6) + '  ' + String(ms).padStart(9)
+          + '  ' + String(sent).padStart(10),
+        );
+      }
+    }
+    await store.purge(P);
+  });
+
+  // ---- G1b: the subscriber figure on its own ------------------------------
+
+  test('G1b publish->visible through subscribe(), POLL mechanism', async () => {
+    // Split out of G1 so the figure the scoreboard needs does not require the
+    // 100-append preamble to be re-run. The append and tight-loop-floor figures
+    // are n=100 from their own run; this is the one that answers "what does a
+    // SUBSCRIBER experience", which is the row Firebase's listener push sits in.
+    const writer = await makeStore();
+    const reader = await makeStore();
+    const P = PROJECT + '-sub';
+    await writer.purge(P);
+    await writer.registerTask(P, { task_id: 'task_g1b', title: 'G1b', kind: 'backend' });
+    await writer.registerAgent(P, {
+      agent_id: 'agent_g1b', role_slug: 'backend', member_label: 'G One B',
+    });
+
+    const subMs: number[] = [];
+    const N = 12;
+    for (let i = 0; i < N; i += 1) {
+      let target = Number.MAX_SAFE_INTEGER;
+      let t0 = 0;
+      let resolve!: (ms: number) => void;
+      let reject!: (e: Error) => void;
+      const seen = new Promise<number>((res, rej) => { resolve = res; reject = rej; });
+      const unsub = reader.subscribe(P, 0, (s) => {
+        if (t0 !== 0 && s.seq >= target) resolve(Date.now() - t0);
+      });
+      await new Promise((r) => setTimeout(r, 1_000));
+
+      t0 = Date.now();
+      const written = await writer.appendEvent(P, {
+        layer: 'coordination', kind: 'task_completed', actor_type: 'agent', actor_id: 'agent_g1b',
+        body: { task_id: 'task_g1b', n: i },
+      }, `g1b-${P}-${i}`);
+      target = written.seq;
+
+      const guard = setTimeout(
+        () => reject(new Error(`subscriber never saw seq ${written.seq} within 90s`)),
+        90_000,
+      );
+      try {
+        subMs.push(await seen);
+      } finally {
+        clearTimeout(guard);
+        unsub();
+      }
+    }
+
+    // eslint-disable-next-line no-console
+    console.log('\n================ G1b ================');
+    show(
+      `publish->visible SUBSCRIBER -- host ${HOST_API}; mechanism: POLL at ${POLL_MS} ms interval`,
+      stats(subMs),
+    );
+    // eslint-disable-next-line no-console
+    console.log(
+      '  NOT comparable to a listener push. This is a poll, and the interval is\n'
+      + '  inside the number: a change landing just after a poll waits a full\n'
+      + '  interval for the next one.',
+    );
+    assert.equal(subMs.length, N);
+    await writer.purge(P);
+  });
+
   // ---- G2, CONTENDED -------------------------------------------------------
 
   test(`G2 claim round-trip CONTENDED, ${G2_RACERS} racers x ${G2_ROUNDS} rounds`, async () => {
