@@ -1534,6 +1534,41 @@ the register as three sentences, not three numbers in one column.
 
 ---
 
+## Comparability — which of my rows may sit next to the other two, and which may not
+
+Order 0036 asks for this explicitly. Entry 30/33's rule: before two numbers go in
+one row, name the mechanism. Here is my own audit, and I have marked against
+myself where the answer is no.
+
+| row | route G figure | host | mechanism | comparable? |
+|---|---|---|---|---|
+| `appendEvent` p50 | *(see G1)* | `github.com` + `api.github.com` | 1 git push + 2 REST, uncontended | **YES** — same shape as both |
+| publish→visible, **floor** | *(see G1)* | `api.github.com` | tight read loop, zero backoff, **no subscriber** | **NO** — comparable only to Catalyst's 318 ms, which is the same tight-loop shape. **Not** to Firebase's listener push. |
+| publish→visible, **subscriber** | *(see G1)* | `api.github.com` | **POLL at 5,000 ms** | **PARTIALLY** — same *question* as Firebase's 191 ms listener push, but poll vs push is a different mechanism and route G will lose it structurally. Put them in one row only with both mechanisms named. |
+| claim p50, **uncontended** | 2,182 ms | `github.com` | push, no competitor | **YES** — against Catalyst 127 ms, Firebase 257 ms |
+| claim p50, **contended** | **4,532 ms** | `github.com` (+`api.github.com` on loss) | push, 19 competitors | **YES** — against Firebase 1,955 ms. Catalyst owes this row. |
+| claim cost | **1 push, 0 metered** | `github.com` | unmetered write path | **YES, and it is the row that matters** — against Catalyst's 1 Stratus Upload / 2,000 per month |
+| presence write cost | **0 durable rows, 0 metered** (steady state) | `github.com` | ref update, timestamp in the ref *name* | **YES** — against Catalyst 0 UPDATEs, Firebase 1r+1w |
+| free-tier runway | **no figure** | — | rolling hourly bucket | **NO** — third shape. See G5. |
+
+### Three things I want said against my own numbers
+
+1. **My claim latency is the worst of the three and it is not close.** 2,182 ms
+   uncontended against Catalyst's 127 ms. Route G wins the *cost* row and loses
+   the *latency* row, and both belong in the register at the same size.
+
+2. **The publish→visible floor is not a subscriber figure**, and I am reporting
+   it only alongside the subscriber one so it cannot be mistaken for it. That is
+   the same correction order 0034 applied to Catalyst; I would rather pre-empt it
+   than receive it.
+
+3. **The uncontended claim row is kept only as the paired counterpart.** The
+   contended one is the scoreboard row, because that is the number that says
+   whether the primitive survives real load.
+
+
+---
+
 ## G7 — lines of code
 
 ```
