@@ -1442,40 +1442,55 @@ is only expensive when something actually changed. If the `Accept` header ever d
 that 7-call read becomes 7 *metered* calls every 5 s and the hour's quota is gone in twelve
 minutes. The chokepoint is not tidiness; it is the difference between viable and not.
 
-### G5 — extrapolated monthly cost
+### G5 — free-tier runway: a THIRD shape, and it is incommensurable
 
-**$0, at 2 people and at 10 people.**
+Order 0036 predicted this and it is right.
 
-Not an extrapolation from a rate card, because there is no rate card to apply: route G uses a
-private GitHub repository, `gh auth login`, and nothing else. There is no billing account, no
-project, no metered service, and nothing to attach a card to. GitHub's free tier includes
-unlimited private repositories and 2,000 Actions minutes/month; route G's only Actions use is the
-reaper (one scheduled job) and the demo's CI.
+| route | limit shape | what "running out" means |
+|---|---|---|
+| Firebase | **resets daily** | effectively indefinite |
+| Catalyst | **depletes monthly** | a hard wall — `FREE_USAGE_LIMIT_REACHED`, refused rather than billed |
+| **Route G** | **per-hour bucket that refills** | a 403 that clears **within the hour**, then continues |
 
-Per order 0017's standard I will not convert anything to money without a verified rate card. Here
-the honest statement is not a converted figure — it is that **no meter exists on the write path
-at all**.
+**"Days of runway" does not apply to route G and I am not going to compute one.**
+Converting a rolling hourly bucket into days would require inventing a daily
+total that GitHub does not meter and does not enforce, and per order 0032 that
+is forcing a comparison between shapes rather than making one.
 
-The real ceiling is the **5,000 REST calls/hour** rate limit, which is per-user and not per-repo.
-That is a concurrency ceiling, not a bill: exceeding it is a 403 that clears within the hour,
-mapped to `StoreBusyError` and retried with backoff.
+What route G *can* answer honestly is: **at what sustained request rate does a
+team hit the ceiling, and what happens when it does.**
 
-### G6 — free-tier headroom after the demo
+The ceiling is **5,000 core requests/hour, per user, rolling.** Verified against
+the live counter, not the docs. The three team sizes, using the measured
+per-operation costs:
 
-**Effectively untouched, and this is the asymmetry route G exists to demonstrate.**
+| team | steady REST/hour | vs 5,000 | outcome |
+|---|---|---|---|
+| 2 people, light | see the run below | | |
+| 2 people, active | see the run below | | |
+| 10 people, active | see the run below | | |
 
-The entire section A suite ran **three times** in one afternoon, plus the F1–F12 demo four times,
-plus every probe. Nothing was rationed and nothing had to be held back.
+Those rows are filled by the measured run rather than by arithmetic on my part,
+so they are left blank here until the clean G3/G4 lands and the projection can be
+computed from it. **What is already established** and does not depend on it:
 
-Against the other two routes as recorded in the register: Catalyst had to hold A5 as ~15% of a
-**monthly** SELECT allowance and could afford roughly eight suite runs a month; Firebase excluded
-A2 as ~20% of two monthly allowances. Route G ran everything, repeatedly, and could run it all
-again tomorrow.
+- **The write path is unmetered.** `git push` and `git fetch` appear in **no**
+  rate-limit resource GitHub exposes for this token — I enumerated all fifteen.
+  Claims, heartbeats, event appends and lock acquisitions all decide on a push.
+- **`claimTask` on the winning path costs one push and ZERO metered requests.**
+  Catalyst's only working claim primitive turned out to live in object storage
+  and costs **one Stratus Upload against a 2,000/month free tier** — the tightest
+  meter in that system. Route G's costs a push against no per-operation quota at
+  all. That is the strongest single thing this route has and it is not close.
+- **Exceeding the ceiling is a refusal, not a bill.** A 403 with
+  `x-ratelimit-remaining: 0`, mapped to `StoreBusyError`, retried with jittered
+  backoff, and cleared by the next hourly refill. Nobody is invoiced and nothing
+  is permanently lost — unlike Catalyst's monthly wall, which is why that build
+  is down.
 
-**The honest other half:** what route G spends instead is **wall clock**. A5 alone is 17 minutes
-because 301 appends are 301 pushes. The full suite is 34 minutes. Neither cloud route pays that.
-If the final comparison reads "route G wins on cost", it must read **"route G trades latency for
-cost and setup"**.
+**Comparability verdict for this row: NOT comparable to either other route.**
+Three different shapes, three different meanings of "running out". It belongs in
+the register as three sentences, not three numbers in one column.
 
 ---
 
