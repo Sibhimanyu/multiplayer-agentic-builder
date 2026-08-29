@@ -1739,16 +1739,35 @@ look. I have not found it.
 
 ### Does 17/17 still hold? NOT ESTABLISHED — correct the scoreboard.
 
-**17/17 predates both fixes, and as of this writing I have re-established only
-A1, A4 and A6 since.** An A5 run is in flight and this section records whatever
-it returns.
+**NO. 17/17 is not currently established, and the scoreboard should be corrected
+rather than defended.**
+
+17/17 predates both fixes. Since them I have re-established **A1, A4 and A6**
+live, at normal timings. I attempted A5 four times today and completed none of
+them: the run progresses, recovers from each wedge via the new deadline, and
+then hits another. Best progress was **165 of 301 appends**, at between 14 s and
+100 s per append depending on how badly the wedging was running at the time —
+against a 2,836 ms baseline for the identical operation in the replica.
+
+Note what that number is *not*: it is not a measurement of `appendEvent`. It is
+a measurement of how often something outside the adapter wedges a push today.
+The replica, running concurrently, was flat at 2.8 s throughout.
 
 Section A's original 17/17 **was a real result** — it passed because that run
 happened not to hit a transient, and hang 1 needed one to fire. But it is not a
 current result, and the scoreboard carries it on my behalf.
 
-**My recommendation: mark section A as `A1/A4/A6 re-verified; full suite
-outstanding` rather than 17/17.** I would rather the row be thin and true.
+**My recommendation: mark section A as `A1/A4/A6 re-verified since the fixes;
+full suite outstanding` rather than 17/17.** I would rather the row be thin and
+true. The original 17/17 was real, and it is not current, and those are
+different claims.
+
+**What would close it**, for whoever picks this up: the wedge is localised to
+the conformance-harness/test-runner side by the concurrent-replica bisect above,
+so the next step is to bisect *within* that — run `liveHarness()`'s exact
+construction in a standalone file and add back one harness behaviour at a time.
+`github/demo/a5-instrumented.live.test.ts` is that standalone file already; it
+differs from A5 only in not going through `registerConformanceSuite`.
 
 ### Scope: which published figures this touches
 
