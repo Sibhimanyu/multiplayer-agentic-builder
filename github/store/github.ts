@@ -179,7 +179,26 @@ export function createGithubStore(opts: GithubStoreOptions) {
           });
         }
       },
-      { attempts: 4, base_ms: 200, clock, log: nullLogger, op: `rest.${init.operation}` },
+      {
+        attempts: 4, base_ms: 200, log: nullLogger, op: `rest.${init.operation}`,
+        // REAL time, deliberately NOT the injected clock.
+        //
+        // A transport backoff is wall-clock: the socket does not care what the
+        // domain clock thinks. The injectable clock exists so tests can drive
+        // STALENESS derivation (A9) and the reaper -- not so they can freeze a
+        // network retry.
+        //
+        // Passing `clock` here cost an afternoon. The conformance harness
+        // builds its store with a FakeClock, whose `sleep` resolves only on
+        // `advance()`, and nothing advances it during an append. So ONE
+        // transient socket failure did not cost a retry -- it HUNG THE WHOLE
+        // RUN, permanently. The symptom was a suite that looked like it was
+        // running very slowly rather than one that failed, which is why it took
+        // three wrong diagnoses to find.
+        //
+        // Verified in both directions in store/fakeclock-retry.test.ts.
+        sleep: (ms: number) => new Promise<void>((r) => { setTimeout(r, ms); }),
+      },
     );
     // Record the authoritative quota reading from the response itself.
     const rem = res.headers['x-ratelimit-remaining'];
