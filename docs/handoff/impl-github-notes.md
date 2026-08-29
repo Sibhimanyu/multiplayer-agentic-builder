@@ -1641,43 +1641,75 @@ the register as three sentences, not three numbers in one column.
 
 ---
 
-## Outstanding, stated rather than glossed
+## RESOLVED — A5 was not slow. It was hung.
 
-**A5 has not been re-verified since the ranged-read change.**
+Order 0036's follow-up asked which of two observations was wrong:
+`appendEvent` measures flat 3.3 s in a tight loop, but A5 *is* a tight loop of
+`appendEvent` and ran ~60 min against a 17-min baseline.
 
-The `readEvents` range fix touches the exact code path A5 asserts on — the
-300-row cap, `has_more`, and the `limit + 1` over-fetch that answers `has_more`
-without materialising the rest of the ledger. It is the single most relevant
-test to that change and I have **not** got a green from it post-change.
+**The second observation was wrong.** `appendEvent`'s p50 of 3,262 ms stands.
+A5 was never "a tight loop of appendEvent running slowly" — it was a tight loop
+of `appendEvent` that **stopped entirely partway through and never resumed.**
 
-What I *have* verified live since the change: **A1, A4 and A6 pass** at normal
-timings (22.2 s / 98.2 s / 43.5 s, against 23.0 / 100.3 / 45.1 before it). A4 in
-particular reads a 25-event ledger back repeatedly, which is the shape the fix
-altered. So the change is not unverified — it is under-verified, and the gap is
-specifically the 301-event case.
+### The bug
 
-I am saying so rather than implying a full green, because "A1/A4/A6 pass" and
-"section A passes" are different claims and only one of them is mine to make.
+`rest()` retries transport failures through the shared `withRetry`, and passed
+it **the store's clock**. `withRetry` sleeps via `clock.sleep()`. The conformance
+harness builds its store with a **`FakeClock`**, whose `sleep` resolves only when
+someone calls `advance()` — and nothing advances it during an append.
 
-**Attempted and stopped.** A5 alone ran for ~60 minutes against a previous
-17-minute baseline, consuming ~1.8 REST calls/minute — genuinely slow in a way
-`appendEvent` measured in isolation is not (flat 3.3 s, n=60, the same
-afternoon, with `git push` at 2.0 s and `ls-remote` at 1.2 s). I stopped it and
-purged the 279 refs it left rather than leave a half-finished run behind.
+So **one transient socket failure did not cost a retry. It hung the run,
+permanently.** And the symptom was a suite that looked like it was running very
+slowly rather than one that failed, which is exactly why it survived three wrong
+diagnoses.
 
-**So there is a second open question**, and I would rather name it than bury it:
-`appendEvent` in a tight loop measures 3.3 s, and A5 — which is a tight loop of
-`appendEvent` — does not. One of those two observations is not measuring what I
-think it is. I have not resolved which, and after mis-diagnosing three times
-today from proxies I am not going to guess a fourth. The next step is to
-instrument A5's own loop rather than reason about the difference.
+### Proved offline, in 1.7 seconds
 
-**What this does and does not put at risk.** The G-figures are unaffected: none
-of them comes from A5, and all of them were measured directly with the counters
-they report. What is at risk is the claim "section A is 17/17" — that was true
-of the adapter *before* today's two read-path changes, and I have re-established
-only A1, A4 and A6 since.
+This is the check I should have reached for before watching ref counts for an
+hour:
 
+```
+transient + FakeClock     ->  TIMED OUT at 1,500 ms    (the hang, reproduced)
+transient + systemClock   ->  retried, 137 ms          (the control)
+no transient + FakeClock  ->  fine, 0.6 ms             (why clean runs passed)
+```
+
+The control matters: without it, the first line would pass against a store that
+was broken for some entirely unrelated reason. Absence of a result is not
+evidence of a cause.
+
+### The fix
+
+**A transport backoff is wall clock.** The socket does not care what the domain
+clock thinks. The injectable clock exists so tests can drive *staleness
+derivation* (A9) and the reaper — not so they can freeze a network retry.
+`rest()` now sleeps on real time explicitly.
+
+The test is inverted into a regression guard, and I added **the other half**: the
+`FakeClock` must *still* govern staleness. A fix that quietly made the clock
+ignorable everywhere would trade one silent failure for another, and A9 depends
+on it.
+
+### Why this explains every symptom, including the ones that looked contradictory
+
+- The smoke at **n=30 was flat at 2.8 s** because no transient occurred in 30
+  appends.
+- **Every offline test passed** because none makes a real network call.
+- **Section A's 17/17 was a real result.** That run passed because it happened
+  not to hit a transient. The bug was latent, not dormant — it needed a
+  transient to fire, and across 301 appends one becomes likely.
+- The **ref count crept upward slowly** in my earlier observations because the
+  process was not dead, it was stuck inside one call while earlier appends had
+  already landed.
+
+### Scope: which published figures this touches
+
+**None of the G-figures.** Every one was measured through the g-series harness,
+which uses `systemClock`, and each run reported `transport_retries=0`. The bug
+could only manifest through the `FakeClock` conformance harness.
+
+What it *did* put at risk was the **live conformance suite** — and that is the
+one thing the scoreboard carries on my behalf.
 
 ---
 
