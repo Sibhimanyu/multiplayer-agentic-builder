@@ -1641,32 +1641,32 @@ the register as three sentences, not three numbers in one column.
 
 ---
 
-## RESOLVED — A5 was not slow. It was hung.
+## RESOLVED — A5 was not slow. It was HUNG. Two hangs, both real, both fixed.
 
 Order 0036's follow-up asked which of two observations was wrong:
 `appendEvent` measures flat 3.3 s in a tight loop, but A5 *is* a tight loop of
 `appendEvent` and ran ~60 min against a 17-min baseline.
 
-**The second observation was wrong.** `appendEvent`'s p50 of 3,262 ms stands.
-A5 was never "a tight loop of appendEvent running slowly" — it was a tight loop
-of `appendEvent` that **stopped entirely partway through and never resumed.**
+**The second observation was wrong.** `appendEvent`'s p50 of 3,262 ms **stands**
+— re-confirmed since, under A5's exact conditions, at **2,836 ms p50, flat
+(0.99× across 30 appends)**. A5 was never "a tight loop of appendEvent running
+slowly". It was a tight loop of `appendEvent` that **stopped dead and waited**.
 
-### The bug
+Instrumenting it found **two independent hangs**, neither of which was the one I
+expected.
 
-`rest()` retries transport failures through the shared `withRetry`, and passed
-it **the store's clock**. `withRetry` sleeps via `clock.sleep()`. The conformance
-harness builds its store with a **`FakeClock`**, whose `sleep` resolves only when
-someone calls `advance()` — and nothing advances it during an append.
+### Hang 1 — the retry slept on a clock nobody advances
+
+`rest()` retried transport failures through the shared `withRetry` and passed it
+**the store's clock**. `withRetry` sleeps via `clock.sleep()`. The conformance
+harness builds its store with a **`FakeClock`**, whose `sleep` resolves only on
+`advance()` — and nothing advances it during an append.
 
 So **one transient socket failure did not cost a retry. It hung the run,
-permanently.** And the symptom was a suite that looked like it was running very
-slowly rather than one that failed, which is exactly why it survived three wrong
-diagnoses.
+permanently.**
 
-### Proved offline, in 1.7 seconds
-
-This is the check I should have reached for before watching ref counts for an
-hour:
+Proved offline in 1.7 seconds, which is the check I should have reached for
+before watching ref counts for an hour:
 
 ```
 transient + FakeClock     ->  TIMED OUT at 1,500 ms    (the hang, reproduced)
@@ -1674,42 +1674,89 @@ transient + systemClock   ->  retried, 137 ms          (the control)
 no transient + FakeClock  ->  fine, 0.6 ms             (why clean runs passed)
 ```
 
-The control matters: without it, the first line would pass against a store that
-was broken for some entirely unrelated reason. Absence of a result is not
-evidence of a cause.
+**Fix:** a transport backoff is **wall clock**. The socket does not care what
+the domain clock thinks. The injectable clock exists so tests can drive
+*staleness derivation* (A9) and the reaper — not so they can freeze a network
+retry. `rest()` now sleeps on real time, and the test is inverted into a
+regression guard **plus** the other half: the `FakeClock` must *still* govern
+staleness, or the fix would trade one silent failure for another.
 
-### The fix
+### Hang 2 — git has no timeout, and neither did I
 
-**A transport backoff is wall clock.** The socket does not care what the domain
-clock thinks. The injectable clock exists so tests can drive *staleness
-derivation* (A9) and the reaper — not so they can freeze a network retry.
-`rest()` now sleeps on real time explicitly.
+Fixing hang 1 was necessary and not sufficient. The next run stalled again, and
+this time I read the process table instead of inferring:
 
-The test is inverted into a regression guard, and I added **the other half**: the
-`FakeClock` must *still* govern staleness. A fix that quietly made the clock
-ignorable everywhere would trade one silent failure for another, and A9 depends
-on it.
+```
+33623 git push --porcelain --atomic --force-with-lease=.../ev/0000000004: ...
+33629 git send-pack --stateless-rpc --atomic ... --stdin
+```
 
-### Why this explains every symptom, including the ones that looked contradictory
+A `git push` wedged on the fifth append and sat there — while `pushtime.py`
+measured the same host from the same machine in the same minute at **1.9 s**.
+**Git has no default timeout**, and neither did the adapter, so it waited too.
 
-- The smoke at **n=30 was flat at 2.8 s** because no transient occurred in 30
-  appends.
-- **Every offline test passed** because none makes a real network call.
-- **Section A's 17/17 was a real result.** That run passed because it happened
-  not to hit a transient. The bug was latent, not dormant — it needed a
-  transient to fire, and across 301 appends one becomes likely.
-- The **ref count crept upward slowly** in my earlier observations because the
-  process was not dead, it was stuck inside one call while earlier appends had
-  already landed.
+**This is the worse of the two.** Hang 1 needed a `FakeClock`, so it only ever
+affected tests. Hang 2 affects **production**: a CLI daemon would sit on a
+wedged push forever, appearing to work and publishing nothing.
+
+**Fix:** every git child gets a deadline (`GIT_TIMEOUT_MS`), SIGTERM then
+SIGKILL; a killed child is **retryable**, because a wedged connection is exactly
+the transient a retry exists for; retries are **bounded**, so a permanently
+wedged remote fails loudly rather than reintroducing the stall the deadline
+exists to prevent. `stats.git_timeouts` counts them, per order 0019 — a run that
+completed only because a wedged push was retried is not the same measurement as
+one that never wedged.
+
+**Observably working:** A5 sat at 2 refs while wedged; the deadline killed the
+child (pid churned across it), the retry recovered, and the run climbed to 135
+refs and kept going. Before today it would have hung there and been reported as
+"slow".
+
+### What still is not explained, and where it is NOT
+
+The wedging itself. I eliminated four candidates by measurement, each with a
+probe kept in `github/probes/`:
+
+| hypothesis | verdict |
+|---|---|
+| the push **shape** | **eliminated** — all five variants healthy (1 ref/1 lease, A5's 2 refs/2 leases atomic, no `--atomic`, no leases, 64-hex ref name), measured *concurrently with a wedging run* |
+| the **network or host** | **eliminated** — 1.86–2.06 s throughout, including during wedges |
+| **`GIT_ASKPASS=echo`** | **eliminated** — plain env, prompt-guard only, `echo`, and `/usr/bin/false` all healthy. My reasoning was sound (`echo` exits 0, so git treats its output as a credential rather than failing fast) and the measurement said no. |
+| Node's unclosed **stdin pipe** | **eliminated** — `pipe`, `inherit` and `ignore` all healthy from Node. The wedged process was `send-pack --stdin`, which made this the best remaining guess, and it was still wrong. |
+
+**And the bisect that does localise it.** Running my instrumented replica —
+same adapter, same `FakeClock`, same two-ref atomic push, same human-layer event
+— **concurrently with a wedging A5**:
+
+```
+replica:  30 appends, p50 2,836 ms, 0.99x first-25 to last-25, ZERO wedges
+A5:       wedging ~3x per append at the same instant
+```
+
+**So it is not the adapter.** The difference lives in the conformance-suite
+harness or the test-runner environment, and that is where the next person should
+look. I have not found it.
+
+### Does 17/17 still hold? NOT ESTABLISHED — correct the scoreboard.
+
+**17/17 predates both fixes, and as of this writing I have re-established only
+A1, A4 and A6 since.** An A5 run is in flight and this section records whatever
+it returns.
+
+Section A's original 17/17 **was a real result** — it passed because that run
+happened not to hit a transient, and hang 1 needed one to fire. But it is not a
+current result, and the scoreboard carries it on my behalf.
+
+**My recommendation: mark section A as `A1/A4/A6 re-verified; full suite
+outstanding` rather than 17/17.** I would rather the row be thin and true.
 
 ### Scope: which published figures this touches
 
 **None of the G-figures.** Every one was measured through the g-series harness,
-which uses `systemClock`, and each run reported `transport_retries=0`. The bug
-could only manifest through the `FakeClock` conformance harness.
-
-What it *did* put at risk was the **live conformance suite** — and that is the
-one thing the scoreboard carries on my behalf.
+which uses `systemClock`, and each run reported `transport_retries=0` and no
+timeouts. Both hangs required the `FakeClock` conformance harness or a wedge
+that the G-runs did not hit — and `appendEvent`'s figure has now been
+independently re-confirmed at 2,836 ms p50 under A5's own conditions.
 
 ---
 
