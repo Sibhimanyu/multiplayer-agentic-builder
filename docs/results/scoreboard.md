@@ -17,16 +17,26 @@ row, the cell says so rather than borrowing a neighbour's.
 | Catalyst | `is_unique` on INSERT | 5 × 200 *(never contended before)* | **FAILS — 84.5%**, 547 winners / 200 tasks |
 | Catalyst | Data Store CAS `UPDATE…WHERE` | 5 × 200 | **FAILS WORSE, SILENTLY** — 658 winners, durable state *perfect* |
 | Catalyst | **Stratus `overwrite:false`** | 5 × 200 | **holds** — 200/200, etag=MD5 confirmed the *right* winner |
-| Catalyst | NoSQL conditional insert | **not probed** | console-gated: zero tables, no SDK, no MCP tool |
+| **Catalyst** | **NoSQL conditional insert** | 5 × 200, **overlap measured 200/200** | **HOLDS** — 200/200 one winner, 0 contradictions |
 
 **Catalyst's chosen primitive does not work.** The design selected Data Store because "`is_unique`
 gives atomic claim without transactions"; it does not enforce under concurrent insert. Its CAS
 fallback is worse — 458 agents held claims they did not own while the table looked perfect, so no
 database audit could find them.
 
-**A working Catalyst primitive does exist, in object storage.** That keeps the route alive but moves
-every atomic guarantee out of the database and onto Stratus Upload, whose 2,000/month free tier is
-the tightest meter in the system.
+**Catalyst has a working primitive that stays in a database: NoSQL conditional insert.** It voids the
+earlier finding that atomicity would have to live on Stratus Upload's 2,000/month meter — the
+strongest argument against this route, now withdrawn.
+
+Three things temper it. **NoSQL has no published price at all**, in a pricing table that lists ten
+other services — the ceiling is lifted and what replaces it is unknown. **91% of losers receive
+HTTP 500 rather than a semantic rejection**, so the primitive is safe but cannot tell a caller
+"someone else owns this" apart from "retry" — opposite responses. And **the route still cannot run**:
+identity resolution lives in Data Store, which is exhausted, so moving claims to NoSQL does not free
+it.
+
+The 32 ms figure is **primitive-only, from five racers inside one job invocation** — not comparable
+to the client round trips in the latency table below, and deliberately not placed there.
 
 ## Latency — route G loses every row, and not narrowly
 

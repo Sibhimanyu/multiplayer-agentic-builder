@@ -144,6 +144,82 @@ with one `runTransaction`.
 When the final comparison is written, do not flatten "needed a workaround" and "cannot be made
 correct" into the same column.
 
+## Entry 46 — NoSQL conditional insert HOLDS: Catalyst keeps atomicity in a database
+
+The last candidate, and it works.
+
+```
+exactly one winner   200/200      zero winners 0      multiple winners 0
+all five overlapped  200/200      (concurrency MEASURED, not assumed)
+audit: 200 checked, 200 stored-matches-declared, 0 contradictions, 0 missing
+winners n=200  p50 32  p95 40  p99 47  max 49 ms   (primitive only)
+losers  n=800  p50 27  p95 35  p99 42  max 70 ms
+```
+
+Schema read back from the table's own definition before anything raced —
+`partition_key: claim_key/S`, `additional_sort_keys: []`, `ttl_enabled: false` — **not** inferred
+from a successful insert.
+
+**Entry 43's arithmetic is void.** Claims leave Stratus Upload's 2,000/month, which was the single
+strongest argument against this route.
+
+**The 32 ms is NOT comparable to Firebase's 257 ms or route G's 2,182 ms** and must never be placed
+in that row. Those are end-to-end client round trips; this is primitive-only from **five racers
+inside one job invocation**, not five HTTP clients. The build reported it that way unprompted and
+declined to file it as G2. **Contended G2 is still owed.**
+
+### The gate that would have let a sort key through
+
+The build's own schema check tested **seven hand-written spellings** of the sort-key field. The real
+field is `additional_sort_keys` — **not among them.** It is empty, so the verdict was right and the
+*reasoning* was not: a table *with* a sort key would have passed a check that appeared to be looking
+for one. Rewritten to scan every field matching `/sort|range/i`, catch column lists declaring a sort
+role, and **block rather than pass** on an unrecognised shape. Seven regression tests.
+
+This is the false-pass shape one layer up — the guard against a false pass was itself capable of
+one.
+
+## Entry 47 — the platform answers "someone else owns this" with "retry", 91% of the time
+
+**727 of 800 losers threw HTTP 500 rather than `CriteriaMismatch`.**
+
+Safety is unaffected and was checked specifically: a 500'd write that had landed would appear as a
+stored holder differing from the declared winner, and 200/200 matched.
+
+But **a claim primitive must tell the caller which failure it hit.** "Someone else owns this task"
+and "the service glitched, retry" demand opposite responses — the first must back off to another
+task, the second must retry the same one. Catalyst answers the first with the second in 91% of
+cases. Whether this is throttling wearing a 500 is **not established**, and the build declined to
+characterise it.
+
+Correctness passes; the contract is unusable as-is without a wrapper that distinguishes them, and
+that wrapper cannot be written until the 500s are explained.
+
+## Entry 48 — NoSQL has no published price, in a pricing table listing ten other services
+
+The ceiling is lifted and **what replaces it is unknown.** No unit price, no free tier, no entry at
+all. The route escaped its tightest meter into a service with no published meter — which is not the
+same as cheap, and must not be reported as a win until priced.
+
+## Entry 49 — three of the four "platform defects" this route found were its own bugs
+
+The first NoSQL run reported **392 winners over 200 keys** — indistinguishable from the Data Store
+CAS failure in entry 41, and entirely wrong. `insertItems` **resolves** with `CriteriaMismatch`
+when the condition fails rather than rejecting, so every correctly-refused attempt scored as a win.
+Then the audit reported all 200 rows missing; a raw audit **with a positive control** showed every
+row present and the helper returning null *even for the control* — `NoSQLResponse` nests class
+instances, so `Object.values` finds nothing while `JSON.stringify` renders them.
+
+With the `[object Object]` read-backs from entries 27 and 45, that is **four bugs of one family**.
+
+**Rule: never hand-walk or stringify an SDK response, and never treat "it didn't throw" as success.**
+
+**The meta-finding is the valuable part.** All four failed *quietly* and all four looked exactly like
+platform defects. Two genuine platform defects were found on this route (entries 37 and 41) and four
+self-inflicted ones that presented identically. **The only thing that separated them was a positive
+control** — a case that must succeed, run through the same code path. Without one, "the platform is
+broken" and "my reader is broken" are the same observation.
+
 ## Entry 40 — Catalyst DOES have an atomic primitive, and it is not in the database
 
 **Stratus `putObject` with `overwrite: false` holds: 200/200 tasks, exactly one winner, zero
