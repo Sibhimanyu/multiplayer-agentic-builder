@@ -2301,3 +2301,223 @@ Held as instructed: **F1–F12 unstarted, A5 unspent.**
 `/diag/atomic/*` routes remain deployed and are authenticated like every other route; they
 should be deleted once the primitive question is closed, and are recorded here so they are not
 forgotten alongside `/diag/putobject` and `/diag/readpath`.
+
+---
+
+# Order 0037 — NoSQL conditional insert HOLDS. Atomicity stays in a database.
+
+**200/200 exactly one winner, durable state reconciled 200/200, and all five racers verified in
+flight together on every round.** Catalyst has an atomic compare-and-set in a database after
+all. Pre-registered branch 1 applies and entry 43's arithmetic is void.
+
+Three of my own bugs had to be found and fixed on the way to that number, and the first version
+of this run reported a confident, completely wrong result. That story is in §4 because it is
+the more transferable finding.
+
+## 1. The table's own schema, read back before anything was raced
+
+0037's mandated first operation. **Not inferred from a successful insert** — read from the
+definition, via `nosql().getTable(id).toJSON()`:
+
+```json
+{
+  "type": "TABLE",
+  "name": "claim_probe",
+  "id": "53069000000101123",
+  "status": "ONLINE",
+  "partition_key": { "column_name": "claim_key", "data_type": "S" },
+  "additional_sort_keys": [],
+  "global_index": [],
+  "ttl_enabled": false,
+  "api_access": false
+}
+```
+
+**No sort key.** The primary key is `claim_key` alone, so five racers build the identical
+primary key and exactly one insert can survive. The console gate was set correctly.
+
+**And the gate I wrote to check this had a hole.** My first version tested seven hand-written
+spellings — `sort_key`, `sortKey`, `range_key`, and so on. The real field is
+**`additional_sort_keys`**, which was not among them. It is empty, so the verdict was right;
+the reasoning was not. A table *with* a sort key would have sailed through a check that
+appeared to be looking for exactly that. Rewritten to scan every field whose name matches
+`/sort|range/i` and block on any populated one, to block on any column list declaring a sort
+role, and to **block rather than pass when it does not recognise the shape at all** — the
+failure mode of guessing here is a green result that means nothing. Seven named regression
+tests, including one that feeds it the real definition and one that feeds it the same
+definition with `additional_sort_keys` populated.
+
+## 2. Reaching NoSQL without spending a Data Store read
+
+Data Store is still at `FREE_USAGE_LIMIT_REACHED`, so every authenticated HTTP route returns
+`STORE_ERROR` — the 2-SELECT token→agent→project resolution cannot run. 0037 forbids working
+around that by weakening auth, and I have not.
+
+I first checked whether the schema could be read without any function at all. **Three official
+read paths, none of which exposes NoSQL:**
+
+| Path | Result |
+|---|---|
+| Catalyst MCP | 186 tools in 22 feature groups — Datastore, Stratus, Cache, ZCQL, JobScheduling… **no NoSQL group** |
+| Catalyst CLI | `ds:import` / `ds:export` for Data Store; **no nosql command** |
+| `catalyst iac:export` | project template with 18 component types; **NoSQL is not one of them** |
+
+So the SDK inside a deployed function is the only way in.
+
+**The answer to 0037's question is: yes, via a job function, and that is not a weakening.** A
+job is invoked through the Job Scheduling API under Catalyst's own platform credentials —
+stronger auth than an agent token, not weaker — and this route already ships one, the reaper.
+So `nosqlprobe` is a job. It touches no Data Store, it authenticates the way Catalyst
+authenticates jobs, and results come back through a Cache key because `Get_Logs` returns `[]`
+for every function in this project. That Cache-key pattern is the reaper's, not a new one.
+
+**The honest cost of that choice.** The five racers run inside ONE function invocation rather
+than as five HTTP clients, which is a different shape from every other primitive measured on
+this route. Two consequences, both handled rather than waved away:
+
+- **End-to-end latency from this probe is not comparable to the other rows** and is not
+  reported as such. Only the primitive-only figure is quoted.
+- **The concurrency is measured, not assumed.** If an SDK connection pool serialised the five
+  calls, a non-atomic primitive would look perfect. So every attempt records its own start and
+  end and the run reports how many rounds had all five intervals mutually overlapping.
+  **200/200.** They genuinely raced.
+
+## 3. The contended conditional insert
+
+`insertItems({ item, condition: { function: attribute_exists(claim_key), negate: true } })` —
+5 racers × 200 tasks, one task per round, live service.
+**2026-08-29T06:54:13Z**, job `nosql_race3_0037`, 12.2 s.
+
+```
+rounds completed                 200
+keys with EXACTLY ONE winner     200/200
+keys with ZERO winners             0
+keys with MORE THAN ONE winner     0
+rounds where all five overlapped 200/200
+```
+
+**Durable state, audited separately from the reply** — the pair that caught Data Store CAS
+returning `affected:1` to five racers over one correct row, where either check alone passed:
+
+```
+keys checked                     200
+stored holder MATCHES the declared winner   200
+stored holder CONTRADICTS it                  0
+missing                                       0
+```
+
+Latency, primitive only, no mean:
+
+| | n | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|
+| winners | 200 | 32 | 40 | 47 | 49 |
+| losers | 800 | 27 | 35 | 42 | 70 |
+
+An earlier corrected run (`nosql_race2_0037`) independently produced 200/200 as well, and five
+of its keys were reconciled by a **separate audit job reading raw responses with a positive
+control** — two rows written minutes earlier by the diagnostic, to prove the read path worked
+before concluding anything from an empty result. All five race keys held exactly the declared
+winner; both control rows read back correctly.
+
+### The serious caveat: 91% of losers are HTTP 500, not a refusal
+
+```
+loser_error_codes: { "CriteriaMismatch": 73, "threw:INTERNAL_SERVER_ERROR": 727 }
+```
+
+Verbatim, repeated identically across samples:
+
+```
+statusCode 500, code INTERNAL_SERVER_ERROR,
+"Internal server error has occurred. Please try again after some time"
+```
+
+**Safety is not affected and I checked that specifically**: if any 500'd attempt had actually
+written, some key's stored holder would differ from its declared winner. 200/200 match, so no
+500'd racer's write landed.
+
+**But a claim primitive has to tell a caller *which* kind of failure it hit.** "Someone else
+owns this task" and "the service broke, retry" demand opposite responses, and here the
+platform answers the first situation with the second 91% of the time. An agent that retries a
+500 would hammer a task it has already lost. The correct client behaviour — treat
+`INTERNAL_SERVER_ERROR` on a conditional insert as *probably* a lost race — is exactly the
+kind of guess this register exists to avoid. **Recorded as an open risk, not priced in.**
+
+Whether the 500 is throttling wearing a 500's clothes is **not established.** The message says
+"try again after some time", which reads like throttling, but I did not test it and I am not
+going to characterise it. 1,000 conditional inserts in 12 s is ~83/s against a table created
+minutes earlier with no provisioned-throughput setting I can see.
+
+## 4. Three bugs of mine, one shape
+
+The first contended run reported **392 winners over 200 keys and 114 keys with multiple
+winners** — a result that looked exactly like the Data Store CAS failure and would have been a
+second damning finding. It was wrong, and every part of it was mine.
+
+**Bug 1 — a refusal does not throw.** I counted `won` as "the call did not reject".
+`insertItems` **resolves** when the condition is not met, with
+`create: [{ status: "CriteriaMismatch" }]` and `size: 0`. So every attempt the platform
+*correctly refused* was scored as a win. Found by a bounded five-step diagnostic that did a
+plain insert, read it back, conditionally inserted onto the existing key, conditionally
+inserted onto a fresh key, and read that back — reporting each raw response with no
+interpretation. Steps 3 and 4 settled it in one run. Fixed: a win is now positive confirmation
+of the literal string `"Success"`, and any unrecognised status is its own category that can
+never become a win.
+
+**Bug 2 — hand-walking an SDK response.** The audit then reported all 200 rows missing. They
+were not missing: the raw audit showed every row present with the right holder, and
+`holder_via_helper` returning `null` for all of them **including the positive control**. The
+response is a `NoSQLResponse` whose nested items are themselves class instances, so
+`Object.values()` over them finds nothing while `JSON.stringify` renders them perfectly. Fixed
+by normalising through `JSON.parse(JSON.stringify(res))` first, which invokes every nested
+`toJSON` on the way down.
+
+**Bug 3 — the sort-key gate hole**, in §1.
+
+These join the `[object Object]` read-back from order 0035, and the shape is now unmistakable
+enough to write as a rule:
+
+> **Never hand-walk or stringify an SDK response object, and never treat "it didn't throw" as
+> success. Normalise through JSON and confirm the platform's own status string.**
+
+Every one of these failed *quietly* and produced output that looked precisely like a platform
+defect. The only thing that caught all four was asking "is this the platform or is this me?"
+before writing anything down — and in three of the four cases the answer was me. The
+diagnostic-with-a-positive-control is the tool that settles it, and it should be reached for
+first, not third.
+
+## 5. The ruling — pre-registered branch 1
+
+**NoSQL conditional insert holds under contention. Catalyst keeps atomicity in a database, and
+entry 43's arithmetic is void: claims no longer consume Stratus Upload's 2,000/month.**
+
+That was the strongest argument against this route and it is gone. Route C has a claim
+primitive that is correct, in a database, queryable, and typed.
+
+**What replaces the Stratus meter is unknown, and I will not invent it.** NoSQL does not appear
+in the Catalyst pricing reference **at all** — no unit price, no free-tier line, in a table
+that lists Data Store, Cache, Stratus, Slate, SmartBrowz, Zia, QuickML and seven others. So I
+can say entry 43's ceiling is lifted; I cannot yet say what the new ceiling is. Web access was
+not available this session to check the public pricing page. **Open question, flagged, not
+estimated.**
+
+Two things that do **not** change:
+
+- **The route still cannot run today.** Data Store remains exhausted, and identity resolution
+  — token → agent → project — lives there. Moving claims to NoSQL does not free the route from
+  Data Store, so entry 42's transitive-takedown point stands unchanged and is if anything
+  sharper: the service with the only working in-database atomic primitive is reachable, while
+  the route that would use it is not.
+- **Contended G2 against the adopted primitive is still owed.** These are figures for the
+  primitive measured directly, from a job, in a different shape. They are not G2 and must not
+  be filed as G2 — that would be the borrowed-number error in a fourth costume.
+
+## 6. State left behind
+
+`claim_probe` holds roughly 400 rows from the two valid races plus 3 diagnostic rows; the table
+was created for this purpose and there is no bulk-delete on the NoSQL surface I can reach. The
+`nosql:control` Cache key is set to `HOLD`, so an accidental job trigger reads the schema and
+stops rather than racing. `nosqlprobe` remains deployed; it is a diagnostic and should be
+deleted alongside the `/diag/*` routes once the primitive question is closed.
+
+Held as instructed: **F1–F12 unstarted, A5 unspent.**

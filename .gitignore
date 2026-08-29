@@ -18,6 +18,12 @@ AGENTS.md
 # vendored gstack (deprecated; each dev installs their own)
 .claude/skills/gstack/
 
+# `catalyst iac:export` drops its zip in the invocation directory. Order 0037
+# used one to check whether the project template carries NoSQL definitions (it
+# does not -- 18 component types, none of them NoSQL). Downloaded artefact,
+# never a source.
+export_*.zip
+
 node_modules/
 dist/
 .env
