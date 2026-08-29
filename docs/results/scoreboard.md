@@ -82,12 +82,39 @@ by route G, against route G.
 3. **Firebase's 1,955 ms contended figure is unvalidated** — its uncontended run showed an
    unexplained 1,167 ms that a tested-and-disproven hypothesis could not account for, and the same
    inflation may be present here.
-4. **Route G's A5 is not re-verified** since its ranged-read change. "Section A 17/17" was true
-   *before* that change; only A1/A4/A6 have been re-established.
-5. **Route G has an unresolved contradiction in its own data**: `appendEvent` measures flat 3.3 s in a
-   tight loop, but A5 — which *is* a tight loop of `appendEvent` — ran ~60 min against a 17 min
-   baseline. One of those two is not measuring what it appears to. Being instrumented, not reasoned
-   about.
+4. **Route G's "17/17" is withdrawn — RESOLVED 2026-08-28, and it cost more than a label.**
+   Correct wording is now **`A1/A4/A6 re-verified since the fixes; full suite outstanding`**. A5 was
+   attempted four times and completed none; best progress 165 of 301 appends. The original 17/17
+   *was* real — that run happened not to hit a transient — but it is not *current*, and those are
+   different claims.
+
+5. **The `appendEvent`-vs-A5 contradiction is RESOLVED: A5 was hung, not slow.** `appendEvent`'s
+   3,262 ms **stands**, re-confirmed independently at 2,836 ms p50, flat across 30 appends under
+   A5's exact conditions. Instrumenting found **two independent hangs**, neither the expected one:
+
+   - **The retry slept on a clock nobody advances.** `withRetry` received the store's clock, and the
+     conformance harness injects a `FakeClock` whose `sleep` resolves only on `advance()`. One
+     transient socket failure therefore did not cost a retry — it hung the run forever. Proved
+     offline in 1.7 s with a control: transient+FakeClock timed out at 1,500 ms; transient+systemClock
+     retried in 137 ms; no-transient+FakeClock was fine in 0.6 ms — which is exactly why clean runs
+     always passed.
+   - **Git had no timeout.** `git send-pack` wedged while the same host measured 1.9 s in the same
+     minute. **This one reaches production**: the FakeClock bug could only hit tests, but a daemon on
+     a wedged push would sit forever, appear healthy, and publish nothing.
+
+   Both fixed: transport backoffs sleep on **real time** (the injected clock is for staleness
+   derivation and the reaper, not for freezing a socket), and every git child gets a deadline with a
+   bounded retry counted in `stats.git_timeouts`.
+
+   **No G-figure is affected** — all were measured through the g-series harness on `systemClock`,
+   reporting zero retries and zero timeouts. The latency and cost tables above stand unchanged.
+
+6. **The wedge itself is unexplained, but localised.** Four hypotheses were eliminated *by
+   measurement*, each with a kept probe: push shape (five variants healthy, measured concurrently
+   with a wedging run), the network (1.86–2.06 s throughout), `GIT_ASKPASS=echo`, and Node's unclosed
+   stdin pipe. The bisect that localises it: an instrumented replica ran 30 appends flat at 2.8 s
+   with **zero** wedges *at the same instant* A5 was wedging ~3× per append. **It is not the
+   adapter** — it is the conformance-harness or test-runner side.
 
 ## The coordinator's reading
 
