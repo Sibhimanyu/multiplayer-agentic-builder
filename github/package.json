@@ -16,7 +16,7 @@
     "live:paging": "GITHUB_LIVE=1 node --test --test-timeout=2400000 --test-name-pattern=\"A1 |A4 |A5 |A6 |A11 |A13 |A16 \" store/github.live.test.ts",
     "g1b": "GITHUB_LIVE=1 node --test --test-timeout=1800000 --test-name-pattern=G1b demo/g-series.live.test.ts",
     "phase": "GITHUB_LIVE=1 node --test --test-timeout=1800000 --test-name-pattern=\"phase breakdown\" demo/g-series.live.test.ts",
-    "live:a5": "GITHUB_LIVE=1 node --test --test-timeout=2400000 --test-name-pattern=\"A5 \" store/github.live.test.ts",
+    "live:a5": "GITHUB_LIVE=1 GIT_TIMEOUT_MS=12000 node --test --test-timeout=3600000 --test-name-pattern=\"A5 \" store/github.live.test.ts",
     "a5i": "GITHUB_LIVE=1 node --test --test-timeout=7200000 demo/a5-instrumented.live.test.ts",
     "a5i:30": "GITHUB_LIVE=1 A5I_N=30 node --test --test-timeout=7200000 demo/a5-instrumented.live.test.ts"
   }
