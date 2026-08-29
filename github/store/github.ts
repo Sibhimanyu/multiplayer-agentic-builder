@@ -49,7 +49,8 @@ import {
 } from './refs.ts';
 import type { GitRunner, HttpTransport, HttpResponse, PushResult } from './transport.ts';
 import {
-  GITHUB_ACCEPT, GIT_PUSH_FATAL, assertNoFault, classifyGitFatal, mapHttpStatus, newFaults,
+  GITHUB_ACCEPT, GIT_PUSH_FATAL, GIT_TIMEOUT_MS, assertNoFault, classifyGitFatal,
+  mapHttpStatus, newFaults,
 } from './transport.ts';
 import type { Faultable } from './transport.ts';
 
@@ -75,6 +76,15 @@ export interface AttemptStats {
   rest_calls: number;
   /** Transport failures that were retried. Order 0019: a retry loop hides cost. */
   transport_retries: number;
+  /**
+   * git children killed for exceeding GIT_TIMEOUT_MS, then retried.
+   *
+   * Counted separately because order 0019's rule is that a retry loop hides
+   * cost: a run that completed only because a wedged push was retried is not
+   * the same measurement as one that never wedged, and a G-figure must be able
+   * to say which it was.
+   */
+  git_timeouts: number;
   /**
    * `X-RateLimit-Remaining` from the LAST response, and the authoritative read
    * of the quota.
@@ -104,7 +114,7 @@ export function createGithubStore(opts: GithubStoreOptions) {
   const faults: Faultable = newFaults();
 
   const stats: AttemptStats = {
-    pushes: 0, push_attempts_by_op: {}, rest_calls: 0, transport_retries: 0,
+    pushes: 0, push_attempts_by_op: {}, rest_calls: 0, transport_retries: 0, git_timeouts: 0,
     rate_limit_remaining: -1, rate_limit_limit: -1,
     conditional_304: 0, conditional_200: 0,
   };
@@ -311,24 +321,61 @@ export function createGithubStore(opts: GithubStoreOptions) {
     return r.stdout.trim();
   }
 
+  /**
+   * Every push, with a retry for a WEDGED child.
+   *
+   * `git` has no default timeout, so a stuck `send-pack` waits forever and takes
+   * the caller with it -- measured, on the fifth append of an A5 run, while
+   * `github.com` was reachable from the same machine in the same minute. The
+   * runner now kills the child at `GIT_TIMEOUT_MS`; this turns that into a
+   * RETRYABLE outcome rather than a fatal one, because a wedged connection is
+   * exactly the transient a retry exists for.
+   *
+   * Sleeps on REAL time, deliberately, for the same reason `rest()` does: a
+   * transport backoff is wall clock and must not be freezable by an injected
+   * domain clock.
+   */
   async function push(args: string[], operation: string): Promise<PushResult> {
-    stats.pushes += 1;
-    stats.push_attempts_by_op[operation] = (stats.push_attempts_by_op[operation] ?? 0) + 1;
-    const res = await opts.git.push(['--atomic', ...args]);
-    if (res.code === GIT_PUSH_FATAL) {
-      // rc=128 collapses auth, offline, DNS and missing-repo. Order 0017 forbids
-      // telling them apart from git's prose, so ask a structured channel.
-      throw await classifyGitFatal(
-        async () => {
-          try {
-            return await opts.http(`https://api.github.com/repos/${opts.repo}`, { headers: headers() });
-          } catch { return 'transport-failure'; }
-        },
-        operation,
-        res.stderr,
-      );
-    }
-    return res;
+    const { value } = await withRetry(
+      async () => {
+        stats.pushes += 1;
+        stats.push_attempts_by_op[operation] = (stats.push_attempts_by_op[operation] ?? 0) + 1;
+        const res = await opts.git.push(['--atomic', ...args]);
+
+        if (res.timed_out) {
+          stats.git_timeouts += 1;
+          log.warn('github.push.timeout', 'git push exceeded its deadline and was killed', {
+            operation, timeout_ms: GIT_TIMEOUT_MS,
+          });
+          // Retryable on purpose. Reported in stats so a G4 figure cannot hide
+          // a run that only completed because it retried (order 0019).
+          throw new StoreOfflineError('git push timed out', {
+            backend_message: res.stderr.slice(0, 400),
+          });
+        }
+
+        if (res.code === GIT_PUSH_FATAL) {
+          // rc=128 collapses auth, offline, DNS and missing-repo. Order 0017
+          // forbids telling them apart from git's prose, so ask a structured
+          // channel.
+          throw await classifyGitFatal(
+            async () => {
+              try {
+                return await opts.http(`https://api.github.com/repos/${opts.repo}`, { headers: headers() });
+              } catch { return 'transport-failure'; }
+            },
+            operation,
+            res.stderr,
+          );
+        }
+        return res;
+      },
+      {
+        attempts: 3, base_ms: 500, log: nullLogger, op: `push.${operation}`,
+        sleep: (ms: number) => new Promise<void>((r) => { setTimeout(r, ms); }),
+      },
+    );
+    return value;
   }
 
   /** Did `ref` get created by this push? `*` only -- `=` is the no-op. */

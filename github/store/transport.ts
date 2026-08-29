@@ -57,7 +57,29 @@ export interface PushResult {
   refs: PushRefResult[];
   /** Kept for logs only. Never branched on. */
   stderr: string;
+  /** The child exceeded its deadline and was killed. See GIT_TIMEOUT_MS. */
+  timed_out?: boolean;
 }
+
+/**
+ * Deadline for any git child process.
+ *
+ * GIT HAS NO DEFAULT TIMEOUT, and a wedged `git send-pack` waits forever.
+ * Measured: a push to `refs/.../ev/0000000004` sat in `send-pack` indefinitely
+ * while `github.com` was demonstrably reachable from the same machine in the
+ * same minute (probe `pushtime.py`: push 1.9 s, ls-remote 1.3 s). The adapter
+ * had no deadline, so it waited with it.
+ *
+ * This is the second of two independent hangs found the same afternoon, and the
+ * worse one: the first only affected tests, because it needed the FakeClock.
+ * This one affects PRODUCTION -- a CLI daemon would sit on a wedged push
+ * forever, appearing to work and publishing nothing.
+ *
+ * 45 s is well clear of the measured p95 for every git operation this adapter
+ * performs (push p95 ~2.4 s, fetch ~1.5 s), so a timeout means something is
+ * genuinely wrong rather than merely slow.
+ */
+export const GIT_TIMEOUT_MS = Number(process.env.GIT_TIMEOUT_MS ?? 45_000);
 
 export interface GitRunner {
   /** Run `git push --porcelain --atomic <args>` and parse the per-ref status. */
@@ -99,7 +121,9 @@ export function parsePorcelain(stdout: string): PushRefResult[] {
 }
 
 export function createGitRunner(cwd: string, env: NodeJS.ProcessEnv = {}): GitRunner {
-  async function exec(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  async function exec(
+    args: string[],
+  ): Promise<{ code: number; stdout: string; stderr: string; timed_out?: boolean }> {
     return new Promise((resolve, reject) => {
       const child = spawn('git', args, {
         cwd,
@@ -114,17 +138,50 @@ export function createGitRunner(cwd: string, env: NodeJS.ProcessEnv = {}): GitRu
       });
       let stdout = '';
       let stderr = '';
+      let settled = false;
+      let timedOut = false;
+
+      // The deadline. Without it a wedged send-pack waits forever and takes the
+      // caller with it. SIGTERM first so git can clean up its helper processes,
+      // then SIGKILL if it will not go.
+      const deadline = setTimeout(() => {
+        if (settled) return;
+        timedOut = true;
+        child.kill('SIGTERM');
+        const hard = setTimeout(() => { if (!settled) child.kill('SIGKILL'); }, 2_000);
+        if (typeof hard.unref === 'function') hard.unref();
+      }, GIT_TIMEOUT_MS);
+      if (typeof deadline.unref === 'function') deadline.unref();
+
       child.stdout.on('data', (d) => { stdout += d; });
       child.stderr.on('data', (d) => { stderr += d; });
-      child.on('error', reject);
-      child.on('close', (code) => resolve({ code: code ?? -1, stdout, stderr }));
+      child.on('error', (err) => {
+        settled = true;
+        clearTimeout(deadline);
+        reject(err);
+      });
+      child.on('close', (code) => {
+        settled = true;
+        clearTimeout(deadline);
+        resolve({
+          code: timedOut ? GIT_PUSH_FATAL : (code ?? -1),
+          stdout,
+          stderr: timedOut
+            ? `${stderr}\ngit exceeded ${GIT_TIMEOUT_MS} ms and was killed: ${args[0]}`
+            : stderr,
+          timed_out: timedOut,
+        });
+      });
     });
   }
 
   return {
     async push(args) {
       const r = await exec(['push', '--porcelain', ...args]);
-      return { code: r.code, refs: parsePorcelain(r.stdout), stderr: r.stderr };
+      return {
+        code: r.code, refs: parsePorcelain(r.stdout), stderr: r.stderr,
+        ...(r.timed_out ? { timed_out: true } : {}),
+      };
     },
     run: exec,
 

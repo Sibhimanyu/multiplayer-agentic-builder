@@ -28,6 +28,29 @@ const nullGit: GitRunner = {
   async catFileBatch() { return new Map<string, string>(); },
 };
 
+/** A git runner whose push wedges the first `n` times, as a stuck send-pack does. */
+function wedgingGit(n: number): { git: GitRunner; pushes: () => number } {
+  let pushes = 0;
+  const git: GitRunner = {
+    async run() { return { code: 0, stdout: '', stderr: '' }; },
+    async catFileBatch() { return new Map<string, string>(); },
+    async push(args) {
+      pushes += 1;
+      if (pushes <= n) {
+        // What createGitRunner now returns when it kills a child on deadline.
+        return { code: 128, refs: [], stderr: 'git exceeded 45000 ms', timed_out: true };
+      }
+      const ref = (args.find((a) => a.includes(':refs/')) ?? ':refs/x').split(':')[1]!;
+      return {
+        code: 0,
+        refs: [{ flag: '*' as const, spec: 'abc:' + ref, remote_ref: ref, summary: '[new reference]' }],
+        stderr: '',
+      };
+    },
+  };
+  return { git, pushes: () => pushes };
+}
+
 /** Fails the first `n` calls the way a transient socket failure does. */
 function flakyHttp(n: number): { http: HttpTransport; calls: () => number } {
   let calls = 0;
@@ -113,4 +136,49 @@ test('no transient means no sleep, so a FakeClock is harmless on the happy path'
   const result = await within(store.listPresence('proj_x'), 5_000);
   assert.notEqual(result, 'timeout',
     'the happy path must not depend on the clock at all');
+});
+
+test('a WEDGED git push is retried, not fatal, and is counted', async () => {
+  // git has no default timeout. A stuck send-pack waited forever and took the
+  // caller with it -- measured on the fifth append of an A5 run while
+  // github.com was reachable from the same machine in the same minute. The
+  // runner now kills the child at its deadline; this asserts the adapter treats
+  // that as the transient it is.
+  const { git, pushes } = wedgingGit(1);
+  const store = createGithubStore({
+    repo: 'o/r', git,
+    http: async () => ({ status: 200, headers: {}, body: '[]' }),
+    token: 't', clock: new FakeClock(), log: new CapturingLogger(),
+  });
+
+  const result = await within(store.claimTask('proj_x', 'task_a', 'agent_a'), 8_000);
+
+  assert.notEqual(result, 'timeout', 'a wedged push must not hang the caller');
+  assert.deepEqual(result, { ok: true }, 'and the retry must actually succeed');
+  assert.ok(pushes() >= 2, 'it must have retried the push');
+  assert.equal(store.stats.git_timeouts, 1,
+    'and counted the timeout, so a G-figure cannot hide a run that only '
+    + 'completed because a wedged push was retried');
+});
+
+test('a push that wedges every time FAILS loudly rather than hanging', async () => {
+  // The other half. Retrying forever would turn a broken remote into the same
+  // silent stall the deadline exists to prevent.
+  const { git } = wedgingGit(99);
+  const store = createGithubStore({
+    repo: 'o/r', git,
+    http: async () => ({ status: 200, headers: {}, body: '[]' }),
+    token: 't', clock: new FakeClock(), log: new CapturingLogger(),
+  });
+
+  const result = await within(
+    store.claimTask('proj_x', 'task_a', 'agent_a').then(
+      () => 'resolved' as const,
+      (e: Error) => e.name,
+    ),
+    15_000,
+  );
+  assert.notEqual(result, 'timeout', 'exhausting retries must not hang either');
+  assert.equal(result, 'StoreOfflineError',
+    'and it must surface as the retryable-but-exhausted error the caller queues on');
 });
