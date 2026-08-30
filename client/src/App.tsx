@@ -1,11 +1,11 @@
 // App owns the single subscription for the whole page. Everything below gets props.
 // Phase 1: replace the createMockStore import with the platform store. Nothing else changes.
 //   Catalyst  -> import { createCatalystStore }  from './store/catalyst';
-//   Firebase  -> import { createFirestoreStore } from './store/firestore';
+//   Firebase  -> import { createFirestoreStore } from './store/firebase';
 
 import { useEffect, useMemo, useState } from 'react';
 import { COLUMNS, type Snapshot } from './store/types';
-import { createFirestoreStore } from './store/firestore';
+import { createFirestoreStore } from './store/firebase';
 import { DetailPanel, EmptyColumn, TaskCard, TopNav } from './components';
 
 const PROJECT_ID = 'proj_inventory';
