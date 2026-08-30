@@ -23,6 +23,12 @@
 
 import { initializeApp, type FirebaseApp, type FirebaseOptions } from 'firebase/app';
 import {
+  connectAuthEmulator,
+  getAuth,
+  signInAnonymously,
+  type Auth,
+} from 'firebase/auth';
+import {
   collection,
   connectFirestoreEmulator,
   doc,
@@ -65,12 +71,49 @@ interface StoredAgent {
   revoked?: boolean;
 }
 
+/**
+ * What the board is actually doing, so a failure can be rendered as itself.
+ *
+ * Order 0039 ruling 1, condition 1: a permission failure must surface in the UI AS a permission
+ * failure. Before this, six listeners hit onErr, console.warn ran six times, `mark()` was never
+ * called, the readiness gate never opened and App sat on "Connecting..." forever -- identical on
+ * screen to a dead subscriber. That ambiguity is exactly why firebase/rulesprobe.mjs had to
+ * exist, and the product must not need a probe to tell a user what is wrong.
+ *
+ * These states are distinguished because each has a DIFFERENT fix, and saying "error" would
+ * throw that away:
+ *
+ *   auth-unavailable  the project has no sign-in configured  -> a console setting
+ *   denied            signed in, but not a member of this project -> admit the uid
+ *   error             anything else, reported verbatim
+ */
+export type StoreStatus =
+  | { state: 'signing-in' }
+  | { state: 'live'; uid: string }
+  | { state: 'denied'; uid: string; project_id: ProjectId }
+  | { state: 'auth-unavailable'; code: string; detail: string }
+  | { state: 'error'; detail: string };
+
+/**
+ * The browser store, plus a status channel.
+ *
+ * A separate interface rather than a change to CoordinationStore: store/types.ts is frozen and
+ * shared with the Catalyst build, and the ten-operation seam is the point of it. Status is a
+ * property of THIS transport (a signed-in browser talking to rules), not of the coordination
+ * contract, so it belongs here.
+ */
+export interface BrowserStore extends CoordinationStore {
+  onStatus(cb: (s: StoreStatus) => void): () => void;
+}
+
 export interface FirestoreStoreOptions {
   /** Firebase web config. Safe to ship: it identifies the project, it does not authorise. */
   config: FirebaseOptions;
   /** Coalescing window. One transaction settles six collections; render one frame, not six. */
   debounce_ms?: number;
   app?: FirebaseApp;
+  /** Auth emulator origin, e.g. "http://127.0.0.1:9099". From VITE_AUTH_EMULATOR. */
+  auth_emulator?: string;
   /**
    * Point the dashboard at a local Firestore emulator, e.g. "127.0.0.1:8080".
    *
@@ -81,7 +124,7 @@ export interface FirestoreStoreOptions {
   emulator?: string;
 }
 
-class BrowserFirestoreStore implements CoordinationStore {
+class BrowserFirestoreStore implements BrowserStore {
   /**
    * Firestore is genuinely push-based, so this is honest.
    *
@@ -92,12 +135,27 @@ class BrowserFirestoreStore implements CoordinationStore {
   readonly freshness: Freshness = { mode: 'live', stale_ms: 0 };
 
   private readonly db: Firestore;
+  private readonly auth: Auth;
   private readonly debounce_ms: number;
+
+  private status: StoreStatus = { state: 'signing-in' };
+  private readonly watchers = new Set<(s: StoreStatus) => void>();
+  /** Resolves to the anonymous uid, or rejects once sign-in has failed. */
+  private readonly signedIn: Promise<string>;
 
   constructor(opts: FirestoreStoreOptions) {
     const app = opts.app ?? initializeApp(opts.config);
     this.db = getFirestore(app);
+    this.auth = getAuth(app);
     this.debounce_ms = opts.debounce_ms ?? 40;
+
+    if (opts.auth_emulator) {
+      connectAuthEmulator(this.auth, opts.auth_emulator, { disableWarnings: true });
+    }
+
+    // Started in the constructor, not in subscribe(), so the round trip overlaps with React
+    // mounting rather than being serialised after it. subscribe() awaits the same promise.
+    this.signedIn = this.beginSignIn();
 
     if (opts.emulator) {
       const [host, port] = opts.emulator.split(':');
@@ -111,7 +169,88 @@ class BrowserFirestoreStore implements CoordinationStore {
     }
   }
 
+  // ---- status ------------------------------------------------------------------------
+
+  onStatus(cb: (s: StoreStatus) => void): () => void {
+    this.watchers.add(cb);
+    cb(this.status); // current state immediately, so a late subscriber is not left blank
+    return () => {
+      this.watchers.delete(cb);
+    };
+  }
+
+  private setStatus(s: StoreStatus): void {
+    this.status = s;
+    for (const w of this.watchers) {
+      try {
+        w(s);
+      } catch (err) {
+        console.warn('[store] status watcher threw', err);
+      }
+    }
+  }
+
+  /**
+   * Anonymous sign-in. Four lines of intent, wrapped in the classification that makes a failure
+   * legible.
+   *
+   * Anonymous rather than a login screen because the rules only ask "is this uid a member of
+   * this project" -- identity, not authentication of a person. The uid is stable per browser
+   * (the SDK persists it in IndexedDB), so admitting it once is enough.
+   */
+  private async beginSignIn(): Promise<string> {
+    try {
+      const cred = await signInAnonymously(this.auth);
+      // Not marked live yet: being signed in says nothing about being ALLOWED to read. Only a
+      // listener actually delivering does that, so `live` is set in attach().
+      return cred.user.uid;
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? 'unknown';
+      const detail = (err as { message?: string }).message ?? String(err);
+      // These two are configuration, not outage, and they are fixed in completely different
+      // places. Collapsing them into "sign-in failed" would send someone to the wrong screen.
+      const known: Record<string, string> = {
+        'auth/configuration-not-found':
+          'Firebase Authentication is not enabled for this project. ' +
+          'Firebase console -> Authentication -> Get started, then enable the Anonymous provider.',
+        'auth/operation-not-allowed':
+          'Anonymous sign-in is disabled for this project. ' +
+          'Firebase console -> Authentication -> Sign-in method -> Anonymous -> Enable.',
+      };
+      this.setStatus({ state: 'auth-unavailable', code, detail: known[code] ?? detail });
+      throw err;
+    }
+  }
+
   subscribe(project_id: ProjectId, from_seq: Seq, onChange: (s: Snapshot) => void): () => void {
+    let closed = false;
+    let detach: (() => void) | null = null;
+
+    // Listeners must not attach before sign-in resolves: an unauthenticated onSnapshot is
+    // rejected by the rules, and the retry would just be a second denial.
+    this.signedIn
+      .then((uid) => {
+        if (closed) return;
+        detach = this.attach(project_id, uid, from_seq, onChange);
+      })
+      .catch(() => {
+        // Status was already set by beginSignIn(); nothing to add, and rethrowing here would
+        // surface as an unhandled rejection that says less than the status already does.
+      });
+
+    return () => {
+      closed = true;
+      detach?.();
+      detach = null;
+    };
+  }
+
+  private attach(
+    project_id: ProjectId,
+    uid: string,
+    from_seq: Seq,
+    onChange: (s: Snapshot) => void,
+  ): () => void {
     const projectRef = doc(this.db, 'projects', project_id);
     const tasks = new Map<string, TaskView>();
     const agents = new Map<string, StoredAgent>();
@@ -132,6 +271,12 @@ class BrowserFirestoreStore implements CoordinationStore {
       // subscriber gets one complete snapshot instead of six partial ones. An empty collection
       // still delivers an initial empty snapshot, so this cannot deadlock on a fresh project.
       if (!firstFrameSent && ready.size < LISTENER_COUNT) return;
+      if (!firstFrameSent) {
+        // `live` only here: sign-in succeeding proves identity, not access. All six listeners
+        // having delivered proves the rules actually let this uid read the project, which is
+        // the thing the user cares about and the only honest moment to claim it.
+        this.setStatus({ state: 'live', uid });
+      }
       firstFrameSent = true;
 
       const now = Date.now();
@@ -211,8 +356,23 @@ class BrowserFirestoreStore implements CoordinationStore {
     // Every listener names itself in its error handler. A listener that fails silently would
     // freeze one column of the board while the rest kept updating, which is worse than an
     // obvious outage because nobody notices.
+    //
+    // And it now RAISES the failure rather than only logging it. A console.warn is not a user
+    // interface: the six warnings this used to emit were invisible to anyone not holding devtools
+    // open, while the page showed a placeholder that means "almost there".
     const onErr = (name: string) => (err: unknown) => {
       console.warn(`[store] listener "${name}" failed`, err);
+      const code = (err as { code?: string }).code;
+      if (code === 'permission-denied') {
+        // Not a member, or not admitted yet. The rules are working exactly as intended, so this
+        // is a legitimate state to render rather than an error to swallow.
+        this.setStatus({ state: 'denied', uid, project_id });
+      } else {
+        this.setStatus({
+          state: 'error',
+          detail: `listener "${name}": ${(err as { message?: string }).message ?? String(err)}`,
+        });
+      }
     };
 
     const unsubs: (() => void)[] = [
@@ -342,12 +502,13 @@ export function configFromEnv(env: Record<string, string | undefined>): Firebase
   };
 }
 
-export function createFirestoreStore(opts?: Partial<FirestoreStoreOptions>): CoordinationStore {
+export function createFirestoreStore(opts?: Partial<FirestoreStoreOptions>): BrowserStore {
   const env = import.meta.env as unknown as Record<string, string | undefined>;
   const config = opts?.config ?? configFromEnv(env);
   return new BrowserFirestoreStore({
     ...opts,
     config,
     emulator: opts?.emulator ?? env.VITE_FIRESTORE_EMULATOR,
+    auth_emulator: opts?.auth_emulator ?? env.VITE_AUTH_EMULATOR,
   });
 }

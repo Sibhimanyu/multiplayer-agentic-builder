@@ -5,20 +5,75 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { COLUMNS, type Snapshot } from './store/types';
-import { createFirestoreStore } from './store/firebase';
+import { createFirestoreStore, type StoreStatus } from './store/firebase';
 import { DetailPanel, EmptyColumn, TaskCard, TopNav } from './components';
 
 const PROJECT_ID = 'proj_inventory';
 
+/**
+ * The pre-board states, rendered as themselves.
+ *
+ * Deliberately the same shape as the "Connecting…" placeholder this replaces -- a padded block
+ * using the existing colour tokens -- because components.tsx and tokens.css are frozen and a
+ * failure message is not a reason to invent chrome. What changes is that it now SAYS which
+ * failure it is, and what fixes it.
+ */
+function Notice({ status }: { status: StoreStatus }) {
+  const base = { padding: 28, color: 'var(--muted)', maxWidth: 620, lineHeight: 1.6 } as const;
+
+  if (status.state === 'signing-in') return <div style={base}>Connecting…</div>;
+
+  if (status.state === 'live') {
+    // Signed in and allowed, but no snapshot yet. Distinct from signing-in on purpose: it tells
+    // you the rules are not the problem.
+    return <div style={base}>Loading the board…</div>;
+  }
+
+  if (status.state === 'auth-unavailable') {
+    return (
+      <div style={base}>
+        <strong style={{ color: 'var(--red)' }}>Sign-in is unavailable.</strong>
+        <div style={{ marginTop: 8 }}>{status.detail}</div>
+        <div style={{ marginTop: 8, opacity: 0.7 }}>({status.code})</div>
+      </div>
+    );
+  }
+
+  if (status.state === 'denied') {
+    return (
+      <div style={base}>
+        <strong style={{ color: 'var(--amber)' }}>Not a member of this project.</strong>
+        <div style={{ marginTop: 8 }}>
+          Signed in, but the security rules do not grant this browser read access to{' '}
+          <code>{status.project_id}</code>. This is the rules working, not an outage.
+        </div>
+        <div style={{ marginTop: 8 }}>Admit this browser by running:</div>
+        <div style={{ marginTop: 6, color: 'var(--ink)', userSelect: 'all' }}>
+          <code>node firebase/bridge-run.ts --admit {status.uid}</code>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={base}>
+      <strong style={{ color: 'var(--red)' }}>Could not load the board.</strong>
+      <div style={{ marginTop: 8 }}>{status.detail}</div>
+    </div>
+  );
+}
+
 export default function App() {
   const store = useMemo(() => createFirestoreStore(), []);
   const [snap, setSnap] = useState<Snapshot | null>(null);
+  const [status, setStatus] = useState<StoreStatus>({ state: 'signing-in' });
   const [selected, setSelected] = useState<string | null>('task_items_crud');
 
   useEffect(() => store.subscribe(PROJECT_ID, 0, setSnap), [store]);
+  useEffect(() => store.onStatus(setStatus), [store]);
 
   // Stable placeholder height: no layout shift when the first snapshot lands.
-  if (!snap) return <div style={{ padding: 28, color: 'var(--muted)' }}>Connecting…</div>;
+  if (!snap) return <Notice status={status} />;
 
   const agentById = new Map(snap.agents.map((a) => [a.agent_id, a]));
   const taskById = new Map(snap.tasks.map((t) => [t.task_id, t]));

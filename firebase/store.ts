@@ -8,7 +8,7 @@
 //
 // This is the authoritative Firestore implementation: the Cloud Functions API calls it, and
 // the conformance suite runs it against the emulator. The browser adapter
-// (client/src/store/firestore.ts) is read-only and much smaller, because clients never write
+// (client/src/store/firebase.ts) is read-only and much smaller, because clients never write
 // the ledger directly — every write arrives here through the API, which resolves
 // token -> agent_id server-side.
 //
@@ -95,6 +95,16 @@ export interface FirestoreStoreOptions {
 }
 
 const HUMAN_READABLE_LIMIT = 1_500;
+
+/**
+ * How long heartbeat may serve its revocation check from cache. Order 0039 ruling 2.
+ *
+ * This IS the staleness window the order required be bounded and stated: at most 90 s between
+ * an agent being revoked and its heartbeat starting to refuse. Chosen to equal STALE_AFTER_MS
+ * so the window a revoked agent can keep writing presence never exceeds the window after which
+ * the board calls presence stale anyway. No other operation uses it.
+ */
+const REVOCATION_CACHE_MS = STALE_AFTER_MS;
 
 /** meta, counter, tasks, agents, locks, contracts. The first-frame gate counts these. */
 const LISTENER_COUNT = 6;
@@ -443,6 +453,17 @@ export class FirestoreStore implements CoordinationStore {
   private readonly frozenAt = new Map<ProjectId, number>();
   /** Transaction attempts before contention is surfaced to the caller. */
   private readonly tx_attempts: number;
+  /**
+   * When each agent was last CONFIRMED NOT revoked. Keyed by JSON.stringify([pid, agent_id]).
+   *
+   * Presence-only, and allows only -- a deny is never cached, so revocation takes effect on the
+   * next call and un-revocation does too.
+   *
+   * JSON rather than a joined string on purpose, for the same reason scopedKeyFor() hashes its
+   * parts separately: there is then no separator character whose absence from ids I have to keep
+   * policing. Read by heartbeat only -- see assertNotRevokedCached().
+   */
+  private readonly revocation = new Map<string, { at: number }>();
 
   constructor(opts: FirestoreStoreOptions) {
     this.db = opts.db;
@@ -563,9 +584,36 @@ export class FirestoreStore implements CoordinationStore {
   private async assertNotRevoked(pid: ProjectId, agent_id: AgentId | undefined): Promise<void> {
     if (!agent_id) return;
     const snap = await this.agentsRef(pid).doc(agent_id).get();
-    if (snap.exists && snap.get('revoked') === true) {
+    const revoked = snap.exists && snap.get('revoked') === true;
+    const key = JSON.stringify([pid, agent_id]);
+    if (revoked) {
+      // ONLY THE ALLOW IS EVER CACHED. Caching the deny looks safer and is worse: it is
+      // fail-closed, so it cannot let a revoked agent through, but it makes UN-revoking take up
+      // to the full window to be honoured on the heartbeat path. Found by the revocation check
+      // against real Firestore -- re-instating an agent left it unable to beat for 90 s. A
+      // revoked agent simply pays a fresh read per beat, which is the correct incentive.
+      this.revocation.delete(key);
       throw new StoreAuthError(`token revoked for ${agent_id}`);
     }
+    this.revocation.set(key, { at: this.clock.now() });
+  }
+
+  /**
+   * The same check, for heartbeat only, served from a short-lived cache.
+   *
+   * Heartbeat is the most-repeated operation in the system and the only one whose revocation
+   * read buys nothing -- see the argument at heartbeat(). Every OTHER caller still uses
+   * assertNotRevoked() and still pays a fresh read, so a stale allow can never grant authority
+   * over shared state; the worst it permits is an extra presence row that the board renders as
+   * `revoked` regardless.
+   *
+   * The entry is written by BOTH paths, so an agent that claims a task (fresh read) also warms
+   * this cache, and a revocation observed by any operation is honoured here immediately.
+   */
+  private async assertNotRevokedCached(pid: ProjectId, agent_id: AgentId): Promise<void> {
+    const hit = this.revocation.get(JSON.stringify([pid, agent_id]));
+    if (hit && this.clock.now() - hit.at < REVOCATION_CACHE_MS) return;
+    await this.assertNotRevoked(pid, agent_id);
   }
 
   // ---- ledger ------------------------------------------------------------------------
@@ -964,7 +1012,37 @@ export class FirestoreStore implements CoordinationStore {
     current_task: TaskId | null = null,
     branch: string | null = null,
   ): Promise<void> {
-    await this.assertNotRevoked(pid, agent_id);
+    // Order 0039 ruling 2, with one deviation the order could not have known about.
+    //
+    // The ruling approved DELETING this check, on my own recommendation. It cannot be deleted:
+    // conformance A14 requires `heartbeat` to throw StoreAuthError for a revoked agent and to
+    // not be retried, and shared/store/conformance.ts is frozen and must run unmodified by both
+    // adapters. I found that by reading the suite before making the change, not after.
+    //
+    // So the read gets CHEAPER rather than removed: cached, for heartbeat only. Every other
+    // mutating operation (appendEvent, claimTask, releaseTask, acquireScope, releaseScope) still
+    // pays a fresh read, because those grant authority over shared state and a stale allow there
+    // is a real security hole. A heartbeat grants nothing -- it writes the agent's own presence
+    // row -- which is what makes the cached check safe HERE and only here.
+    //
+    // Why a revoked agent still cannot appear present, in three parts, none of which depend on
+    // the cache being fresh:
+    //
+    //   1. It cannot un-revoke itself. This payload has no `revoked` field and the write is
+    //      merge:true, so `revoked: true` survives every heartbeat a revoked agent can send.
+    //   2. Both readers resolve it independently of the cache. toPresence() below and the
+    //      browser adapter's emit() derive `status: revoked ? 'revoked' : ...` from the agent
+    //      DOCUMENT, which they have already paid to fetch. So the board shows `revoked` within
+    //      one push delivery no matter what this cache believes.
+    //   3. Its claims are not protected by a fresh heartbeat. The reaper releases a revoked
+    //      agent's claims immediately, without consulting the timeout at all
+    //      (functions/src/reaper.ts). A revoked agent beating faster changes nothing.
+    //
+    // THE STALENESS BOUND, stated rather than left implicit, as the order requires:
+    // at most REVOCATION_CACHE_MS (90 s) between revocation and this operation refusing. At a
+    // 30 s beat that is at most three further presence writes by a revoked agent, each of which
+    // the board renders as `revoked`. It is bounded by a constant, not by a retry or a timeout.
+    await this.assertNotRevokedCached(pid, agent_id);
     await guard('heartbeat', async () => {
       await this.agentsRef(pid).doc(agent_id).set(
         {

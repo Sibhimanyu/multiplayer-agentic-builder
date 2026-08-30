@@ -45,6 +45,9 @@ out. **I am recording that as unverified.** What settles it: the TTL page's stat
 guarantee, plus one policy enabled on a scratch collection and observed. Neither belongs in this
 slice.
 
+> **Status after order 0039: the presence fix is made.** See the correction below — it does not
+> do what the ruling said it would do, and the difference matters for the scoreboard.
+
 **The cheaper fix is not TTL — it is the read.** *(reasoned, from `firebase/store.ts:967`)*
 
 `heartbeat` opens with `assertNotRevoked()`, a document read on every beat. That is the entire
@@ -60,6 +63,49 @@ presence cost to **0r + 1w**.
 
 I have not made that change. It removes a revocation check from a write path, which is a security
 decision and wider than the slice order 0038 asked for. Recorded for whoever takes it.
+
+### Correction: this saves READS, not writes. The 48% does not move.
+
+Order 0039 approved the fix as "the difference between 48% and ~24% of the daily **write**
+allowance at 10 agents". That is not what it does, and the number should not be recorded that way.
+
+A heartbeat costs **1 write before the change and 1 write after it.** Removing a read cannot
+reduce a write count. Reads and writes are separate Spark quotas — 50,000 reads/day and 20,000
+writes/day — and the 48% figure is a percentage of the *write* quota, which the fix does not touch.
+
+What actually changes, at 10 agents on a 30 s beat *(arithmetic)*:
+
+| quota | before | after | of quota |
+| --- | --- | --- | --- |
+| reads/day | 28,800 | 9,600 | 58% → **19%** |
+| writes/day | 28,800 | 28,800 | **144% → 144%** (unchanged) |
+
+Not zero reads, either: the check is cached for 90 s against a 30 s beat, so it re-reads on every
+third beat rather than never. `0r + 1w` is the ideal; `0.33r + 1w` is what is implemented, for the
+reason in the next paragraph.
+
+So the fix is worth having — it takes reads from the majority of the read quota to a fifth of it —
+but **presence writes remain the binding constraint and remain over the free-tier limit at ten
+agents.** The only things that move that number are a longer heartbeat interval or not writing
+every beat. The worst number in this design is still the worst number in this design.
+
+### And it could not be a deletion: conformance A14
+
+`shared/store/conformance.ts:429` (A14) requires `heartbeat` to throw `StoreAuthError` for a
+revoked agent and to not be retried. That file is frozen and both adapters run it unmodified, so
+deleting the check was never available. The read was made **cheap instead of absent**: cached for
+90 s, for `heartbeat` only. Every other operation still pays a fresh read, because those grant
+authority over shared state and a stale allow there would be a real hole.
+
+**Only the allow is cached; a deny never is.** The first version cached both, which is fail-closed
+and looks safer, but it left a *re-instated* agent unable to heartbeat for the full 90 s. That was
+caught by `firebase/revocation-check.mjs` against real Firestore, not by reading the code.
+
+**The staleness window, stated as ordered:** at most **90 s** (`REVOCATION_CACHE_MS`, set equal to
+`STALE_AFTER_MS`) between an agent being revoked and its heartbeat refusing — at most three further
+presence writes at a 30 s beat. The board is not fooled during that window: both readers derive
+`status: revoked ? 'revoked' : …` from the agent document itself, so a revoked agent renders as
+`revoked` throughout regardless of what the cache believes. Verified as part of the same check.
 
 ---
 

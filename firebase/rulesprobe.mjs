@@ -19,12 +19,39 @@ const env = Object.fromEntries(
 
 const pid = env.VITE_FIREBASE_PROJECT_ID;
 const key = env.VITE_FIREBASE_API_KEY;
-const doc = process.argv[2] ?? 'projects/proj_inventory/tasks/task_items_crud';
+
+const args = process.argv.slice(2);
+const anon = args.includes('--anon');
+const doc = args.find((a) => !a.startsWith('--')) ?? 'projects/proj_inventory/tasks/task_items_crud';
 const url = `https://firestore.googleapis.com/v1/projects/${pid}/databases/(default)/documents/${doc}?key=${key}`;
 
-const res = await fetch(url);
+// --anon performs the EXACT call the browser makes: identitytoolkit accounts:signUp with no
+// credentials, which is what the Firebase web SDK's signInAnonymously() is underneath. If the
+// provider is off, this is where it says so -- and it says so far more precisely than the
+// admin config endpoint, which describes paid Identity Platform rather than Firebase Auth.
+const headers = {};
+if (anon) {
+  const su = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${key}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ returnSecureToken: true }),
+  });
+  const body = await su.json();
+  if (!su.ok) {
+    console.log(`anonymous sign-in: FAILED HTTP ${su.status} -- ${body.error?.message}`);
+    if (body.error?.message === 'ADMIN_ONLY_OPERATION') {
+      console.log('  Anonymous sign-in is DISABLED for this project.');
+      console.log('  Firebase console -> Authentication -> Sign-in method -> Anonymous -> Enable.');
+    }
+    process.exit(1);
+  }
+  console.log(`anonymous sign-in: OK, uid ${body.localId}`);
+  headers.Authorization = `Bearer ${body.idToken}`;
+}
+
+const res = await fetch(url, { headers });
 const text = await res.text();
-console.log(`unauthenticated read of ${doc}`);
+console.log(`${anon ? 'anonymous' : 'unauthenticated'} read of ${doc}`);
 console.log(`  project: ${pid}   HTTP ${res.status}`);
 if (res.ok) {
   const fields = JSON.parse(text).fields ?? {};

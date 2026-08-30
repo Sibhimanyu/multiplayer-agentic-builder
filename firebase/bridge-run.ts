@@ -47,16 +47,22 @@ const task = (task_id: string, title: string, kind: TaskView['kind'] = 'backend'
   updated_at: systemClock.iso(),
 });
 
-function connect(log = consoleLogger): { store: FirestoreStore; close: () => Promise<void> } {
+function connect(log = consoleLogger): {
+  store: FirestoreStore;
+  db: ReturnType<typeof getFirestore>;
+  close: () => Promise<void>;
+} {
   const app = initializeApp({ projectId: FB_PROJECT }, `bridge-${Date.now()}-${Math.floor(performance.now())}`);
+  const db = getFirestore(app);
   const store = createFirestoreStore({
-    db: getFirestore(app),
+    db,
     log,
     clock: systemClock, // real clock: this is a transport path, never an injected one
     debounce_ms: 0,
   });
   return {
     store,
+    db,
     close: async () => {
       await store.close();
       await deleteApp(app);
@@ -171,6 +177,41 @@ async function selftest(): Promise<void> {
   if (failed > 0) process.exit(1);
 }
 
+/**
+ * Admit a browser to the project by writing its membership document.
+ *
+ * This is the whole of order 0039 ruling 1 on the server side. The rules gate reads behind
+ * `isMember(pid)`, membership is a DOCUMENT rather than a custom claim (so revocation is
+ * immediate rather than waiting for a token refresh), and nothing but the admin SDK can write
+ * one -- clients cannot write at all. So admitting a browser is deliberately an out-of-band act
+ * by someone holding the service-account credential, which is the property that lets
+ * deny-by-default stay intact.
+ *
+ * The uid comes from the browser's own anonymous sign-in, and the dashboard prints the exact
+ * command when it is denied.
+ */
+async function admit(uid: string): Promise<void> {
+  if (!uid || uid.startsWith('--')) {
+    console.error('usage: node firebase/bridge-run.ts --admit <uid>');
+    console.error('  The dashboard prints the uid when it is denied.');
+    process.exit(1);
+  }
+  // Written with the raw SDK rather than through the store. Membership is not one of the ten
+  // coordination operations -- it is authority over who may READ -- and widening the seam to
+  // carry it would blur exactly the boundary the seam exists to hold.
+  const { db, close } = connect(new CapturingLogger());
+  const members = db.collection('projects').doc(PID).collection('members');
+  await members.doc(uid).set(
+    { uid, role: 'viewer', label: 'browser (anonymous)', revoked: false, admitted_at: systemClock.iso() },
+    { merge: true },
+  );
+  const all = await members.get();
+  console.log(`admitted ${uid} to ${PID} (${FB_PROJECT})`);
+  console.log(`  members now: ${all.docs.map((d) => d.id).join(', ')}`);
+  console.log('  Reload the dashboard; it renders without a refresh thereafter.');
+  await close();
+}
+
 /** Print the board as the store sees it. The read side of the proof. */
 async function board(): Promise<void> {
   const { store, close } = connect(new CapturingLogger());
@@ -185,6 +226,8 @@ async function board(): Promise<void> {
 const mode = process.argv[2] ?? '';
 if (mode === '--seed') {
   await seed();
+} else if (mode === '--admit') {
+  await admit(process.argv[3] ?? '');
 } else if (mode === '--board') {
   await board();
 } else if (mode === '--selftest') {
