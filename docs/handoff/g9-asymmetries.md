@@ -144,11 +144,57 @@ with one `runTransaction`.
 When the final comparison is written, do not flatten "needed a workaround" and "cannot be made
 correct" into the same column.
 
-## Entry 50 — the presence ceiling is half what entry 34 recorded, and TTL was the wrong suspect
+## Entry 52 — the presence fix could not be a deletion, because a frozen test says so
+
+`heartbeat` must throw `StoreAuthError` for a revoked agent and must not retry it — conformance
+**A14**, `shared/store/conformance.ts:429`, a frozen file both adapters run unmodified. The build
+found that **by reading the suite before making the change**, not by breaking it and discovering why.
+
+So the read became *cheap* rather than *absent*: cached 90 s, **heartbeat only**. Every other
+operation still pays a fresh read, because those grant authority over shared state and a heartbeat
+grants none. That is the property that makes the cache safe here and nowhere else.
+
+**Only the allow is cached.** The first version cached both outcomes — fail-closed, which *looked*
+safer — and thereby left a **re-instated** agent unable to heartbeat for the full 90 s. Caught by
+`revocation-check.mjs` against real Firestore rather than by reading the code. Fail-closed is not
+automatically correct; it was wrong in the direction nobody checks.
+
+**Window, as ordered:** ≤90 s, three presence writes at a 30 s beat. The board is not fooled in the
+meantime — both readers derive `status` from the agent document itself, so a revoked agent renders
+as `revoked` throughout regardless of the cache. Asserted, 8/8 against real Firestore.
+
+## Entry 53 — the emulator cannot run on this machine, and that is now a named blocker
+
+`firebase-tools` refuses to start the Firestore emulator: **"no longer supports Java version before
+21."** So `firebase/store.test.ts` and the conformance suite **cannot run here at all** until a JDK
+21+ is installed.
+
+Recorded because 0039 warned that skipped emulator suites must not become a habit, and the honest
+answer turned out to be neither reluctance nor a sandbox quirk but a missing dependency. The build
+verified the same behaviour against production Firestore instead — including A14's exact
+revoked-then-heartbeat sequence — and left `client/sliceproof.mjs` in place to prove the full rules
+chain under `emulators:exec` when the JDK exists, with a header stating that no latency figure may
+ever come from it.
+
+## Entry 54 — NUL bytes recurred, in the same project that already had them once
+
+Two edits landed a literal NUL byte as a cache-key separator, making `store.ts` **binary to grep**.
+Caught because grep called a TypeScript file binary — the same detection that caught it the first
+time, and the second occurrence in this project.
+
+Fixed by removing the separator entirely: `JSON.stringify([pid, agent_id])`, which has nothing to
+police. **Rule: never build a composite key from a control character.** A separator that cannot
+appear in a source file is not a clever choice; it is a landmine that survives compilation and
+passes tests.
+
+## Entry 50 — the presence read is 3× cheaper, and TTL was the wrong suspect
 
 Entry 34 priced Firebase presence at **1 read + 1 write** per heartbeat, 48% of the daily write
 allowance at 10 agents, and I assumed the fix — if one existed — would look like Catalyst's
 TTL-expiry-as-signal.
+
+**CORRECTED — my approval of this was arithmetically wrong. See the correction below before
+reading the rest of this entry.**
 
 **It is not the TTL. It is the read.** `heartbeat` opens with `assertNotRevoked()`, a billed read on
 every beat, and that read is redundant *for this operation*: a revoked agent's heartbeat mutates only
@@ -161,7 +207,29 @@ the build looked at what the operation actually paid for instead of answering th
 It also declined to characterise the TTL question from memory, since `WebFetch` was not available —
 left explicitly unverified rather than guessed.
 
-**Entry 34's measurement stands; its implied ceiling does not.**
+### The correction: removing a read cannot reduce a write count
+
+I approved this fix as taking presence "from 48% to ~24% of the daily **write** allowance." That is
+wrong, and the build corrected it before it reached the scoreboard:
+
+- **Reads and writes are separate Spark quotas.** Removing a read cannot move a write number.
+- A heartbeat costs **one write before and one write after.** Writes are **unchanged**.
+- At 10 agents on a 30 s beat: **reads 28,800 → 9,600** (58% → 19% of 50,000/day). **Writes 28,800 →
+  28,800.**
+- And it is not `0r`. A 90 s cache against a 30 s beat re-reads **every third beat** — `~0.33r + 1w`,
+  not `0r + 1w`.
+
+**Presence writes remain the binding constraint and remain over the free tier at ten agents.** The
+worst number in the chosen design is still the worst number. The fix is worth having — a 3× read
+reduction is real — but it does not touch the ceiling.
+
+**OPEN, and it must be reconciled rather than smoothed:** entry 34 recorded presence as "**48% of
+the daily write allowance**" at 10 agents, and this run reports 28,800 writes/day as being **over**
+the free tier. At a 20,000/day Spark write limit that is 144%, not 48%. **Those two figures cannot
+both be right.** Neither is being quietly adjusted to fit the other — the build owns reconciling
+them, and until it does the presence ceiling is *unknown*, not 48% and not 144%.
+
+**Entry 34's measurement of the mechanism stands (1r + 1w per beat); its percentage does not.**
 
 ## Entry 51 — the 1,955 ms contended claim is withdrawn as a quotable figure
 
