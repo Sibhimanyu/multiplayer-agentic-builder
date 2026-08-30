@@ -144,6 +144,34 @@ with one `runTransaction`.
 When the final comparison is written, do not flatten "needed a workaround" and "cannot be made
 correct" into the same column.
 
+## Entry 50 — the presence ceiling is half what entry 34 recorded, and TTL was the wrong suspect
+
+Entry 34 priced Firebase presence at **1 read + 1 write** per heartbeat, 48% of the daily write
+allowance at 10 agents, and I assumed the fix — if one existed — would look like Catalyst's
+TTL-expiry-as-signal.
+
+**It is not the TTL. It is the read.** `heartbeat` opens with `assertNotRevoked()`, a billed read on
+every beat, and that read is redundant *for this operation*: a revoked agent's heartbeat mutates only
+its own row, and the reaper already releases revoked claims immediately. Relocating the check to a
+field test on data already fetched gives **0 reads + 1 write** — halving the ceiling without removing
+the check.
+
+Recorded because I named the wrong remedy in the order. I asked whether a TTL equivalent existed;
+the build looked at what the operation actually paid for instead of answering the question as asked.
+It also declined to characterise the TTL question from memory, since `WebFetch` was not available —
+left explicitly unverified rather than guessed.
+
+**Entry 34's measurement stands; its implied ceiling does not.**
+
+## Entry 51 — the 1,955 ms contended claim is withdrawn as a quotable figure
+
+It shares a run with the 1,167 ms uncontended anomaly that `probe-claim.mjs` already refuted
+(~257 ms is defensible). It therefore carries an unexplained inflation of **unknown size that cannot
+be subtracted out**. Withdrawn rather than corrected: there is no honest number to replace it with
+until the contended case is re-measured in isolation.
+
+The scoreboard's contended row for Firebase is now empty, not wrong.
+
 ## Entry 46 — NoSQL conditional insert HOLDS: Catalyst keeps atomicity in a database
 
 The last candidate, and it works.
