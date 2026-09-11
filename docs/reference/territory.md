@@ -16,8 +16,8 @@ Freeze protects **anything whose divergence would invalidate the comparison**. N
 | `docs/**` | **shared, frozen** | one spec or the comparison is meaningless |
 | `shared/**` | **shared, frozen** | the conformance suite must be one file, byte-identical |
 | root `package.json`, `tsconfig.json` | **shared, frozen** | root `npm test` must mean exactly "the shared suite, unmodified" and run the same count on both branches |
-| `client/src/components.tsx` | **shared, frozen** | the dashboard must render identically |
-| `client/src/tokens.css` | **shared, frozen** | same |
+| `client/src/components.tsx` | **UNFROZEN 2026-09-11** | the freeze existed so two competing builds rendered identically. Decision 0001 closed the comparison; there is one build, so this is product code. |
+| `client/src/tokens.css` | **UNFROZEN 2026-09-11** | same reasoning. Verified correct against every locked rule before unfreezing, so changes here are additions rather than repairs. |
 | `client/index.html`, `client/tsconfig.json` | **shared, frozen** | same |
 | `client/src/store/types.ts` | **shared, frozen** | mirrors the interface |
 | `client/src/App.tsx` — the store import line | **per-build** | this is step 9. One line. |
