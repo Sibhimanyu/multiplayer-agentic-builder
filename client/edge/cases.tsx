@@ -203,7 +203,10 @@ const render = (snap: Snapshot, freshness: Freshness = LIVE, selected: string | 
 }
 
 console.log(results.join('\n'));
-console.log(`\n${failed === 0 ? 'EDGE CASES PASSED' : `EDGE CASES FAILED (${failed})`}`);
+console.log(
+  `\n${failed === 0 ? 'EDGE CASES PASSED' : 'EDGE CASES FAILED'} ` +
+    `(${results.length - failed}/${results.length} server-rendered assertions)`,
+);
 if (failed > 0) process.exitCode = 1;
 
 export {};

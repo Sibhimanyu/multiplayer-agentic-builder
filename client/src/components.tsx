@@ -31,10 +31,18 @@ export function Avatar({ agent, small, idx }: { agent: AgentPresence; small?: bo
   );
 }
 
-/** Collapses past 5 so 10 agents does not push the nav around. */
+/**
+ * Collapses past 4 so 10 agents does not push the nav around.
+ *
+ * FOUR, not five: docs/designs/dashboard.md is the declared source of truth for pixels and its
+ * edge-case table says ten agents collapse to `+6`, which is 10 - 4. This comment previously
+ * said five and the code agreed with the comment rather than the design — an implementation
+ * note that drifted from the spec it was meant to describe. No measurement can settle a visual
+ * density choice, so the design wins by rule (order 0041).
+ */
 export function Presence({ agents }: { agents: AgentPresence[] }) {
   if (agents.length === 0) return <span className="noagents">no agents connected</span>;
-  const shown = agents.slice(0, 5);
+  const shown = agents.slice(0, 4);
   const rest = agents.length - shown.length;
   return (
     <div className="avs">
@@ -137,16 +145,22 @@ export function EmptyColumn({ label }: { label: string }) {
 }
 
 export function DetailPanel({
-  task, agent, contract, blockedByTask, onClose,
+  task, agent, contract, blockedChain, onClose,
 }: {
   task: TaskView; agent?: AgentPresence; contract?: ContractPointer;
-  blockedByTask?: TaskView; onClose: () => void;
+  /**
+   * The FULL blocked chain, A -> B -> C, nearest blocker first. Walked by the caller.
+   *
+   * It has to be the caller: `blocked_by` is a TaskId string, and resolving it needs the task
+   * index that App holds and this component deliberately does not — data in via props, no
+   * lookups in here. App.tsx's blockedChain() does the walk and is cycle-guarded.
+   *
+   * This replaced a single `blockedByTask?: TaskView` whose loop could only ever render the
+   * immediate blocker, so the design's A->B->C case was unbuildable rather than merely unbuilt.
+   */
+  blockedChain?: TaskView[]; onClose: () => void;
 }) {
-  // Full chain, not just the immediate blocker.
-  const chain: TaskView[] = [];
-  let cursor = blockedByTask;
-  const guard = new Set<string>();
-  while (cursor && !guard.has(cursor.task_id)) { guard.add(cursor.task_id); chain.push(cursor); break; }
+  const chain = blockedChain ?? [];
 
   return (
     <aside className="panel">

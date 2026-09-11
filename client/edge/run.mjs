@@ -54,7 +54,7 @@ const cssChecks = [
   ['.card .title{', 'wraps rather than truncating', (r) => r.includes('overflow-wrap:break-word') && !r.includes('nowrap') && !r.includes('text-overflow')],
 ];
 let cssFailed = 0;
-console.log('\ntokens.css (frozen) -- rules server-rendering cannot check:');
+console.log('\ntokens.css -- rules server-rendering cannot check:');
 for (const [sel, label, ok] of cssChecks) {
   const r = rule(sel);
   const pass = !!r && ok(r);

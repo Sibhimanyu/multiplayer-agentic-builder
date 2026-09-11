@@ -69,7 +69,8 @@ function Notice({ status }: { status: StoreStatus }) {
  * Cycle-guarded: a chain that loops is data corruption, and the right response is to stop and
  * render what was reached, not to hang the board.
  *
- * NOTE: this result cannot currently reach the UI. See the comment at the DetailPanel call.
+ * Lives here rather than in DetailPanel because the walk needs `taskById`, and components take
+ * data in via props and look nothing up themselves.
  */
 export function blockedChain(task: TaskView, byId: Map<string, TaskView>): TaskView[] {
   const chain: TaskView[] = [];
@@ -149,10 +150,7 @@ export function BoardView({
             task={sel}
             agent={sel.claimed_by ? agentById.get(sel.claimed_by) : undefined}
             contract={sel.kind === 'backend' ? latestContract : undefined}
-            // Only the IMMEDIATE blocker can be passed: DetailPanel's prop is a single TaskView
-            // and its loop breaks after one entry. blockedChain() above computes the full chain
-            // the design requires, and there is no prop to hand it to. See the report.
-            blockedByTask={sel.blocked_by ? taskById.get(sel.blocked_by) : undefined}
+            blockedChain={blockedChain(sel, taskById)}
             onClose={() => onSelect(null)}
           />
         )}

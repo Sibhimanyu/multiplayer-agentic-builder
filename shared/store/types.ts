@@ -135,6 +135,23 @@ export const LIMITS = { events: 300, presence: 100, locks: 200 } as const;
 /** Default staleness timeout for AgentPresence.stale, in ms. */
 export const STALE_AFTER_MS = 90_000;
 
+/**
+ * How often an agent emits a heartbeat, in ms. Order 0041 ruling 3.
+ *
+ * 30 s because STALE_AFTER_MS is 90 s, so this beat tolerates exactly TWO missed heartbeats
+ * before an agent reads as stale. One missed beat marking an agent stale would make the board
+ * flicker on any transient; three would be slower than the window justifies.
+ *
+ * This constant exists because its absence made a number unmeasurable. Presence cost was
+ * reported as both 48% and 144% of the daily write allowance -- both arithmetically correct, at
+ * intervals nobody had ever chosen, presented as measurements of a running system. A derived
+ * figure names every input it was derived from, and this is one of them.
+ *
+ * On RTDB a 30 s beat costs 1.4% of the bandwidth allowance at ten agents, so the interval is no
+ * longer constrained by price and can be chosen on behaviour. See firebase/presence-cost.mjs.
+ */
+export const HEARTBEAT_INTERVAL_MS = 30_000;
+
 /** A stale claim past this is released by the reaper. */
 export const CLAIM_TIMEOUT_MS = 15 * 60_000;
 

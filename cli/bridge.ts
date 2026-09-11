@@ -30,8 +30,12 @@ import process from 'node:process';
 import { LAYOUT, appendInbox, readState, writeState } from './agentic.ts';
 import { readPending, writeCursor, type OutboxRecord } from './outbox.ts';
 import type { Logger } from '../shared/log.ts';
+import { StoreAuthError } from '../shared/store/errors.ts';
 import {
+  HEARTBEAT_INTERVAL_MS,
   LAYER_OF,
+  type AgentId,
+  type AgentStatus,
   type CoordinationStore,
   type EventKind,
   type Snapshot,
@@ -209,10 +213,82 @@ export function startInboxFeed(opts: BridgeOptions): () => void {
   });
 }
 
+/**
+ * Emit a heartbeat every HEARTBEAT_INTERVAL_MS, for as long as the bridge is running.
+ *
+ * This is the thing that makes the interval real. HEARTBEAT_INTERVAL_MS existed nowhere before
+ * order 0041, nothing emitted on a schedule, and presence cost was consequently reported as two
+ * different percentages of a quota -- arithmetic over an input no code had ever chosen. A
+ * constant nothing reads is how that happens, so the constant and its emitter land together.
+ *
+ * Three things it deliberately does:
+ *
+ *   Beats IMMEDIATELY, then on the interval. Waiting a full period first would leave a freshly
+ *   started agent invisible on the board for 30 s, which looks exactly like a dead one.
+ *
+ *   Uses a REAL timer. Rule 2: never sleep on an injected clock in a transport path. The clock
+ *   is for deriving staleness and for tests; a heartbeat that slept on a FakeClock nobody
+ *   advanced would simply never beat.
+ *
+ *   STOPS on StoreAuthError. A revoked agent that keeps beating is writing presence it is not
+ *   entitled to and burning a read per beat doing it. Every other error is transient and is
+ *   logged and retried on the next tick -- one failed beat is not a reason to go silent.
+ */
+export function startHeartbeat(
+  opts: BridgeOptions & { agent_id: AgentId; status?: AgentStatus },
+): () => void {
+  const status = opts.status ?? 'connected';
+  let stopped = false;
+  let timer: ReturnType<typeof setInterval> | null = null;
+
+  const beat = async () => {
+    if (stopped) return;
+    try {
+      await opts.store.heartbeat(opts.project_id, opts.agent_id, status, null, null);
+      opts.log.info('bridge.heartbeat', 'heartbeat emitted', {
+        project_id: opts.project_id, agent_id: opts.agent_id, interval_ms: HEARTBEAT_INTERVAL_MS,
+      });
+    } catch (err) {
+      if (err instanceof StoreAuthError) {
+        opts.log.warn('bridge.heartbeat_revoked', 'token revoked; stopping heartbeats', {
+          agent_id: opts.agent_id, error: String(err),
+        });
+        stop();
+        return;
+      }
+      opts.log.warn('bridge.heartbeat_failed', 'heartbeat failed; retrying next tick', {
+        agent_id: opts.agent_id, error: String(err),
+      });
+    }
+  };
+
+  const stop = () => {
+    stopped = true;
+    if (timer) clearInterval(timer);
+    timer = null;
+  };
+
+  void beat();
+  timer = setInterval(() => void beat(), HEARTBEAT_INTERVAL_MS);
+  return stop;
+}
+
 /** Run the bridge until interrupted. */
 export async function runBridge(opts: BridgeOptions): Promise<void> {
   const interval = opts.drain_interval_ms ?? 1_000;
   const stopInbox = startInboxFeed(opts);
+
+  // Presence needs an identity. An agent that has not connected yet has none, and inventing one
+  // would put a row on the board for an agent that does not exist.
+  const state = await readState(opts.root, opts.log);
+  const stopHeartbeat = state.agent_id
+    ? startHeartbeat({ ...opts, agent_id: state.agent_id })
+    : (() => {
+        opts.log.warn('bridge.no_agent_id', 'no agent_id in state.json; not emitting presence', {
+          root: opts.root,
+        });
+        return () => {};
+      })();
   let running = true;
   const stop = () => {
     running = false;
@@ -231,6 +307,7 @@ export async function runBridge(opts: BridgeOptions): Promise<void> {
     // Rule 2: a REAL timer. Never an injected clock on a transport path.
     await new Promise((r) => setTimeout(r, interval));
   }
+  stopHeartbeat();
   stopInbox();
 }
 
