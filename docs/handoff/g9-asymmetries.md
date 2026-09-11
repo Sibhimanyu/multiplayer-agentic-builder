@@ -144,6 +144,54 @@ with one `runTransaction`.
 When the final comparison is written, do not flatten "needed a workaround" and "cannot be made
 correct" into the same column.
 
+## Entry 55 — RESOLVED: neither presence figure was ever a measurement
+
+48% and 144% are **both arithmetically correct**, at different heartbeat intervals — 120 s gives
+36–48%, 30 s gives 144%. But the real finding is underneath that:
+
+**There is no heartbeat interval constant anywhere in the codebase, and nothing emits heartbeats on
+a schedule yet.** `STALE_AFTER_MS = 90_000` is the only timing constant that exists. Both figures
+were arithmetic over an input **nobody had ever decided**, presented as measurements of a running
+system.
+
+This is the missing-parameter error, third instance and the cleanest one: entry 25 was a real number
+whose *host* was never stated; entry 50 was a real number whose *interval* was never stated. In both
+cases the arithmetic was sound and the subject was undefined.
+
+**Rule: a derived figure names every input it was derived from.** A percentage with an unstated
+denominator is not a weaker measurement — it is not a measurement.
+
+Corrected framing for the Firestore row: **72–144% at 10 agents, over the free tier below ~43 s.**
+A range, because the input is a choice rather than a fact. Fixed by order 0041 adding
+`HEARTBEAT_INTERVAL_MS` beside `STALE_AFTER_MS`.
+
+## Entry 56 — RTDB moves presence from 144% to 1.4%, and the meter is a different shape
+
+Measured payload per presence record: **171 B**. Ten agents, 30 s beat, one dashboard:
+**138.4 MiB/month = 1.4% of the 10 GB/month allowance** — the identical workload that costs **144%**
+of Firestore's daily write cap.
+
+**RTDB's meter is bytes downloaded, so cost scales with writes × listeners × payload, not with
+writes.** Fan-out multiplies. That makes the win real but conditional: it is a bandwidth product, and
+adding dashboards multiplies the bill in a way adding Firestore listeners does not.
+
+Stated caveat, unprompted: these totals are **arithmetic over a measured payload.** Firebase bills
+RTDB bandwidth inclusive of protocol overhead, which is not in the figure and could not be measured —
+the RTDB Management API is disabled and the service account is denied `serviceusage.services.enable`.
+It would take **73×** the computed volume to exhaust the allowance, so the conclusion survives a
+large multiple. That is how a caveat should be sized: not "this might be wrong" but "here is how
+wrong it can be before it matters."
+
+### The design detail that prevents a future regression
+
+The staleness derivation now lives in **one place shared by both backends**, explicitly so the RTDB
+path cannot later be "improved" to a server timestamp and break A9 with no obvious cause. RTDB never
+supplies `stale` at all.
+
+And a subtle correctness catch: **absent `connected` means "no opinion", not offline** — otherwise
+every Firestore-backed agent would render offline. `onDisconnect` arms once per agent per process
+rather than per beat, because a round trip per beat is the one thing not to do on a bandwidth meter.
+
 ## Entry 52 — the presence fix could not be a deletion, because a frozen test says so
 
 `heartbeat` must throw `StoreAuthError` for a revoked agent and must not retry it — conformance

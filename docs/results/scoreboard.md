@@ -59,7 +59,7 @@ volunteered the same split before being asked.
 |---|---|---|---|
 | claim write cost | 1 Stratus Upload *(2,000/mo free)* | 1 transaction: reads + writes | **1 git push, ZERO metered requests** |
 | presence write cost | **0 UPDATEs** *(Cache TTL is the signal)* | 1 read + 1 write **per beat** | **0 durable rows, 0 metered** *(timestamp in the ref name)* |
-| presence at 10 agents | 0% | **UNKNOWN — under reconciliation, entry 50.** Reads drop 58%→19%; **writes unchanged and over the free tier** | 0% |
+| presence at 10 agents | 0% | **Firestore 72–144%** (interval-dependent, over free tier below ~43 s) → **RTDB 1.4%** of a bandwidth allowance — entries 55, 56 | 0% |
 | auth overhead per request | **2 SELECTs**, every call | none measured | none |
 
 `git push` and `git fetch` appear in **none** of the fifteen rate-limit resources GitHub exposes.
