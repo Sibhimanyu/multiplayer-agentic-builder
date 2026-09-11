@@ -47,6 +47,7 @@ import type {
 } from 'firebase-admin/firestore';
 
 import { findGlobConflicts, globsIntersect, normalizeGlob } from '../shared/globs.ts';
+import { toPresence as derivePresence, type PresenceBackend } from './presence.ts';
 import { applyEvent, emptyProjection, toSnapshot, type FoldOutcome, type Projection } from './fold.ts';
 import { StoreAuthError, StoreBusyError, StoreError, StoreOfflineError } from '../shared/store/errors.ts';
 import { sanitizeBody, sanitizeText, VARCHAR_MAX } from '../shared/sanitize.ts';
@@ -92,6 +93,15 @@ export interface FirestoreStoreOptions {
    * Default 6. Set to 1 to see raw contention, which is what the contention test does.
    */
   tx_attempts?: number;
+  /**
+   * Where presence is stored. Defaults to Firestore (the `agents` collection).
+   *
+   * Order 0040 moves presence to RTDB. `heartbeat` and `listPresence` keep their exact
+   * CoordinationStore signatures -- this is the only thing that changes, which is what makes it
+   * a port swap rather than a rewrite. `stale` is derived in toPresence() either way; see
+   * presence.ts for why it must never come from the backend.
+   */
+  presence?: PresenceBackend;
 }
 
 const HUMAN_READABLE_LIMIT = 1_500;
@@ -464,6 +474,8 @@ export class FirestoreStore implements CoordinationStore {
    * policing. Read by heartbeat only -- see assertNotRevokedCached().
    */
   private readonly revocation = new Map<string, { at: number }>();
+  /** Undefined means presence lives in the Firestore `agents` collection, as it always has. */
+  private readonly presence?: PresenceBackend;
 
   constructor(opts: FirestoreStoreOptions) {
     this.db = opts.db;
@@ -472,6 +484,7 @@ export class FirestoreStore implements CoordinationStore {
     this.debounce_ms = opts.debounce_ms ?? 40;
     this.resubscribe_after_offline_ms = opts.resubscribe_after_offline_ms ?? 25 * 60_000;
     this.tx_attempts = opts.tx_attempts ?? 6;
+    this.presence = opts.presence;
   }
 
   // ---- paths -------------------------------------------------------------------------
@@ -1044,6 +1057,13 @@ export class FirestoreStore implements CoordinationStore {
     // the board renders as `revoked`. It is bounded by a constant, not by a retry or a timeout.
     await this.assertNotRevokedCached(pid, agent_id);
     await guard('heartbeat', async () => {
+      // The port, unchanged; only the backing store differs. Revocation stays on Firestore
+      // either way -- it is authority, the reaper reads it there, and splitting it across two
+      // products would give two answers to one question.
+      if (this.presence) {
+        await this.presence.write(pid, agent_id, status, current_task, branch);
+        return;
+      }
       await this.agentsRef(pid).doc(agent_id).set(
         {
           agent_id,
@@ -1059,6 +1079,12 @@ export class FirestoreStore implements CoordinationStore {
 
   async listPresence(pid: ProjectId): Promise<AgentPresence[]> {
     return guard('listPresence', async () => {
+      if (this.presence) {
+        // derivePresence, not this.toPresence: one derivation for both backends, so `stale`
+        // cannot drift apart between them. A9 depends on it staying clock-derived.
+        const rows = (await this.presence.list(pid)).map((r) => derivePresence(r, this.clock));
+        return capList(rows, LIMITS.presence, { list: 'presence', requested: rows.length, project_id: pid }, this.log);
+      }
       const snap = await this.agentsRef(pid).limit(LIMITS.presence + 1).get();
       const rows = snap.docs.map((d) => this.toPresence(d.data() as StoredAgent));
       return capList(

@@ -1,3 +1,9 @@
+# Owed items
+
+> **Order 0040 update.** Item 1's open number is now **resolved** — see
+> *"Resolving 48% vs 144%"* at the end. Run `node firebase/presence-cost.mjs` to reproduce every
+> figure below.
+
 # Two items owed from order 0038
 
 Both were left open when the comparison closed. Neither is a new measurement — the measuring is
@@ -128,6 +134,69 @@ confound's magnitude is exactly what is unknown.
 **Status: withdrawn as a quotable figure, retained as a run record.** Revalidating it means
 re-running G2's contended arm under the probe's conditions. That is a measurement, the measuring
 is closed, and nothing in the vertical slice depends on the number.
+
+---
+
+## Resolving 48% vs 144% — order 0040
+
+Entry 50 recorded two presence figures that cannot both be right: **48%** of the daily write
+allowance, and **28,800 writes/day**, which against 20,000/day is **144%**. The scoreboard row was
+marked UNKNOWN.
+
+**They are both arithmetically correct. They assume different heartbeat intervals.**
+
+| interval | writes/day/agent | at 10 agents | % of 20,000/day |
+| --- | --- | --- | --- |
+| 30 s | 2,880 | 28,800 | **144%** |
+| 45 s | 1,920 | 19,200 | 96% |
+| 60 s | 1,440 | 14,400 | 72% |
+| 120 s | 720 | 7,200 | 36% → **48%** once reaper sweeps and work writes are added |
+
+**The real reason the row is UNKNOWN is that the input was never decided.** There is no heartbeat
+interval constant anywhere in `shared/`, `cli/` or `firebase/`, and nothing in this build emits
+heartbeats on a schedule yet — that is F-series work. Neither figure was ever a measurement; both
+are arithmetic over the same measured per-op costs with a different assumption plugged in.
+
+And the interval is not free to choose. `STALE_AFTER_MS` is 90 s, so an agent must beat several
+times inside that window or it flickers stale between beats. At the usual timeout/3 that is 30 s —
+the expensive end. Even 60 s, the loosest interval that still gives two beats per window, is 72%.
+
+**So the Firestore row should not be a single number.** It should read: *presence alone consumes
+72–144% of the daily write allowance at 10 agents depending on interval, and is over the free tier
+at any interval below ~43 s.* A range with a floor near the cap, not one figure.
+
+## The RTDB figure, with units
+
+RTDB does not meter operations at all. It meters **bytes downloaded** (database → client), storage,
+and simultaneous connections. A heartbeat *write* is therefore not itself billed; what is billed is
+every listener receiving it, so cost scales with **writes × listeners × payload**, not with writes.
+
+Presence record as `RtdbPresence.write()` sends it: **171 B** *(measured — serialised and counted by
+`firebase/presence-cost.mjs`)*.
+
+| agents | dashboards | updates/day | download/month | % of 10 GB/mo |
+| --- | --- | --- | --- | --- |
+| 2 | 1 | 5,760 | 27.7 MiB | 0.3% |
+| 10 | 1 | 28,800 | 138.4 MiB | **1.4%** |
+| 10 | 5 | 28,800 | 692.1 MiB | 6.8% |
+
+**Headline:** 10 agents on a 30 s beat with one dashboard open is **138.4 MiB/month downloaded, 1.4%
+of the 10 GB/month free allowance.** The identical workload is 144% of Firestore's daily write cap —
+i.e. over it. Storage is ~1.6 KiB for 10 agents (a fixed-size node per agent, not a log, so it does
+not grow with time) against 1 GB; connections are 1 per agent + 1 per dashboard against a cap of 100.
+
+**Caveat, stated not buried.** These totals are *arithmetic* over a *measured* payload. Firebase
+bills RTDB bandwidth inclusive of protocol and encryption overhead, which is not in these numbers
+and which I could not measure. Expect the real per-update figure to be meaningfully higher. The
+conclusion survives a large multiple — it would take **73×** the computed volume to exhaust the
+allowance.
+
+**Not measured, and why.** `firebase/rtdbconfig.mjs` reports the Firebase Realtime Database
+Management API is disabled on this project, and the service account is denied
+`serviceusage.services.enable`, so I could neither list nor create an instance. Enabling it is a
+console action. `presence-cost.mjs --live` is written to measure the real thing once it exists.
+
+---
 
 What is *not* in doubt, because it was measured cleanly and is what the route was chosen for:
 `appendEvent` p50 **186 ms** and publish→visible p50 **191 ms**, n=100, real Firestore in

@@ -4,7 +4,7 @@
 //   Firebase  -> import { createFirestoreStore } from './store/firebase';
 
 import { useEffect, useMemo, useState } from 'react';
-import { COLUMNS, type Snapshot } from './store/types';
+import { COLUMNS, type Freshness, type Snapshot, type TaskView } from './store/types';
 import { createFirestoreStore, type StoreStatus } from './store/firebase';
 import { DetailPanel, EmptyColumn, TaskCard, TopNav } from './components';
 
@@ -63,18 +63,47 @@ function Notice({ status }: { status: StoreStatus }) {
   );
 }
 
-export default function App() {
-  const store = useMemo(() => createFirestoreStore(), []);
-  const [snap, setSnap] = useState<Snapshot | null>(null);
-  const [status, setStatus] = useState<StoreStatus>({ state: 'signing-in' });
-  const [selected, setSelected] = useState<string | null>('task_items_crud');
+/**
+ * Walk `blocked_by` to its end, so the panel can show A -> B -> C rather than just A -> B.
+ *
+ * Cycle-guarded: a chain that loops is data corruption, and the right response is to stop and
+ * render what was reached, not to hang the board.
+ *
+ * NOTE: this result cannot currently reach the UI. See the comment at the DetailPanel call.
+ */
+export function blockedChain(task: TaskView, byId: Map<string, TaskView>): TaskView[] {
+  const chain: TaskView[] = [];
+  const seen = new Set<string>([task.task_id]);
+  let next = task.blocked_by;
+  while (next && !seen.has(next)) {
+    seen.add(next);
+    const t = byId.get(next);
+    if (!t) break;
+    chain.push(t);
+    next = t.blocked_by;
+  }
+  return chain;
+}
 
-  useEffect(() => store.subscribe(PROJECT_ID, 0, setSnap), [store]);
-  useEffect(() => store.onStatus(setStatus), [store]);
-
-  // Stable placeholder height: no layout shift when the first snapshot lands.
-  if (!snap) return <Notice status={status} />;
-
+/**
+ * The whole board, as a pure function of a snapshot.
+ *
+ * Split out from App so the nine edge cases in docs/designs/dashboard.md can be rendered and
+ * ASSERTED (client/edge/cases.tsx) rather than eyeballed. App keeps the single subscription;
+ * everything below here receives props, which is what the design's component contract requires
+ * and what keeps both builds' trees identical.
+ */
+export function BoardView({
+  snap,
+  freshness,
+  selected,
+  onSelect,
+}: {
+  snap: Snapshot;
+  freshness: Freshness;
+  selected: string | null;
+  onSelect: (id: string | null) => void;
+}) {
   const agentById = new Map(snap.agents.map((a) => [a.agent_id, a]));
   const taskById = new Map(snap.tasks.map((t) => [t.task_id, t]));
   const latestContract = snap.contracts.at(-1);
@@ -82,7 +111,7 @@ export default function App() {
 
   return (
     <>
-      <TopNav snap={snap} freshness={store.freshness} />
+      <TopNav snap={snap} freshness={freshness} />
       <div className="stage">
         <div className="board">
           {COLUMNS.map(({ status, label }) => {
@@ -97,13 +126,16 @@ export default function App() {
                     ? <EmptyColumn label={label} />
                     : tasks.map((t) => (
                         <TaskCard
+                          // task_id, never the array index: a stable key is what stops a
+                          // re-render with identical data from reflowing the column.
                           key={t.task_id} task={t}
                           agent={t.claimed_by ? agentById.get(t.claimed_by) : undefined}
                           selected={t.task_id === selected}
-                          onSelect={() => setSelected(t.task_id)}
-                          contractVersion={
-                            t.task_id === 'task_schema' ? latestContract?.version : undefined
-                          }
+                          onSelect={() => onSelect(t.task_id)}
+                          // Same rule the panel uses, rather than the hardcoded task id this
+                          // carried from the mock. There is no task->contract link in the data
+                          // model, so card and panel at least agree on one rule instead of two.
+                          contractVersion={t.kind === 'backend' ? latestContract?.version : undefined}
                         />
                       ))}
                 </div>
@@ -117,11 +149,32 @@ export default function App() {
             task={sel}
             agent={sel.claimed_by ? agentById.get(sel.claimed_by) : undefined}
             contract={sel.kind === 'backend' ? latestContract : undefined}
+            // Only the IMMEDIATE blocker can be passed: DetailPanel's prop is a single TaskView
+            // and its loop breaks after one entry. blockedChain() above computes the full chain
+            // the design requires, and there is no prop to hand it to. See the report.
             blockedByTask={sel.blocked_by ? taskById.get(sel.blocked_by) : undefined}
-            onClose={() => setSelected(null)}
+            onClose={() => onSelect(null)}
           />
         )}
       </div>
     </>
+  );
+}
+
+export default function App() {
+  const store = useMemo(() => createFirestoreStore(), []);
+  const [snap, setSnap] = useState<Snapshot | null>(null);
+  const [status, setStatus] = useState<StoreStatus>({ state: 'signing-in' });
+  // No default selection: a hardcoded task id opened a panel for a task that need not exist.
+  const [selected, setSelected] = useState<string | null>(null);
+
+  useEffect(() => store.subscribe(PROJECT_ID, 0, setSnap), [store]);
+  useEffect(() => store.onStatus(setStatus), [store]);
+
+  // Stable placeholder height: no layout shift when the first snapshot lands.
+  if (!snap) return <Notice status={status} />;
+
+  return (
+    <BoardView snap={snap} freshness={store.freshness} selected={selected} onSelect={setSelected} />
   );
 }
