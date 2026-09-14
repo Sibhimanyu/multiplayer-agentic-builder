@@ -1,0 +1,30 @@
+{
+  "name": "drydock-cli",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Drydock — multiplayer agentic coordination for coding agents. Claims, file-scope locks, presence and a git blackboard, on infrastructure you already have.",
+  "bin": {
+    "drydock": "dist/drydock.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "prepack": "node build.mjs"
+  },
+  "keywords": [
+    "agents",
+    "coordination",
+    "firestore",
+    "cli"
+  ],
+  "license": "MIT"
+}

@@ -17,6 +17,11 @@ dist/
 *.tsbuildinfo
 
 # agent credential, written by `builder connect`. NEVER commit this.
+# npm pack output; packtest.mjs removes its own, this catches a manual run
+*.tgz
+
+.drydock-token
+# the old name, kept ignored so a stale credential from before the rename cannot be committed
 .builder-token
 
 # compiled Cloud Functions deploy artifact
