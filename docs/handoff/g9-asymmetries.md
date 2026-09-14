@@ -164,6 +164,82 @@ Second gotcha, recorded so it is not rediscovered: **`firebase emulators:exec` r
 the CLI's own pkg-bundled Node**, which treats `--test` as a filename. Start the emulator standalone
 and point `FIRESTORE_EMULATOR_HOST` at it instead.
 
+## Entry 68 — the board is live, and presence came in under its estimate
+
+**Drydock renders against real Firestore.** Six columns, real repo, real tasks, and the **`live`**
+pill with a steady dot — the push subscriber, not a poll counter. First time in the project the
+dashboard has been seen against live data.
+
+Auth verified on **two independent surfaces** (web SDK `signInAnonymously` → uid; admin config
+endpoint reports ENABLED), plus a third by the coordinator against Identity Toolkit directly. A
+console claim and a working call are different facts.
+
+**Presence, observed — `us-central1`, cross-region, never in a row with a Firestore number:**
+
+| | |
+|---|---|
+| `heartbeat` write, n=60 | **p50 292 ms**, p95 356, max 1,525 |
+| presence record on the wire | **164 B observed** (vs 171 B assumed in entry 56) |
+| 10 agents · 1 dashboard · 30 s beat | **135.1 MiB/month = 1.3%** of the 10 GB allowance |
+
+**Entry 56's estimate of 1.4% holds; observed is 1.3%** — conservative, which is the right direction
+to err. Still a **floor**: the payload is now observed but the multiplier is arithmetic and websocket
+framing is not in it.
+
+Both presence signals exercised for real: `goOffline()` dropped the socket, **the server** ran
+`onDisconnect` and wrote `connected:false`, and `stale` stayed false throughout. Two signals, two
+meanings, as designed.
+
+### Tests that close their own vacuous pass
+
+- **The denial path is walked by something that only knows what a user sees.** The page signs in, the
+  rules refuse, the UI prints the uid and the `--admit` command, and **the script reads the uid off
+  the screen**, admits it, reloads. That exercises the order-0039 affordance the way a human would,
+  not by reaching behind it.
+- **F1's evidence is a screenshot, but what is asserted is the state underneath it** — a screenshot
+  shows a screen rendered, not that the record behind it is right.
+- **F2 invites and *then* assigns**, because one combined call would never exercise `setRole`.
+- **F3 asserts three *distinct* directories**, since three agents sharing one `.agentic/` would
+  satisfy every other assertion in that test.
+
+### The layout defect 60/60 could not see
+
+`align-content: start` on `.p-body` and `.sect`. Measured in a browser: the 10.5 px label went
+**82 px → 16 px**. The edge harness asserts 60/60 and could never have caught it, because
+**server-rendering asserts presence and never computes layout.**
+
+## Entry 69 — I left a server running and caused the collision I then recorded as their error
+
+The build's `vite preview` exited with *"Port 4173 is already in use"* — **because my mock-build
+preview server was still on it** — and its `until curl` went green because something answered. It
+nearly screenshotted my app and reported it as the live board.
+
+It caught this itself and called it the third instance of a true signal about the wrong subject, and
+*"entry 66 is the rule I wrote down and then broke."* Fair. But **the port was occupied by me**: I
+started that server to capture the mock board and never stopped it. Now stopped.
+
+**Two rules, not one.** The readiness probe must prove identity (entry 66, theirs). And: **a
+coordinator who starts a long-lived process owns stopping it**, because a stray listener does not
+announce itself — it just makes someone else's check lie.
+
+## Entry 70 — the empty-state copy still says "webhook", and order 0043 removed the webhook
+
+`components.tsx:132–133`:
+
+```
+'PR open':  'Opened PRs appear here via the GitHub webhook.'
+Merged:     'Merged work lands here from the webhook.'
+```
+
+**There is no webhook.** Order 0043 moved PR/CI state to the bridge's GitHub **poll**, because Spark
+has no Cloud Functions. That copy is visible in the live screenshot, on screen, telling a user about
+a mechanism this product does not have.
+
+The order required the *checklist* to name the poll, and the checklist was updated. **The user-facing
+string was not** — so the mechanism-naming rule was applied to the test and missed on the product.
+Worth recording precisely because it is the same class of error the project has been strictest about,
+surviving in the one place a user would actually read it.
+
 ## Entry 65 — the emulator does not enforce indexes
 
 **The `ProjectDirectory` conformance suite passed while `drydock ls` failed on its first production
