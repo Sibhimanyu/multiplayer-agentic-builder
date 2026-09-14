@@ -100,11 +100,28 @@ Run identically on both. This is the headline result.
 | F5 | Backend and frontend claim concurrently; no double-claim | ledger |
 | F6 | Backend publishes `items-api v2` (breaking: qty string→integer) | `git log` |
 | F7 | Frontend receives the pointer, reads the contract from disk, reports blocked | `inbox.jsonl` + ledger |
-| F8 | Backend pushes a branch, opens a PR; webhook updates the board | screenshot |
+| F8 | Backend pushes a branch, opens a PR; **the bridge's GitHub poll** updates the board | screenshot |
 | F9 | CI fails; board shows the badge without a refresh | screenshot |
 | F10 | Owner merges on GitHub; board reaches `merged` | screenshot |
 | F11 | Kill the frontend agent's laptop; reaper releases the claim within 15 min | ledger |
 | F12 | Another agent claims the released task successfully | ledger |
+
+**Mechanism note (order 0043), because the assertion did not change but the mechanism did.**
+F8–F10 originally read "webhook updates the board", which assumed `POST /api/github/webhook` from
+`coordination-api.md:329` and a server to receive it. The Firebase project is on the **Spark** plan,
+which has **no Cloud Functions at all** — there is no server-side code on this route.
+
+So GitHub state is **polled by the local CLI bridge**, not pushed to a webhook, and the reaper runs
+**inside every bridge process behind a lease** rather than as a scheduled function. The observable
+outcome in F8–F10 is unchanged: the board shows the badge without a refresh, because the board's
+liveness comes from the Firestore `onSnapshot` subscriber either way — the poll only decides how
+fast GitHub state *reaches* Firestore.
+
+Recorded here rather than left implicit: an unchanged assertion over a changed mechanism is the
+substitution that cost route C1 its architecture. The trade is deliberate — a self-hosted webhook
+receiver would require a publicly reachable URL from every user of an open-source tool, and polling
+keeps the product fully local-first. Consequence, stated: F11's 15-minute bound is 15 minutes of
+**bridge uptime**, not of elapsed wall-clock time. See the header of `firebase/reaper.ts`.
 
 ## G. Measurements — the actual comparison
 

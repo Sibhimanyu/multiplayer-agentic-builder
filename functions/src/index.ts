@@ -20,7 +20,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { createFirestoreStore } from '../../firebase/store.ts';
 import { handleApi, statusFor } from './api.ts';
 import { mapDelivery, repoKey, verifySignature } from './webhook.ts';
-import { reapAll } from './reaper.ts';
+import { reapAll } from '../../firebase/reaper.ts';
 import { consoleLogger } from '../../shared/log.ts';
 
 // Region pinned: an unpinned function defaults to us-central1 and a later change silently

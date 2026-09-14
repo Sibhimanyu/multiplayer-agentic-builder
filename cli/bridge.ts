@@ -56,7 +56,24 @@ export interface BridgeOptions {
   log: Logger;
   /** Poll interval for the outbox file. The STORE is push; only the local file is polled. */
   drain_interval_ms?: number;
+  /**
+   * The reaper. Absent means this bridge does not sweep.
+   *
+   * On Spark there are no Cloud Functions, so there is no scheduled reaper -- every bridge is a
+   * candidate. See startReaper for the lease that stops them stampeding.
+   */
+  reaper?: ReaperPort;
 }
+
+/**
+ * How often a lease-holding bridge sweeps for stale claims.
+ *
+ * 60 s against a CLAIM_TIMEOUT_MS of 15 min: a claim is detected within one minute of becoming
+ * eligible, so the 15-minute bound F11 asserts has ~1 minute of slack rather than being a race
+ * against its own interval. Sweeping faster buys nothing -- nothing becomes reapable in under
+ * 15 minutes -- and each sweep reads the claim and agent tables.
+ */
+export const REAPER_SWEEP_INTERVAL_MS = 60_000;
 
 /**
  * Publish one outbox record through the correct store operation.
@@ -273,6 +290,142 @@ export function startHeartbeat(
   return stop;
 }
 
+/**
+ * The reaper, injected. The bridge schedules and guards it; firebase/ supplies the sweep.
+ *
+ * Injected rather than imported because the sweep needs raw Firestore access and this file must
+ * not touch a backend SDK -- the same boundary the module graph already enforces.
+ */
+export interface ReaperPort {
+  /** One sweep. Returns what it actually released, never just "it didn't throw". */
+  sweep(): Promise<{ examined: number; released: { task_id: string; agent_id: string }[] }>;
+  /**
+   * Force-release a lease whose holder died, with SYSTEM attribution.
+   *
+   * Separate from releaseTask(owner) on purpose: releasing as the dead agent would append a
+   * task_unblocked event attributed to an agent that did nothing, and the ledger is the audit
+   * record. firebase/ implements this with reapClaim, which exists for exactly this reason.
+   */
+  breakLease(task_id: string, owner: string, reason: string): Promise<void>;
+}
+
+/**
+ * The task id the reaper lease is claimed against.
+ *
+ * It is a claim, not a task: claimTask writes only to claims/{id} and never to tasks/, so this
+ * never appears as a card on the board. Verified by reading claimTask, not assumed.
+ */
+export const REAPER_LEASE_ID = '__reaper_lease';
+
+/**
+ * Run the reaper on an interval, with exactly one bridge sweeping at a time.
+ *
+ * THE STAMPEDE GUARD IS claimTask ITSELF. Order 0043 ruled that the lease reuse the primitive
+ * already verified contended (A2, 20 racers x 50 rounds, and 256 concurrent writers absorbed on
+ * production) rather than invent a second one. Ten bridges starting together produce one winner
+ * and nine clean losses, because that is what claimTask is.
+ *
+ * The lease is HELD for the process lifetime rather than taken per sweep. Re-claiming a task you
+ * already own returns ok and appends NOTHING (firebase/store.ts claimTask), so holding costs one
+ * ledger event per bridge lifetime. Claim-and-release per sweep would have written two events a
+ * minute, forever, into the audit log.
+ *
+ * BREAKING A DEAD HOLDER'S LEASE. If the winner dies still holding it, every other bridge would
+ * defer to a corpse -- and the reaper is the very thing that fixes dead agents, so it cannot fix
+ * itself. Liveness is decided by the holder's PRESENCE, not by lease age: a long-held lease by a
+ * live bridge is correct and must not be broken, while a short-held lease by a dead one must be.
+ * `stale` is already derived from last_heartbeat_at, and the bridge already heartbeats, so the
+ * signal exists and is reused rather than duplicated.
+ */
+export function startReaper(
+  opts: BridgeOptions & {
+    agent_id: AgentId;
+    reaper: ReaperPort;
+    interval_ms?: number;
+    /**
+     * Which claim is the lease. Defaults to REAPER_LEASE_ID and should stay that way in
+     * production -- one lease per project is the whole point. Overridable so the guard can be
+     * NEGATIVE-controlled: give each bridge its own lease, nothing contends, and all of them
+     * must sweep. Without that control, "one of five swept" is equally what four broken bridges
+     * look like (entry 60).
+     */
+    lease_id?: string;
+  },
+): () => void {
+  const interval = opts.interval_ms ?? REAPER_SWEEP_INTERVAL_MS;
+  const LEASE = opts.lease_id ?? REAPER_LEASE_ID;
+  let stopped = false;
+  let holding = false;
+  let timer: ReturnType<typeof setInterval> | null = null;
+
+  const tryAcquire = async (): Promise<boolean> => {
+    const got = await opts.store.claimTask(opts.project_id, LEASE, opts.agent_id);
+    if (got.ok) return true;
+
+    // Lost. Is the holder alive? A live holder is the normal case and we simply stand down.
+    const presence = await opts.store.listPresence(opts.project_id);
+    const holder = presence.find((p) => p.agent_id === got.owner);
+    const dead = !holder || holder.stale;
+    if (!dead) return false;
+
+    opts.log.warn('bridge.reaper_lease_stale', 'reaper lease held by a dead bridge, breaking it', {
+      project_id: opts.project_id, owner: got.owner, claimed_at: got.claimed_at,
+      reason: holder ? 'owner presence is stale' : 'owner has no presence row',
+    });
+    await opts.reaper.breakLease(LEASE, got.owner, 'reaper lease holder is gone');
+    const retry = await opts.store.claimTask(opts.project_id, LEASE, opts.agent_id);
+    // One retry only. If another bridge won the race to take over, that is a correct outcome.
+    return retry.ok;
+  };
+
+  const tick = async () => {
+    if (stopped) return;
+    try {
+      if (!holding) holding = await tryAcquire();
+      if (!holding) return;
+
+      const result = await opts.reaper.sweep();
+      // Not "it didn't throw": report what was actually released, and say so per claim.
+      if (result.released.length > 0) {
+        for (const r of result.released) {
+          opts.log.info('bridge.reaped', 'stale claim released', {
+            project_id: opts.project_id, task_id: r.task_id, agent_id: r.agent_id,
+          });
+        }
+      } else {
+        opts.log.info('bridge.reap_clean', 'sweep found nothing to release', {
+          project_id: opts.project_id, examined: result.examined,
+        });
+      }
+    } catch (err) {
+      // A failed sweep must not kill the bridge, and must not silently drop the lease either:
+      // holding stays true so the next tick retries rather than handing over on one blip.
+      opts.log.warn('bridge.reap_failed', 'reaper sweep failed; retrying next interval', {
+        project_id: opts.project_id, error: String(err),
+      });
+    }
+  };
+
+  // Sweeps IMMEDIATELY. "Any starting bridge sweeps first" is what makes the local-first reaper
+  // sound: the first agent back finds a clean board rather than waiting out an interval.
+  void tick();
+  timer = setInterval(() => void tick(), interval);
+
+  return () => {
+    stopped = true;
+    if (timer) clearInterval(timer);
+    timer = null;
+    // Hand the lease back so the next bridge does not have to wait for presence to go stale.
+    // Best-effort: on a hard kill this does not run, which is exactly the case tryAcquire's
+    // dead-holder path exists to handle.
+    if (holding) {
+      void opts.store
+        .releaseTask(opts.project_id, LEASE, opts.agent_id)
+        .catch((err) => opts.log.warn('bridge.reaper_lease_release_failed', 'could not release the reaper lease', { error: String(err) }));
+    }
+  };
+}
+
 /** Run the bridge until interrupted. */
 export async function runBridge(opts: BridgeOptions): Promise<void> {
   const interval = opts.drain_interval_ms ?? 1_000;
@@ -289,6 +442,13 @@ export async function runBridge(opts: BridgeOptions): Promise<void> {
         });
         return () => {};
       })();
+
+  // The reaper needs an identity too -- the lease is claimed by an agent_id, and the dead-holder
+  // check reads that agent's presence. No identity, no lease, no sweep.
+  const stopReaper =
+    opts.reaper && state.agent_id
+      ? startReaper({ ...opts, agent_id: state.agent_id, reaper: opts.reaper })
+      : () => {};
   let running = true;
   const stop = () => {
     running = false;
@@ -307,6 +467,7 @@ export async function runBridge(opts: BridgeOptions): Promise<void> {
     // Rule 2: a REAL timer. Never an injected clock on a transport path.
     await new Promise((r) => setTimeout(r, interval));
   }
+  stopReaper();
   stopHeartbeat();
   stopInbox();
 }
