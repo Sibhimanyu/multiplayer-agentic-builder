@@ -17,8 +17,20 @@
 // after the concurrency stress tests, A2 failed at 106 s with `ABORTED: Transaction lock
 // timeout` — contention retries exhausted. Run alone it passes in 219 s and 215 s, twice,
 // consistently. The failure was accumulated emulator degradation from the stress tests that ran
-// earlier in the SAME emulator process, not a defect in the adapter and not test-file
-// parallelism (files are already serialised with --test-concurrency=1).
+// earlier in the SAME emulator process, not a defect in the adapter.
+//
+// ORDER 0042 RE-EXAMINED THAT CONCLUSION rather than inheriting it, because "A2 was the harness"
+// is a comfortable finding and the suite had never actually passed on the chosen route. It
+// holds, and now has numbers behind it instead of two clean runs:
+//
+//   - A2 alone, this emulator:        PASSES, 216 s and 248 s
+//   - A2 alone, PRODUCTION Firestore: PASSES, zero contention retries, 6/6 budget unused
+//   - four files in one emulator:     36/37, one failure, a DIFFERENT test each time
+//
+// One correction to the paragraph above: test-file parallelism IS a second route to the same
+// saturation. `--test-concurrency=1` is in the package scripts, but a bare `node --test` over
+// four files does not inherit it, which is exactly how order 0042's failing run was produced.
+// scripts/emul-suite.mjs now passes it unconditionally and refuses to co-run this file at all.
 //
 // Two reasons this matters beyond making the suite green:
 //
@@ -68,6 +80,31 @@ let db: Firestore;
 
 if (EMULATOR) {
 before(async () => {
+  // WHAT A GREEN A2 HERE DOES AND DOES NOT PROVE. Printed rather than left in a comment,
+  // because the failure mode this guards against is someone reading a red A2 as an adapter
+  // defect -- or, worse, learning to ignore it. Order 0042.
+  //
+  // Every figure below is measured (firebase/contention-probe.mjs), not estimated:
+  //
+  //   256 concurrent writes to ONE document
+  //     emulator    247/256 REJECTED, 1240 backoffs, worst attempt 5/6, 138.6 s
+  //     production  256/256 resolved,  333 backoffs, worst attempt 4/6,  37.6 s
+  //
+  //   production's own limit is between 256 and 512: at 512 it drops 243 and exhausts the
+  //   budget, with a DIFFERENT message -- "cross-transaction contention ... serializability"
+  //   rather than the emulator's "Transaction lock timeout". Same ABORTED code, different
+  //   mechanism: optimistic concurrency versus pessimistic locking with a lock timeout.
+  //
+  // So the emulator fails at roughly half the concurrency production does. A2 at its own
+  // specified load (20 racers x 50 rounds) passes on both when it has the emulator to itself,
+  // and takes ZERO retries on production.
+  console.log(
+    '\n[A2 calibration] This emulator saturates at ~1/2 production\'s concurrency and runs ~3.7x\n' +
+      '  slower. A2 is only diagnostic on an emulator it does NOT share; a red A2 in a shared\n' +
+      '  emulator is saturation, not an adapter defect. Production absorbs A2\'s load with all 6\n' +
+      '  retry attempts unused. Local green does NOT bound production; local red may be local.\n',
+  );
+
   const [host, port] = EMULATOR.split(':');
   // Route the SDK through a proxy we can sever, so A11 tests a genuinely dropped socket rather
   // than a mocked one. The admin SDK has no disableNetwork().
