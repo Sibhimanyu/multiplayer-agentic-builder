@@ -13,7 +13,7 @@ row, the cell says so rather than borrowing a neighbour's.
 | route | claim primitive | contended? | result |
 |---|---|---|---|
 | **Route G** | `push --force-with-lease` | 20 racers × 50 rounds | **holds** — 50/50, ref agreed with reply 50/50 |
-| **Firebase** | `runTransaction` | 5 racers × 200 tasks | **holds** — 40 won / 160 lost, one winner each |
+| **Firebase** | `runTransaction` | 5 × 200 production **/ 20 × 50 emulator** | **production holds** (40 won / 160 lost) — but **A2 FAILS on the emulator**, entry 58: `withContentionRetry` exhausts its budget. Unresolved. |
 | Catalyst | `is_unique` on INSERT | 5 × 200 *(never contended before)* | **FAILS — 84.5%**, 547 winners / 200 tasks |
 | Catalyst | Data Store CAS `UPDATE…WHERE` | 5 × 200 | **FAILS WORSE, SILENTLY** — 658 winners, durable state *perfect* |
 | Catalyst | **Stratus `overwrite:false`** | 5 × 200 | **holds** — 200/200, etag=MD5 confirmed the *right* winner |

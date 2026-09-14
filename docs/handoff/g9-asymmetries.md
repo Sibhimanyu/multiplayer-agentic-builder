@@ -144,6 +144,58 @@ with one `runTransaction`.
 When the final comparison is written, do not flatten "needed a workaround" and "cannot be made
 correct" into the same column.
 
+## Entry 57 — the JDK was never missing. It was shadowed on PATH.
+
+Three runs reported the conformance suite unrunnable because `firebase-tools` "no longer supports
+Java version before 21." **`openjdk 26.0.1` was already installed via brew the whole time.**
+`java -version` reported 1.8.0_503 because a 2014-era Oracle *applet-plugin* JRE at
+`/Library/Internet Plug-Ins/JavaAppletPlugin.plugin` sits earlier on PATH.
+
+```
+export JAVA_HOME="$(brew --prefix openjdk)/libexec/openjdk.jdk/Contents/Home"
+export PATH="$JAVA_HOME/bin:$PATH"
+```
+
+The emulator then starts first try. **The diagnosis was one level off the truth** — "dependency
+missing" rather than "dependency shadowed" — and it blocked the most important suite in the project
+for three runs. Nobody ran `brew list`.
+
+Second gotcha, recorded so it is not rediscovered: **`firebase emulators:exec` runs its script under
+the CLI's own pkg-bundled Node**, which treats `--test` as a filename. Start the emulator standalone
+and point `FIRESTORE_EMULATOR_HOST` at it instead.
+
+## Entry 58 — A2 FAILS on the Firebase adapter, and A2 is the gate
+
+The emulator suites ran for the first time. **36/37 pass. The failure is A2.**
+
+Two runs failed two *different* tests — "32 concurrent appends" and "A2 20 concurrent claimTask, 50
+consecutive rounds" — with the **identical** error:
+
+```
+StoreBusyError: 10 ABORTED: Transaction lock timeout.
+  at withContentionRetry (firebase/store.ts:361)
+```
+
+One bug, two symptoms: **`withContentionRetry` exhausts its budget under sustained contention and
+lets `StoreBusyError` escape**, which is precisely what both tests assert the adapter absorbs.
+
+This matters more than an ordinary failure for three reasons. **A2 is the non-negotiable gate** this
+project has used to qualify every route — route G passed it 20 racers × 50 rounds. **The chosen
+route has never passed it.** And an earlier commit concluded *"A2 was the harness, not the adapter"*
+after a foreign-emulator mix-up; that retraction is now itself in question, because with a correct
+emulator A2 still fails, with a structured error rather than a harness artifact.
+
+**Not yet established: whether production Firestore does this.** The emulator uses pessimistic
+locking with a lock timeout; production uses optimistic concurrency. *"Transaction lock timeout"* may
+be emulator-specific wording for an emulator-specific mechanism. **That is a hypothesis, and the
+discriminating experiment is to run A2 against production — not to argue about it.**
+
+What is *not* in doubt: the retry loop itself is well built. It detects contention by **structured
+code, never message text** (a defect order 0017 already caught once), and it backs off on **real
+time with an explicit comment** explaining that using the injected `FakeClock` would hang forever
+under load and present as a load-dependent hang rather than a failure. The budget is the suspect,
+not the design.
+
 ## Entry 55 — RESOLVED: neither presence figure was ever a measurement
 
 48% and 144% are **both arithmetically correct**, at different heartbeat intervals — 120 s gives
