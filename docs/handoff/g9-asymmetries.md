@@ -164,7 +164,76 @@ Second gotcha, recorded so it is not rediscovered: **`firebase emulators:exec` r
 the CLI's own pkg-bundled Node**, which treats `--test` as a filename. Start the emulator standalone
 and point `FIRESTORE_EMULATOR_HOST` at it instead.
 
-## Entry 58 — A2 FAILS on the Firebase adapter, and A2 is the gate
+## Entry 59 — RESOLVED: A2 passes. The failure was the coordinator's invocation.
+
+**Pre-registered branch 2 applies. A2 passes on production with the entire retry budget unused.**
+
+| | emulator | production |
+|---|---|---|
+| control | **pessimistic locking + lock timeout** | **optimistic concurrency** (version check) |
+| message | `Transaction lock timeout.` | `Aborted due to cross-transaction contention… to enforce serializability.` |
+
+Same structured `ABORTED` code, **different cause underneath** — and the error *text* is what proves
+the mechanisms differ. A2 at its own load (20 racers × 50 rounds):
+
+| run | result | budget used |
+|---|---|---|
+| emulator, alone | **PASS** 15/15 | 0 of 6 |
+| emulator, 4 files sharing one process | **FAIL** 36/37 | exhausted |
+| **production** | **PASS**, round p50 1,976 ms | **0 of 6** |
+
+**Forced contention** — N concurrent appends on the single counter document everything serialises on:
+
+| N | emulator | production |
+|---|---|---|
+| 256 | **247/256 rejected** (96% dropped), 1,240 backoffs | **256/256 resolved**, 333 backoffs |
+| 512 | — | 243/512 rejected |
+
+**Production breaks between 256 and 512 concurrent single-document writers — 12–25× this design's
+realistic ~20-agent ceiling.** The budget was never the defect, so `attempts` stays at 6 and the
+retry design is untouched.
+
+### My error, precisely
+
+`--test-concurrency=1` is set **in the package scripts**. A bare `node --test a b c d` does not
+inherit it. I ran exactly that, four suites shared one process, the emulator saturated, and
+**whichever test was mid-flight when it saturated is the one that failed** — which is why two runs
+blamed two different tests with one underlying cause.
+
+I read a red test as a product defect and escalated it to the gate. The invocation was mine and the
+protocol that prevents it already existed. **Entry 58's headline was wrong**; the suite now refuses
+to run `store.test.ts` alongside other files and passes `--test-concurrency=1` unconditionally.
+
+Also corrected: commit `310ca22` ruled out test-file parallelism because files "are already
+serialised." They are — *in the package scripts*. A direct `node --test` is not covered, and that is
+the route both failing runs took. The conclusion holds; its reasoning had a gap exactly where I fell
+in.
+
+## Entry 60 — a positive control is only worth what it is scaled to
+
+The first production contention run reported **0 backoffs** — which is precisely what a **broken
+counter** also reports.
+
+The positive control on the emulator *also* said zero. And still said zero at **64** writers. Only
+at **256** did it register 1,240 backoffs and prove the instrument worked — **and only then did the
+production zeros mean anything.**
+
+Entry 49 established that a positive control separates "the platform is broken" from "my reader is
+broken." This sharpens it: **a control that never fires has not been run.** It must be scaled until
+it registers, or it is indistinguishable from a dead instrument. The probe now exits non-zero with
+`INCONCLUSIVE` when nothing contends, because *"no contention observed"* and *"contention absorbed"*
+are different claims.
+
+## Entry 61 — `cap_ms: 2000` is dead configuration
+
+With `attempts: 6` and `base_ms: 40`, the largest backoff window is `40 × 2⁴ = 640 ms`, so the
+2,000 ms cap **can never bind**. Observed maximum wait: 639 ms on both backends.
+
+Left unchanged deliberately — altering it would change behaviour without a stated reason, and order
+0042 was explicitly about not tuning. Recorded because it is **a trap for whoever later raises
+`attempts` believing the cap bounds the wait.** It does not, until attempt 7.
+
+## Entry 58 — SUPERSEDED BY ENTRY 59 — A2 FAILS on the Firebase adapter, and A2 is the gate
 
 The emulator suites ran for the first time. **36/37 pass. The failure is A2.**
 
