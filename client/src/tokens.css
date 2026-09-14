@@ -103,8 +103,19 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
        line-height:1;cursor:pointer}
 .p-head h2{font-family:var(--serif);font-size:19px;font-weight:600;line-height:1.28;
        letter-spacing:-.018em}
-.p-body{padding:18px 24px 26px;overflow-y:auto;display:grid;gap:20px;min-height:0}
-.sect{display:grid;gap:7px}
+/* align-content:start is load-bearing, not cosmetic.
+   A grid's default align-content is `normal`, which for a grid container behaves as `stretch`:
+   free vertical space is distributed INTO the rows rather than left at the bottom. .p-body is
+   taller than its content whenever a task has few sections, so every .sect grew — and because
+   .sect is itself a grid, the stretch cascaded into ITS rows too. A 10.5px label ended up
+   occupying 82px and the panel wasted roughly 400px.
+   Padding tweaks cannot fix this: the rows are being stretched, not spaced. Only telling the
+   container to pack its rows at the start does.
+   The server-rendered edge harness could never have caught it — it asserts that an element is
+   present, and never computes layout. This was found in a real browser. */
+.p-body{padding:18px 24px 26px;overflow-y:auto;display:grid;gap:20px;min-height:0;
+       align-content:start}
+.sect{display:grid;gap:7px;align-content:start}
 .sect .lbl{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.09em;
        color:var(--muted)}
 .sect p{font-size:13px;color:var(--ink2);line-height:1.6}
