@@ -164,6 +164,66 @@ Second gotcha, recorded so it is not rediscovered: **`firebase emulators:exec` r
 the CLI's own pkg-bundled Node**, which treats `--test` as a filename. Start the emulator standalone
 and point `FIRESTORE_EMULATOR_HOST` at it instead.
 
+## Entry 65 — the emulator does not enforce indexes
+
+**The `ProjectDirectory` conformance suite passed while `drydock ls` failed on its first production
+run.** Cause: the Firestore emulator does not enforce index requirements, so a query that cannot run
+in production runs fine locally.
+
+This is a new class of emulator/production divergence, and worse than the contention one in entry 59
+because it is **silent and deterministic** rather than intermittent — local green is not merely a
+weaker signal here, it is the wrong signal, every time, forever.
+
+Fixed by filtering `revoked` in code (one `where`, no composite index) plus a collection-group
+exemption in `firestore.indexes.json`. And `wait-index.mjs` **polls the query itself rather than the
+index API — because the query is the thing that has to work.** Asserting the artifact, not the
+status endpoint.
+
+**Rule: a suite that only ever runs against the emulator cannot establish that a query works.**
+Anything involving a new query shape gets one production run before it is believed.
+
+## Entry 66 — a readiness check must verify identity, not availability
+
+The first gate run came back **14/15 with A2 red**. The emulator started for it **never started** —
+port 8080 was still held by the directory suite's emulator, the new process exited with *"Port 8080
+is not open"*, and the `until curl` readiness check went green **because something was answering.**
+
+The build named it precisely: *"the same mistake I once diagnosed in `scripts/emulator.sh` — asking
+whether the port is up rather than whether **mine** is — repeated by a check that couldn't tell the
+difference."* After stopping the stale process and confirming "All emulators ready", **A2 passes,
+15/15, 217s.**
+
+**It stated why the first run was invalid rather than substituting the green one.** Same discipline
+as entry 64, one turn later.
+
+**Rule: a readiness probe must establish that the thing you started is the thing responding.** Port
+liveness is availability, not identity. This is the third instance of one shape in this project —
+reading an exit code as a task outcome (entry 29), a 400's header as a data-path property (entry 24),
+and now a port answering as *your* process being up. **A true signal about the wrong subject.**
+
+## Entry 67 — revoked members are retained and marked, never deleted
+
+`ProjectDirectory` is a **second port of 7 operations**; `CoordinationStore` stays at 10 and its
+verified suite is untouched.
+
+**D3 asserts the rule, not the outcome.** A revoked member must be retained and flagged — deleting
+produces an **identical `listProjects` result** while destroying the record the ledger references by
+uid. Every audit trail pointing at that uid would dangle, and no list-based assertion could ever
+detect it.
+
+**D5's control**: "revoking the last owner throws" is worthless unless the identical call *succeeds*
+once the precondition is gone. Both of that suite's initial failures turned out to be **the suite,
+not the adapter** — and which side was wrong was established before anything was changed.
+
+Two design choices worth keeping: the project id is **derived deterministically**, so two clones of
+one repo **collide** rather than quietly becoming two projects; and **creation precedes scaffolding**,
+so a backend refusal leaves nothing behind on the developer's tree.
+
+The projects index asserts **both halves** of its empty state — that `drydock new` is shown *and*
+that no create button is, since a button there could not work. Routing controls test paths that must
+**not** parse, so "returns null" is not vacuous. The negative-assertion rule from entry 63, applied
+without prompting.
+
 ## Entry 63 — the blackboard's central claim was made to fire, not assumed
 
 F4/F6/F7 pass, 37/37, against **real git** (a bare repo as origin; worktree, fetch, commit, push and
