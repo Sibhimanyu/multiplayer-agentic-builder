@@ -150,6 +150,53 @@ export function EmptyColumn({ label }: { label: string }) {
   return <div className="empty"><b>{head}</b>{body}</div>;
 }
 
+/**
+ * One project on the index. Reuses `.card` and the avatar row rather than inventing chrome.
+ *
+ * `members` are AgentPresence-shaped so Avatar can render them unchanged — a project member is
+ * not an agent, but the avatar is a picture of a person either way, and giving it a second
+ * near-identical component is how two drifting implementations of one idea start.
+ */
+export function ProjectCard({
+  project, onOpen,
+}: {
+  project: {
+    project_id: string; project_name: string; repo_url: string;
+    role: string; members: AgentPresence[];
+  };
+  onOpen: () => void;
+}) {
+  return (
+    <button className="card" onClick={onOpen} data-project={project.project_id}>
+      <div className="title">{project.project_name}</div>
+      <div className="row">
+        <span className="kind" data-k="docs">{project.role}</span>
+        {project.members.length > 0 && (
+          <div className="who"><Presence agents={project.members} /></div>
+        )}
+      </div>
+      {project.repo_url && <div className="branch">{truncPath(project.repo_url)}</div>}
+    </button>
+  );
+}
+
+/**
+ * The empty state TEACHES THE COMMAND rather than offering a button.
+ *
+ * A "New project" button here could not work: creating a project connects a repo, writes
+ * .agentic/ and generates role packs, none of which a browser can do. A button that opens a
+ * dialog which then explains it cannot proceed is worse than no button. For a developer tool the
+ * command IS the affordance.
+ */
+export function ProjectsEmpty() {
+  return (
+    <div className="empty">
+      <b>No projects yet</b>
+      Run <code>drydock new &lt;name&gt;</code> in your repo.
+    </div>
+  );
+}
+
 export function DetailPanel({
   task, agent, contract, blockedChain, onClose,
 }: {

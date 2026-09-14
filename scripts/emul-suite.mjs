@@ -30,7 +30,29 @@ if (!res) {
   console.error('  Start one:  npx firebase-tools emulators:start --only firestore --project <id>');
   process.exit(1);
 }
-console.log(`emulator: ${HOST} (HTTP ${res.status})\n`);
+
+// HOW LONG HAS THIS EMULATOR BEEN UP, AND HOW MUCH HAS IT ALREADY SERVED?
+//
+// "Something answers on 8080" is NOT "my fresh emulator is running". Starting a second emulator
+// while the first still holds the port fails with `Port 8080 is not open`, the new process exits,
+// the OLD one keeps answering, and a readiness check that only pings the port sees green. A gate
+// run then executes against a degraded emulator and A2 fails for a reason that has nothing to do
+// with the adapter. That happened, and the same mistake -- asking whether the port is up rather
+// than whether MINE is -- was diagnosed once before in scripts/emulator.sh.
+//
+// There is no identity to check, so the next best thing is to make the age visible: a gate run
+// should be looking at a number of seconds, not of minutes.
+const started = Number(process.env.EMULATOR_STARTED_MS ?? 0);
+const ageNote = started > 0 ? `, up ${Math.round((Date.now() - started) / 1000)}s` : '';
+console.log(`emulator: ${HOST} (HTTP ${res.status}${ageNote})`);
+if (files.some((f) => f.includes('store.test.ts'))) {
+  console.log(
+    'NOTE: A2 is a gate. If this emulator has already served another suite, a red A2 is\n' +
+      '      saturation rather than an adapter defect -- restart it and run this alone.\n',
+  );
+} else {
+  console.log('');
+}
 
 // A2 IS ONLY DIAGNOSTIC ON AN EMULATOR IT DOES NOT SHARE. Measured, order 0042:
 //

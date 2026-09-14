@@ -6,6 +6,15 @@
       "fieldPath": "body",
       "indexes": [],
       "__comment__": "Event bodies are opaque pointers, never queried. Exempting them from indexing removes an index entry per body field per event, which is both a storage cost and a write-latency cost on every append."
+    },
+    {
+      "collectionGroup": "members",
+      "fieldPath": "uid",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" },
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }
+      ],
+      "__comment__": "The projects index queries collectionGroup('members').where('uid','==',me) — the only way a browser can list its own projects, since rules reject a list of /projects rather than filtering it. Automatic single-field indexes are COLLECTION-scoped only, so the COLLECTION_GROUP entry must be declared explicitly or production answers FAILED_PRECONDITION. The emulator does not enforce indexes at all, so the conformance suite passes without this and only production reveals it."
     }
   ],
   "__comment__": "readEvents is a single-field range+order on `seq`, served by the automatic single-field index. No composite index is required, which is why `indexes` is empty rather than unwritten."

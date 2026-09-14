@@ -4,11 +4,62 @@
 //   Firebase  -> import { createFirestoreStore } from './store/firebase';
 
 import { useEffect, useMemo, useState } from 'react';
-import { COLUMNS, type Freshness, type Snapshot, type TaskView } from './store/types';
+import { COLUMNS, type AgentPresence, type Freshness, type Snapshot, type TaskView } from './store/types';
 import { createFirestoreStore, type StoreStatus } from './store/firebase';
-import { DetailPanel, EmptyColumn, TaskCard, TopNav } from './components';
+import { DetailPanel, EmptyColumn, ProjectCard, ProjectsEmpty, TaskCard, TopNav } from './components';
 
-const PROJECT_ID = 'proj_inventory';
+/**
+ * Which project the URL is asking for. `/p/:project_id`, or null for the index.
+ *
+ * PROJECT_ID used to be a module constant reading 'proj_inventory' — there was no tier above one
+ * project, on either branch. Routing is two routes and no router dependency: `/` and `/p/:id`.
+ */
+export function projectIdFromPath(pathname: string): string | null {
+  const m = /^\/p\/([A-Za-z0-9_-]+)\/?$/.exec(pathname);
+  return m?.[1] ?? null;
+}
+
+/**
+ * The projects index. A pure function of the project list, like BoardView.
+ *
+ * Split out for the same reason: the edge harness renders it and asserts the DOM, so the empty
+ * state and the role label are checked rather than eyeballed.
+ */
+export function ProjectsIndex({
+  projects, onOpen,
+}: {
+  projects: {
+    project_id: string; project_name: string; repo_url: string;
+    role: string; members: AgentPresence[];
+  }[];
+  onOpen: (project_id: string) => void;
+}) {
+  return (
+    <>
+      <nav className="nav">
+        <div className="mark">DD</div>
+        <div className="brand">Drydock</div>
+        <span className="grow" />
+      </nav>
+      <div className="stage">
+        <div className="board">
+          <section className="col" key="projects">
+            <div className="col-head">
+              <h3>Projects</h3><span className="count">{projects.length}</span>
+            </div>
+            <div className="col-body">
+              {projects.length === 0
+                ? <ProjectsEmpty />
+                : projects.map((p) => (
+                    <ProjectCard key={p.project_id} project={p} onOpen={() => onOpen(p.project_id)} />
+                  ))}
+            </div>
+          </section>
+        </div>
+      </div>
+    </>
+  );
+}
 
 /**
  * The pre-board states, rendered as themselves.
@@ -159,14 +210,15 @@ export function BoardView({
   );
 }
 
-export default function App() {
+/** The board for one project. Its own component so the subscription is torn down on navigation. */
+function ProjectBoard({ project_id }: { project_id: string }) {
   const store = useMemo(() => createFirestoreStore(), []);
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [status, setStatus] = useState<StoreStatus>({ state: 'signing-in' });
   // No default selection: a hardcoded task id opened a panel for a task that need not exist.
   const [selected, setSelected] = useState<string | null>(null);
 
-  useEffect(() => store.subscribe(PROJECT_ID, 0, setSnap), [store]);
+  useEffect(() => store.subscribe(project_id, 0, setSnap), [store, project_id]);
   useEffect(() => store.onStatus(setStatus), [store]);
 
   // Stable placeholder height: no layout shift when the first snapshot lands.
@@ -175,4 +227,55 @@ export default function App() {
   return (
     <BoardView snap={snap} freshness={store.freshness} selected={selected} onSelect={setSelected} />
   );
+}
+
+export default function App() {
+  // Two routes, no router dependency. pathname is read once and updated on popstate, so the
+  // back button works without pulling in a routing library for a two-entry table.
+  const [pathname, setPathname] = useState(() =>
+    typeof window === 'undefined' ? '/' : window.location.pathname,
+  );
+  useEffect(() => {
+    const onPop = () => setPathname(window.location.pathname);
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  const navigate = (to: string) => {
+    window.history.pushState({}, '', to);
+    setPathname(to);
+  };
+
+  const project_id = projectIdFromPath(pathname);
+  if (project_id) return <ProjectBoard project_id={project_id} />;
+  return <ProjectsIndexRoute onOpen={(id) => navigate(`/p/${id}`)} />;
+}
+
+/** Wires the browser directory to the pure index view. */
+function ProjectsIndexRoute({ onOpen }: { onOpen: (project_id: string) => void }) {
+  const [projects, setProjects] = useState<
+    { project_id: string; project_name: string; repo_url: string; role: string; members: AgentPresence[] }[]
+  >([]);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      try {
+        const { loadProjects } = await import('./store/projects');
+        const rows = await loadProjects();
+        if (live) setProjects(rows);
+      } catch (err) {
+        // An index that cannot load must not render as "no projects yet" — that would teach the
+        // user to run a command they have already run. Left empty with the error surfaced.
+        console.warn('[projects] could not load the project list', err);
+      } finally {
+        if (live) setReady(true);
+      }
+    })();
+    return () => { live = false; };
+  }, []);
+
+  if (!ready) return <div style={{ padding: 28, color: 'var(--muted)' }}>Connecting…</div>;
+  return <ProjectsIndex projects={projects} onOpen={onOpen} />;
 }

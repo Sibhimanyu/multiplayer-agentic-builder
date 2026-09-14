@@ -10,7 +10,7 @@
 // Built and run by client/edge/run.mjs.
 
 import { renderToStaticMarkup } from 'react-dom/server';
-import { BoardView, blockedChain } from '../src/App';
+import { BoardView, ProjectsIndex, blockedChain, projectIdFromPath } from '../src/App';
 import type {
   AgentPresence, ContractPointer, Freshness, Snapshot, TaskStatus, TaskView,
 } from '../src/store/types';
@@ -200,6 +200,49 @@ const render = (snap: Snapshot, freshness: Freshness = LIVE, selected: string | 
   const reordered = snapshot({ ...snap, tasks: [snap.tasks[1], snap.tasks[0]] });
   check(render(snap).length === render(reordered).length,
     'locked 7: task array order does not change the rendered size (keys are stable ids)');
+}
+
+// ---------------------------------------------------------------- the projects index (0045)
+{
+  const member = (uid: string, label: string) => ({ ...agent({ agent_id: uid }), member_label: label, initials: label.slice(0, 2).toUpperCase() });
+  const rows = [
+    { project_id: 'proj_harbour_demo', project_name: 'Harbour Demo', repo_url: 'Sibhimanyu/multiplayer-agentic-builder', role: 'owner', members: [member('uid_a', 'sibhi'), member('uid_b', 'dev')] },
+    { project_id: 'proj_inventory', project_name: 'Inventory Tracker', repo_url: 'Sibhimanyu/inventory-tracker', role: 'backend', members: [member('uid_a', 'sibhi')] },
+  ];
+  const html = renderToStaticMarkup(<ProjectsIndex projects={rows} onOpen={() => {}} />);
+
+  check(html.includes('Harbour Demo') && html.includes('Inventory Tracker'), 'index: both projects render');
+  check(html.includes('<span class="count">2</span>'), 'index: the count matches the project list');
+  check(html.includes('data-project="proj_harbour_demo"'), 'index: each card carries its project id');
+  check(/class="kind"[^>]*>owner</.test(html), 'index: YOUR role on the project is shown');
+  check(/class="kind"[^>]*>backend</.test(html), 'index: and it is per-project, not one global role');
+  check((html.match(/class="av"/g) ?? []).length === 3, 'index: member avatars render, reusing the Avatar idiom');
+  // The repo uses the SAME left-truncation as a file path, so a long owner/repo keeps the repo
+  // name visible rather than the owner. Asserted as truncation, not as the full string: at 38
+  // chars this one is over truncPath's 34 and expecting it verbatim would encode the bug.
+  check(html.includes('multiplayer-agentic-builder'), 'index: the repo NAME survives truncation');
+  check(html.includes('…'), 'index: and a long repo is left-truncated rather than overflowing');
+  check(html.includes('Sibhimanyu/inventory-tracker'), 'index: a short repo is shown in full');
+
+  // The empty state must TEACH THE COMMAND. A button here could not work -- creating a project
+  // needs the repo on disk -- so the assertion is that the command is present and no button is.
+  const empty = renderToStaticMarkup(<ProjectsIndex projects={[]} onOpen={() => {}} />);
+  check(empty.includes('class="empty"'), 'index: zero projects gets the dashed empty state, not a blank');
+  check(empty.includes('No projects yet'), 'index: and says so');
+  check(empty.includes('drydock new'), 'index: the empty state teaches the command');
+  check(!/<button[^>]*>\s*(New|Create)/i.test(empty), 'index: and offers no button that could not work');
+  check(empty.includes('<span class="count">0</span>'), 'index: the count is honest at zero');
+}
+
+// ---------------------------------------------------------------- routing (0045)
+{
+  check(projectIdFromPath('/p/proj_inventory') === 'proj_inventory', 'route: /p/:id yields the project id');
+  check(projectIdFromPath('/') === null, 'route: / is the index');
+  check(projectIdFromPath('/p/proj_inventory/') === 'proj_inventory', 'route: a trailing slash is the same route');
+  // The control: a path that must NOT parse as a project, so "returns null" is not vacuous.
+  check(projectIdFromPath('/p/') === null, 'route: /p/ with no id is not a project');
+  check(projectIdFromPath('/p/a/b') === null, 'route: a nested path is not a project');
+  check(projectIdFromPath('/p/../etc') === null, 'route: traversal characters are rejected');
 }
 
 console.log(results.join('\n'));

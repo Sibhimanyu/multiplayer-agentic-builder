@@ -3,10 +3,23 @@ rules_version = '2';
 // Deny all by default, then allow exactly what a browser needs. Nothing more.
 //
 // The shape of this file follows one decision from docs/protocol/agent-coordination.md:
-// clients never write the ledger. Every write arrives through the Cloud Functions API, which
-// runs with admin credentials and therefore bypasses these rules entirely. So the rules only
-// have to answer one question — "may this signed-in browser READ this project?" — and answer
-// "no" to every write.
+// clients never write. Every write arrives through a process holding the service-account key,
+// which bypasses these rules entirely. So the rules only have to answer one question — "may this
+// signed-in browser READ this project?" — and answer "no" to every write.
+//
+// THAT PROCESS IS THE LOCAL CLI BRIDGE, NOT A CLOUD FUNCTION. This file used to say "API only"
+// and defer to functions/src/authority.ts. The project is on the SPARK plan, which has no Cloud
+// Functions at all, so that comment pointed at code which cannot run. Order 0043 had already
+// moved the reaper and the GitHub webhook receiver into the bridge for the same reason; order
+// 0045 moved project creation there too.
+//
+// Creating a project is a local act in any case: it connects a repo, writes .agentic/, and
+// generates role packs, none of which a browser can do without uploading the developer's working
+// tree somewhere. So the CLI creates projects and the browser lists and opens them.
+//
+// Nothing here is loosened by that. Client writes stay denied; the upgrade path if browser-side
+// creation is ever wanted is Blaze plus one Cloud Function for project CRUD, deliberately not
+// taken.
 //
 // That is why the write rules below are `false` rather than a careful per-field check. A
 // per-field client write rule would be a second, weaker implementation of the API's authority
@@ -16,7 +29,7 @@ rules_version = '2';
 // Consequences worth stating plainly:
 //   - The dashboard is read-only. Owner actions (invite, assign, merge-confirm) go to the API.
 //   - Admin SDK writes are NOT tested by these rules. They are tested by the API's own
-//     authority checks (see functions/src/authority.ts) and by the forged-agent_id test.
+//     authority checks and by the forged-agent_id test.
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -38,14 +51,14 @@ service cloud.firestore {
     }
 
     // No isOwner() helper here on purpose: owner-only actions are all writes, and writes are
-    // all denied to clients. Owner authority is checked in the API (functions/src/authority.ts),
+    // all denied to clients. Owner authority is checked in the BRIDGE (firebase/directory.ts),
     // in one place, against the same membership document.
 
     // ---- the project document ---------------------------------------------------
 
     match /projects/{pid} {
       allow get, list: if isMember(pid);
-      allow create, update, delete: if false; // API only
+      allow create, update, delete: if false; // bridge only, via the admin SDK
 
       // ---- readable by any member: this is what the board renders ----------------
 
@@ -124,6 +137,25 @@ service cloud.firestore {
       match /{unmatched=**} {
         allow read, write: if false;
       }
+    }
+
+    // ---- the projects index ---------------------------------------------------------
+    //
+    // The browser cannot list /projects: rules do not filter a query, they reject it, so
+    // `getDocs(collection('projects'))` fails outright unless every project matches — and
+    // isMember(pid) is exactly the condition that does not hold across all of them.
+    //
+    // So the index is built the other way round: a collection-group query over `members`
+    // constrained to the caller's own uid, then a read of each project by id (already allowed by
+    // isMember above). This rule permits ONLY that query.
+    //
+    // It grants strictly LESS than the per-project rule it sits beside: there, a member may read
+    // the whole roster of a project they belong to; here, a caller may only ever see membership
+    // documents whose id is their own uid. There is no widening — `request.auth.uid == uid`
+    // cannot match another person's row, so this cannot be used to enumerate anyone else's
+    // projects or discover who else is a member of one.
+    match /{path=**}/members/{uid} {
+      allow list: if signedIn() && request.auth.uid == uid;
     }
 
     // Belt and braces: nothing outside /projects exists, and nothing may be created there.
