@@ -28,6 +28,7 @@ import path from 'node:path';
 import process from 'node:process';
 
 import { LAYOUT, appendInbox, readState, writeState } from './agentic.ts';
+import { materialise, publishToBlackboard, type BlackboardOptions } from './blackboard.ts';
 import { readPending, writeCursor, type OutboxRecord } from './outbox.ts';
 import type { Logger } from '../shared/log.ts';
 import { StoreAuthError } from '../shared/store/errors.ts';
@@ -63,6 +64,11 @@ export interface BridgeOptions {
    * candidate. See startReaper for the lease that stops them stampeding.
    */
   reaper?: ReaperPort;
+  /**
+   * The git half. Absent means contract-layer records are announced without being published,
+   * which is only ever right in a test that is not exercising the blackboard.
+   */
+  blackboard?: BlackboardConfig;
 }
 
 /**
@@ -76,6 +82,29 @@ export interface BridgeOptions {
 export const REAPER_SWEEP_INTERVAL_MS = 60_000;
 
 /**
+ * The three event kinds whose payload is a FILE in git rather than a body in the ledger.
+ *
+ * They are exactly the contract layer minus its lifecycle events: a contract, a schema and a
+ * decision are durable artifacts a human reviews in a diff. `contract_superseded`,
+ * `scope_locked` and the rest are coordination facts about artifacts, not artifacts.
+ */
+export const BLACKBOARD_KINDS = new Set<EventKind>([
+  'contract_published',
+  'schema_published',
+  'decision_recorded',
+]);
+
+type BlackboardKind = 'contract_published' | 'schema_published' | 'decision_recorded';
+
+/** What the bridge needs to run the git half. Absent means this bridge does not publish facts. */
+export type BlackboardConfig = BlackboardOptions & {
+  /** For private repos, on the CDN read. Never written to disk or into an event. */
+  token?: string;
+  /** Injectable so the inbox path can be tested without the network. */
+  fetchImpl?: typeof fetch;
+};
+
+/**
  * Publish one outbox record through the correct store operation.
  *
  * `task_claimed` is not a plain append: a claim is the atomic operation, and routing it through
@@ -87,8 +116,46 @@ export async function publishRecord(
   project_id: string,
   rec: OutboxRecord,
   log: Logger,
+  blackboard?: BlackboardConfig,
 ): Promise<{ published: boolean; seq: number; note?: string }> {
-  const body = rec.body ?? {};
+  let body = rec.body ?? {};
+
+  // ---- the git half -------------------------------------------------------------------
+  //
+  // RULE 3, blackboard.md: THE CLI COMMITS, NEVER THE AGENT. The agent wrote a file into its
+  // working tree and named it; everything from here -- the worktree, the commit, the push, the
+  // rebase on rejection -- happens on this side of the file contract, and the event body the
+  // agent wrote is REPLACED by a pointer. The agent never sees, holds or types a commit sha.
+  //
+  // Done before appendEvent, not after, and that ordering is the whole design: an event
+  // announcing a contract that is not yet pushed is a pointer into nothing. A consumer that
+  // acted on it would fetch a 404 from the CDN. Publish the artifact, then announce it.
+  if (BLACKBOARD_KINDS.has(rec.kind) && blackboard) {
+    const source = typeof body.file === 'string' ? body.file
+      : typeof body.source_file === 'string' ? body.source_file
+      : null;
+    if (!source) {
+      return { published: false, seq: 0, note: `${rec.kind} without a file to publish` };
+    }
+    const pub = await publishToBlackboard(
+      { source_file: source, kind: rec.kind as BlackboardKind, body },
+      blackboard,
+      log,
+    );
+    // Not "it did not throw": a pointer without a real 40-hex sha is not a pointer.
+    if (!/^[0-9a-f]{40}$/.test(pub.commit_sha)) {
+      throw new Error(`publishToBlackboard returned no usable commit_sha for ${source}`);
+    }
+    // The pointer, and ONLY the pointer. `file` -- the agent's local scratch path -- is dropped
+    // deliberately: it is meaningless on any other machine, and leaving it would invite a
+    // consumer to try opening it.
+    const { file: _dropped, source_file: _dropped2, ...rest } = body;
+    body = { ...rest, path: pub.path, commit_sha: pub.commit_sha };
+    log.info('bridge.blackboard_published', 'fact committed and pushed before announcing it', {
+      kind: rec.kind, path: pub.path, commit_sha: pub.commit_sha,
+      attempts: pub.attempts, unchanged: pub.unchanged,
+    });
+  }
   const task_id = typeof body.task_id === 'string' ? body.task_id : null;
   const agent_id = typeof body.agent_id === 'string' ? body.agent_id : 'agent_local';
 
@@ -148,7 +215,7 @@ export async function drainOnce(opts: BridgeOptions): Promise<{ published: numbe
 
   for (const rec of pending.sort((a, b) => a.order - b.order)) {
     try {
-      const r = await publishRecord(opts.store, opts.project_id, rec, opts.log);
+      const r = await publishRecord(opts.store, opts.project_id, rec, opts.log, opts.blackboard);
       if (!r.published) {
         opts.log.warn('bridge.unpublishable', 'record cannot ever be published, skipping', {
           kind: rec.kind, note: r.note,
@@ -204,7 +271,35 @@ export function startInboxFeed(opts: BridgeOptions): () => void {
           continue;
         }
         const body: Record<string, unknown> = { ...e.body };
+
+        // RULE 4, blackboard.md: body.local is populated BEFORE the inbox line is appended.
+        //
+        // The bridge fetches the blob to disk here, so by the time the agent sees the line the
+        // file already exists and the agent opens it. That is the whole point: the agent makes
+        // NO network call, holds no token, and cannot be blocked by the CDN being slow. F7 --
+        // "the frontend reads the contract from disk" -- is precisely the test of this line.
+        //
+        // A fetch failure must NOT produce an inbox line: announcing a contract whose file is
+        // not on disk would send the agent to open something that is not there, which is worse
+        // than a delayed announcement. lastSeen is left un-advanced so the next frame retries.
+        if (typeof e.body.commit_sha === 'string' && typeof e.body.path === 'string' && opts.blackboard) {
+          try {
+            body.local = await materialise(
+              { path: e.body.path, commit_sha: e.body.commit_sha },
+              { root: opts.root, repo: opts.blackboard.repo, token: opts.blackboard.token, fetchImpl: opts.blackboard.fetchImpl },
+              opts.log,
+            );
+          } catch (err) {
+            opts.log.warn('bridge.materialise_failed', 'could not fetch a published fact; not announcing it yet', {
+              kind: e.kind, seq: e.seq, path: e.body.path, error: String(err),
+            });
+            continue; // no inbox line, and lastSeen stays put so this is retried
+          }
+        }
+
         // C7: the agent never sees a commit sha. That is CLI plumbing.
+        // AFTER materialise, deliberately: the sha is what makes the fetch sha-pinned and
+        // therefore immutable, so it is needed right up to the moment the file is on disk.
         delete body.commit_sha;
         await appendInbox(
           opts.root,

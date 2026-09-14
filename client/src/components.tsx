@@ -79,8 +79,14 @@ export function FreshnessPill({ freshness, generatedAt }: { freshness: Freshness
 export function TopNav({ snap, freshness }: { snap: Snapshot; freshness: Freshness }) {
   return (
     <nav className="nav">
-      <div className="mark">CB</div>
-      <div className="brand">Catalyst Builder</div>
+      {/*
+        Drydock, decision 0002. The UI BRAND only: the repo, the branches and the project ids
+        deliberately keep their old names, because they are live infrastructure and the
+        comparison record has to stay readable. Renaming a project id would invalidate every
+        measurement that names it.
+      */}
+      <div className="mark">DD</div>
+      <div className="brand">Drydock</div>
       <div className="sep" />
       <div className="proj">{snap.project_name}</div>
       <div className="repo">{snap.repo_url}</div>
