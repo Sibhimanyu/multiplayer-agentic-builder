@@ -164,6 +164,53 @@ Second gotcha, recorded so it is not rediscovered: **`firebase emulators:exec` r
 the CLI's own pkg-bundled Node**, which treats `--test` as a filename. Start the emulator standalone
 and point `FIRESTORE_EMULATOR_HOST` at it instead.
 
+## Entry 62 — the reaper's stampede guard, and the self-referential bug in it
+
+F5/F11/F12 pass on **ledger** evidence against real Firestore, 13/13. The design decisions are worth
+keeping because each one closes a failure this project has already been bitten by.
+
+**The lease is `claimTask` itself**, on a reserved claim id — the primitive already verified
+contended, rather than a second one invented for the purpose. Five bridges starting together: one
+winner, four clean losses.
+
+- **Held for the process lifetime, not taken per sweep.** Re-claiming a task you already own returns
+  ok and appends *nothing*, so holding costs one ledger event per bridge lifetime. Claim-and-release
+  per sweep would have written two events a minute into the audit log forever.
+- **Liveness is the holder's presence, not lease age.** A long-held lease by a live bridge is
+  correct; a short-held one by a corpse is not, and **age cannot tell them apart**. `stale` is already
+  derived from `last_heartbeat_at`, so the existing signal is reused rather than duplicated.
+- **Breaking a dead holder's lease goes through `reapClaim`**, for system attribution — not
+  `releaseTask` impersonating the dead agent.
+- **The lease is excluded from what the sweep reports.** Otherwise a holder whose heartbeat blipped
+  could reap *its own lease* mid-sweep and hand it on — producing the exact stampede the guard exists
+  to prevent. A self-referential bug, found by design rather than by failure.
+
+### Assertions that do not accept agreement as evidence
+
+- **F5 asserts the ledger, not return values** — exactly one `task_claimed` exists, and the loser
+  names the same owner the ledger records. *"Two return values agreeing with each other prove nothing
+  about what was durably written"* — the Data Store CAS lesson (entry 41) applied unprompted.
+- **F11 asserts `actor_type: 'system'`** on the release, because a release attributed to the dead
+  agent would be a false ledger entry about an agent that did nothing.
+- **F12 asserts the second claim's `seq` is after the release's**, so the ordering is real rather
+  than two events that merely both exist.
+- **"Kill the laptop" backdates `last_heartbeat_ms`** past the timeout instead of waiting 15 real
+  minutes — **and the reaper's own clock stays real.** Only the agent's last-seen time moves, which
+  is the one thing a dead laptop actually changes.
+
+### Entry 60 applied, correctly
+
+*"One of five swept"* is also exactly what **four silently-broken bridges** look like. Giving each
+bridge its own lease so nothing contends → **all five swept**. So the 1 is the guard, not breakage.
+A control that discriminates, not one that merely exists.
+
+### Two consequences written where they will be read
+
+The checklist's F8 now names **the bridge's GitHub poll**, noting the observable outcome is unchanged
+because board liveness comes from the `onSnapshot` subscriber either way — the poll only decides how
+fast GitHub state *reaches* Firestore. And `firebase/reaper.ts` records that
+**F11's 15-minute bound is 15 minutes of bridge uptime, not elapsed time.**
+
 ## Entry 59 — RESOLVED: A2 passes. The failure was the coordinator's invocation.
 
 **Pre-registered branch 2 applies. A2 passes on production with the entire retry budget unused.**
