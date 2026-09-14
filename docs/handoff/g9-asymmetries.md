@@ -164,6 +164,58 @@ Second gotcha, recorded so it is not rediscovered: **`firebase emulators:exec` r
 the CLI's own pkg-bundled Node**, which treats `--test` as a filename. Start the emulator standalone
 and point `FIRESTORE_EMULATOR_HOST` at it instead.
 
+## Entry 63 — the blackboard's central claim was made to fire, not assumed
+
+F4/F6/F7 pass, 37/37, against **real git** (a bare repo as origin; worktree, fetch, commit, push and
+`pull --rebase` all actual git) and **real Firestore**. The CDN read is explicitly a **local**
+`fetchImpl` serving the same sha-pinned bytes via `git show <sha>:<path>` — same immutability, same
+ordering, and **stated up front as not a measurement of GitHub's CDN.** Entry 25's lesson applied
+before it could bite.
+
+**`blackboard.md`'s one load-bearing rule had never executed.** *"On push rejection: `git pull
+--rebase` and retry. Because it is one file per fact, the rebase cannot conflict."* Two agents
+publishing different facts concurrently produced **1 rejection, 1 rebase, both facts landed, nothing
+earlier lost.** With a shared append-only file that is exactly where it would have conflicted. The
+design's central claim is now measured rather than argued.
+
+### Asserting the rule instead of the outcome
+
+**F6 asserts v1 is byte-identical** to what was published, not merely still present. That is the
+difference that matters: editing v1 in place would have destroyed the `v1..v2` diff — the single most
+valuable thing a blocked consumer has — **while leaving every path-existence check green.**
+
+**F7's two orderings are load-bearing and now explicit**: materialise → delete the sha → append the
+line (the sha is what makes the fetch sha-pinned, so it is needed right up to the moment the file
+lands); and a fetch failure appends **no** line and does not advance `lastSeen`, because *announcing
+a contract whose file is not on disk is worse than announcing it late.*
+
+Also deliberate: the ledger event carries the blackboard path and **not the agent's local scratch
+path**, which is meaningless on another machine and would invite a consumer to open it.
+
+### A negative assertion with a control
+
+"The agent never touched a commit sha" was asserted on artifacts — no 40-hex string in anything any
+agent wrote to `outbox.jsonl` or read from `inbox.jsonl`. **And then the control: the sha *does*
+exist, on the ledger, where the CLI put it.**
+
+**Rule: a negative assertion is vacuous unless you prove the thing could have appeared.** Entry 60
+said a control that never fires has not been run; this is its mirror for absence claims.
+
+## Entry 64 — the emulator flake was reported instead of re-rolled
+
+The five non-gate suites failed once at `concurrency.test.ts:398` with `Transaction lock timeout`,
+then passed 51/51 on a re-run of the same command. The order-0042 signature exactly: accumulated
+emulator degradation, whichever test is mid-flight fails.
+
+**It was reported rather than quietly keeping the green run** — *"hiding an instance would erode the
+record it rests on."* That is the correct call and it is worth naming, because the cheap move was
+available and invisible. A known-intermittent failure that is only ever reported when it blocks
+something stops being known-intermittent and becomes a surprise later.
+
+**Operational fact, now established across three runs:** the emulator degrades under accumulated
+load within a session. Gate suites get a dedicated fresh emulator; everything else may need a re-run,
+and a re-run is not evidence of a fix.
+
 ## Entry 62 — the reaper's stampede guard, and the self-referential bug in it
 
 F5/F11/F12 pass on **ledger** evidence against real Firestore, 13/13. The design decisions are worth
