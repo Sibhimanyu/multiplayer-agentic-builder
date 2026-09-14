@@ -71,8 +71,8 @@ export function FreshnessPill({ freshness, generatedAt }: { freshness: Freshness
 export function TopNav({ snap, freshness }: { snap: Snapshot; freshness: Freshness }) {
   return (
     <nav className="nav">
-      <div className="mark">CB</div>
-      <div className="brand">Catalyst Builder</div>
+      <div className="mark">DD</div>
+      <div className="brand">Drydock</div>
       <div className="sep" />
       <div className="proj">{snap.project_name}</div>
       <div className="repo">{snap.repo_url}</div>
