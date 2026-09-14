@@ -34,6 +34,109 @@ export const ROLE_SLUGS: readonly RoleSlug[] = ['owner', 'architect', 'backend',
 /** A browser identity. Firebase anonymous uid, or whatever a backend calls a signed-in subject. */
 export type MemberUid = string;
 
+/**
+ * What a role may DO, as opposed to what it is called.
+ *
+ * Order 0047: a role used to be a slug plus prose in role.md, which constrains an agent only by
+ * asking it nicely in a prompt. That is not a permission. These are checked.
+ */
+export type Capability =
+  | 'claim'            // take a task
+  | 'acquire_scope'    // hold a file-scope lock
+  | 'publish_contract' // write to the git blackboard
+  | 'open_pr'
+  | 'deploy'
+  | 'triage'           // turn a suggestion into a task, or decline it
+  | 'invite'           // add members and set roles
+  | 'suggest';         // append human-layer question/suggestion
+
+export interface RoleDefinition {
+  slug: RoleSlug;
+  /** Globs this role may hold a scope lock on. Empty means: may not hold any scope. */
+  file_scope: string[];
+  /** Deployable targets this role may deploy. Empty means: may not deploy. */
+  deploy_scope: string[];
+  capabilities: Capability[];
+}
+
+/**
+ * The six default roles.
+ *
+ * `client` is the one whose emptiness is the point: no file scope, no deploy targets, and only
+ * `suggest`. It cannot claim, cannot lock a path, cannot publish a contract, and has no agent.
+ * See the client-seat note in docs/designs/project-tier.md -- its words are human-layer, so the
+ * file contract keeps them out of every inbox.jsonl without anything having to filter them.
+ */
+export const DEFAULT_ROLES: Record<RoleSlug, RoleDefinition> = {
+  owner: {
+    slug: 'owner',
+    // The owner is not scoped: they are the human who decides, and a lock they cannot take is a
+    // lock nobody can break.
+    file_scope: ['**'],
+    deploy_scope: ['*'],
+    capabilities: ['claim', 'acquire_scope', 'publish_contract', 'open_pr', 'deploy', 'triage', 'invite', 'suggest'],
+  },
+  architect: {
+    slug: 'architect',
+    // Publishes contracts; does not implement them. That separation is the reason the role
+    // exists, so its file scope deliberately excludes functions/ and client/.
+    file_scope: ['contracts/**', 'schema/**', 'decisions/**'],
+    deploy_scope: [],
+    capabilities: ['claim', 'acquire_scope', 'publish_contract', 'triage', 'suggest'],
+  },
+  backend: {
+    slug: 'backend',
+    file_scope: ['functions/**', 'schema/**'],
+    deploy_scope: ['functions'],
+    capabilities: ['claim', 'acquire_scope', 'publish_contract', 'open_pr', 'deploy', 'suggest'],
+  },
+  frontend: {
+    slug: 'frontend',
+    file_scope: ['client/**'],
+    deploy_scope: ['hosting'],
+    capabilities: ['claim', 'acquire_scope', 'publish_contract', 'open_pr', 'deploy', 'suggest'],
+  },
+  qa: {
+    slug: 'qa',
+    file_scope: ['test/**', 'e2e/**'],
+    deploy_scope: [],
+    capabilities: ['claim', 'acquire_scope', 'open_pr', 'suggest'],
+  },
+  client: {
+    slug: 'client',
+    file_scope: [],
+    deploy_scope: [],
+    capabilities: ['suggest'],
+  },
+};
+
+export function roleFor(slug: string): RoleDefinition {
+  // An unknown slug gets the LEAST privilege, not a default of convenience. A typo in a role
+  // name must not silently grant backend rights.
+  return DEFAULT_ROLES[slug as RoleSlug] ?? DEFAULT_ROLES.client;
+}
+
+export function hasCapability(slug: string, cap: Capability): boolean {
+  return roleFor(slug).capabilities.includes(cap);
+}
+
+/** Thrown when a role attempts something outside its scope or capability set. */
+export class RoleDeniedError extends Error {
+  readonly role: string;
+  readonly requested: string[];
+  readonly allowed: string[];
+  constructor(role: string, what: string, requested: string[], allowed: string[]) {
+    super(
+      `role "${role}" may not ${what}: requested ${JSON.stringify(requested)}, ` +
+        `allowed ${allowed.length ? JSON.stringify(allowed) : '(nothing)'}`,
+    );
+    this.name = 'RoleDeniedError';
+    this.role = role;
+    this.requested = requested;
+    this.allowed = allowed;
+  }
+}
+
 export interface ProjectRecord {
   project_id: ProjectId;
   project_name: string;

@@ -48,6 +48,7 @@ import type {
 
 import { findGlobConflicts, globsIntersect, normalizeGlob } from '../shared/globs.ts';
 import { toPresence as derivePresence, type PresenceBackend } from './presence.ts';
+import { assertScopeAllowed } from '../shared/store/roles.ts';
 import { applyEvent, emptyProjection, toSnapshot, type FoldOutcome, type Projection } from './fold.ts';
 import { StoreAuthError, StoreBusyError, StoreError, StoreOfflineError } from '../shared/store/errors.ts';
 import { sanitizeBody, sanitizeText, VARCHAR_MAX } from '../shared/sanitize.ts';
@@ -927,6 +928,42 @@ export class FirestoreStore implements CoordinationStore {
     globs: string[],
   ): Promise<{ ok: true } | { ok: false; conflicts: ScopeLock[] }> {
     await this.assertNotRevoked(pid, agent_id);
+
+    // GATE 1: the agent's ROLE bounds what it may ask for. Order 0047.
+    //
+    // Before this, an agent could lock any path it named -- the role in AGENTS.md asked it not
+    // to, and asking is not a permission. The role comes from the agent's own presence record,
+    // which the API writes at registration and a client cannot forge, because clients cannot
+    // write at all.
+    //
+    // ENFORCED ONLY WHERE THE PROJECT HAS A ROLE POLICY, and that is not a loophole bolted on to
+    // keep a test green -- though it is how I found it. Conformance A7 has a BACKEND agent lock
+    // `client/src/store/catalyst.ts` on purpose, to prove glob intersection is enforced across
+    // roles, and A8 has it lock `shared/store/*.ts`. Both are outside any sane backend
+    // file_scope, so a universal gate turns two passing contract tests into RoleDeniedError.
+    // shared/store/conformance.ts is frozen and is the contract.
+    //
+    // Reading it again, the suite is right and my first version was wrong: FILE SCOPE IS
+    // PER-PROJECT POLICY, NOT A UNIVERSAL CONSTANT. `functions/**` is Firebase's layout; another
+    // repo puts handlers elsewhere. DEFAULT_ROLES is the TEMPLATE written into a project at
+    // creation, not a law that holds before anyone has configured anything.
+    //
+    // So: a project with a role policy enforces it; a project without one is unbounded, exactly
+    // as before. `drydock new` always writes the policy. The gap that leaves -- a project created
+    // by some other path is unenforced -- is real, and is logged rather than left silent.
+    const agentDoc = await this.agentsRef(pid).doc(agent_id).get();
+    const role_slug = (agentDoc.get('role_slug') as string) ?? 'client';
+    const policy = await this.db.collection('projects').doc(pid).collection('roles').doc(role_slug).get();
+    if (policy.exists) {
+      // Outside the transaction and before it, deliberately: a role refusal is a permanent
+      // caller error, and raising it inside would burn an attempt and read as contention.
+      assertScopeAllowed(role_slug, globs, policy.get('file_scope') as string[] | undefined);
+    } else {
+      this.log.warn('store.scope.unbounded', 'project has no role policy; file scope is NOT enforced', {
+        project_id: pid, agent_id, role_slug, requested: globs,
+      });
+    }
+
     // normalizeGlob throws GlobSyntaxError on an unsupported pattern. Deliberately outside
     // the transaction and outside guard(): a bad glob is a caller bug, not a backend failure,
     // and dressing it up as a StoreError would send the CLI into a retry loop over it.

@@ -143,8 +143,13 @@ export function EmptyColumn({ label }: { label: string }) {
     Claimed:         ['Nothing claimed', 'Tasks land here the moment an agent calls claim.'],
     'In progress':   ['Nothing in progress', 'Claimed tasks move here on first local edit.'],
     'Needs review':  ['Nothing awaiting review', 'Finished work with no PR yet appears here.'],
-    'PR open':       ['No open pull requests', 'Opened PRs appear here via the GitHub webhook.'],
-    Merged:          ['Nothing merged yet', 'Merged work lands here from the webhook.'],
+    // THE POLL, not a webhook. Order 0043 moved PR and CI state into the bridge's GitHub poll,
+    // because Spark has no Cloud Functions and so there is no server to receive a webhook. The
+    // checklist was updated at the time and these two strings were not -- so the
+    // mechanism-naming rule reached the test and missed the product, surviving in the one place
+    // a user actually reads.
+    'PR open':       ['No open pull requests', 'Opened PRs appear here when the bridge polls GitHub.'],
+    Merged:          ['Nothing merged yet', 'Merged work lands here when the bridge polls GitHub.'],
   };
   const [head, body] = copy[label] ?? ['Empty', ''];
   return <div className="empty"><b>{head}</b>{body}</div>;
@@ -194,6 +199,88 @@ export function ProjectsEmpty() {
       <b>No projects yet</b>
       Run <code>drydock new &lt;name&gt;</code> in your repo.
     </div>
+  );
+}
+
+export interface Suggestion {
+  seq: number;
+  from: string;
+  summary: string;
+  created_at: string;
+  /** Absent while it is still waiting on a human. */
+  decision?: 'accepted' | 'declined';
+  reason?: string;
+}
+
+/**
+ * The triage surface. Where a human decides what agents work on.
+ *
+ * This is the client seat's only route into the system, and the shape of it is the security
+ * property made visible: a suggestion is rendered here, on the board, and NOWHERE ELSE. It is a
+ * human-layer event, so the file contract keeps it out of every agent's inbox.jsonl without
+ * anything having to inspect its text. Prompt injection from this seat is impossible by plumbing
+ * rather than caught by a filter — which is why the text below is displayed verbatim and not
+ * sanitised. Sanitising it would imply the text is dangerous somewhere, and the point is that it
+ * is not reachable from anywhere it could be.
+ *
+ * Accept turns it into a task, which agents DO see. Decline records a reason, which they do not
+ * need to. Both decisions are the human's, and only the accepted one becomes work.
+ */
+export function TriagePanel({
+  suggestions, canTriage, onAccept, onDecline,
+}: {
+  suggestions: Suggestion[];
+  /** Only owner and architect hold the triage capability. */
+  canTriage: boolean;
+  onAccept: (seq: number) => void;
+  onDecline: (seq: number) => void;
+}) {
+  const pending = suggestions.filter((s) => !s.decision);
+  const settled = suggestions.filter((s) => s.decision);
+
+  return (
+    <section className="col" key="triage" data-triage="true">
+      <div className="col-head">
+        <h3>Suggestions</h3><span className="count">{pending.length}</span>
+      </div>
+      <div className="col-body">
+        {suggestions.length === 0 ? (
+          <div className="empty">
+            <b>Nothing to triage</b>
+            Client questions and suggestions land here for a human to turn into tasks.
+          </div>
+        ) : (
+          <>
+            {pending.map((s) => (
+              <div className="card" key={s.seq} data-suggestion={s.seq}>
+                <div className="title">{s.summary}</div>
+                <div className="row">
+                  <span className="kind" data-k="docs">{s.from}</span>
+                  {canTriage && (
+                    <span className="who" style={{ display: 'flex', gap: 6 }}>
+                      <button className="cta" onClick={() => onAccept(s.seq)}>Make a task</button>
+                      <button className="x" onClick={() => onDecline(s.seq)} aria-label="Decline">&times;</button>
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+            {settled.map((s) => (
+              <div className="card" key={s.seq} data-suggestion={s.seq} data-merged={s.decision === 'declined'}>
+                <div className="title">{s.summary}</div>
+                <div className="row">
+                  <span className="badge" data-t={s.decision === 'accepted' ? 'review' : 'blocked'}>
+                    {s.decision}
+                  </span>
+                </div>
+                {/* A decline without a reason is just a no. The reason is what makes it answerable. */}
+                {s.reason && <div className="branch">{s.reason}</div>}
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+    </section>
   );
 }
 

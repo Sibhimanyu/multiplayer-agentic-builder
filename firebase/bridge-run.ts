@@ -104,7 +104,7 @@ async function seed(): Promise<void> {
  */
 async function selftest(): Promise<void> {
   const log = new CapturingLogger();
-  const { store, close } = connect(log);
+  const { store, db, close } = connect(log);
   const TASK = 'task_selftest';
   let failed = 0;
   const check = (ok: boolean, label: string) => {
@@ -169,6 +169,21 @@ async function selftest(): Promise<void> {
     const wouldDeliver = events.filter((e) => e.layer !== 'human').map((e) => e.kind);
     check(!wouldDeliver.includes('task_progress'), 'and is EXCLUDED from what the inbox would get');
 
+    // CLEAN UP AFTER ITSELF. This runs against a REAL board that people look at, and four
+    // abandoned "self test" cards had accumulated in Claimed before anyone noticed. A diagnostic
+    // that leaves residue on production is a diagnostic nobody will run twice.
+    //
+    // The claim goes first: deleting a task while a claim still points at it would leave the
+    // claim orphaned, which is exactly the inconsistency the reaper reports rather than fixes.
+    // The LEDGER is deliberately left alone -- events are append-only (A6), and a self-test that
+    // rewrote history to tidy up would break the one property the ledger exists to have.
+    await cleanupSelftest(db, PID, TASK);
+    // Read the COLLECTION, not store.readSnapshot: the store serves a folded snapshot that can
+    // still carry a task deleted a moment ago out from under it. The artifact is the documents.
+    const left = await db.collection('projects').doc(PID).collection('tasks').get();
+    const residue = left.docs.filter((d) => d.id.startsWith(TASK)).map((d) => d.id);
+    check(residue.length === 0, `no self-test residue left on the board (${residue.join(', ') || 'none'})`);
+
     console.log(`\n${failed === 0 ? 'SELFTEST PASSED' : `SELFTEST FAILED (${failed})`}`);
     console.log(`project ${FB_PROJECT} / ${PID}, region asia-south1, real Firestore`);
   } finally {
@@ -212,6 +227,27 @@ async function admit(uid: string): Promise<void> {
   await close();
 }
 
+/**
+ * Remove every self-test task and its claim. Used by --selftest and by --tidy.
+ *
+ * Claims before tasks: a claim pointing at a deleted task is an orphan, and the reaper reports
+ * that inconsistency rather than repairing it. Deleting in the other order would trade visible
+ * litter for invisible litter.
+ */
+async function cleanupSelftest(
+  db: ReturnType<typeof getFirestore>,
+  pid: string,
+  prefix = 'task_selftest',
+): Promise<number> {
+  const tasks = await db.collection('projects').doc(pid).collection('tasks').get();
+  const doomed = tasks.docs.filter((d) => d.id.startsWith(prefix));
+  for (const d of doomed) {
+    await db.collection('projects').doc(pid).collection('claims').doc(d.id).delete();
+    await d.ref.delete();
+  }
+  return doomed.length;
+}
+
 /** Print the board as the store sees it. The read side of the proof. */
 async function board(): Promise<void> {
   const { store, close } = connect(new CapturingLogger());
@@ -228,6 +264,12 @@ if (mode === '--seed') {
   await seed();
 } else if (mode === '--admit') {
   await admit(process.argv[3] ?? '');
+} else if (mode === '--tidy') {
+  // Removes residue left by self-test runs from BEFORE the cleanup above existed.
+  const { db, close } = connect(new CapturingLogger());
+  const n = await cleanupSelftest(db, PID);
+  console.log(`removed ${n} self-test task(s) and their claims from ${PID}`);
+  await close();
 } else if (mode === '--board') {
   await board();
 } else if (mode === '--selftest') {

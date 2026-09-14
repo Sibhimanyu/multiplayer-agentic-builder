@@ -18,6 +18,7 @@
 import type { Firestore, Transaction } from 'firebase-admin/firestore';
 
 import {
+  DEFAULT_ROLES,
   LastOwnerError,
   ProjectExistsError,
   type CreateProjectInput,
@@ -98,6 +99,22 @@ export class FirestoreDirectory implements ProjectDirectory {
         revoked: false,
         added_at: created_at,
       } satisfies StoredMember);
+
+      // THE ROLE POLICY, written at birth. Order 0047.
+      //
+      // acquireScope enforces file_scope only where a policy exists, so writing it here is what
+      // makes every project created through this path bounded. DEFAULT_ROLES is a template, not
+      // a law -- file scope depends on repo layout -- so it is COPIED into the project rather
+      // than referenced, and an owner can later change one project's scopes without changing
+      // anybody else's.
+      for (const def of Object.values(DEFAULT_ROLES)) {
+        tx.create(this.projectRef(input.project_id).collection('roles').doc(def.slug), {
+          slug: def.slug,
+          file_scope: def.file_scope,
+          deploy_scope: def.deploy_scope,
+          capabilities: def.capabilities,
+        });
+      }
     });
 
     this.log.info('directory.project_created', 'project created with its first owner', {
