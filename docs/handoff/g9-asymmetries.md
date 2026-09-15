@@ -164,6 +164,78 @@ Second gotcha, recorded so it is not rediscovered: **`firebase emulators:exec` r
 the CLI's own pkg-bundled Node**, which treats `--test` as a filename. Start the emulator standalone
 and point `FIRESTORE_EMULATOR_HOST` at it instead.
 
+## Entry 78 — a real agent drove the system, and found four defects no script could
+
+**"Indistinguishable from `echo`" is now measured, for the write path.** A real Claude Code session
+wrote to `outbox.jsonl` **without being told the envelope**, and `drainOnce` read it exactly as it
+reads a scripted line: `seq` assigned by the **server** rather than the agent's guess, `layer` from
+`LAYER_OF` rather than the agent's field, cursor advanced to EOF, `task_blocked` on the ledger with
+the agent's own reason. Given a task it could not do, it appended `task_blocked` with a specific
+reason and stopped — the judgement the protocol asks for.
+
+**Four defects, and the reason they were invisible to 400 passing assertions is the finding:**
+*a script does what it is told; an agent does what it is convinced of.* It reads adversarially and
+halts on contradictions.
+
+1. **`AGENTS.md` contradicted the role pack** — "push branches: yes" against "never run git yourself,
+   the bridge does both." Both true of the *system*, only one true of the *agent*. It took the
+   restrictive reading and reported the contradiction unresolved rather than picking.
+2. **`AGENTS.md` asserted something false** — "Contracts you need are already on disk" with an empty
+   directory. **Third instance of this class**, after the webhook string (entry 70) and the
+   `drydock new` command that did not exist (order 0048). Generated prose drifts from reality exactly
+   like UI copy does, and nothing tests prose.
+3. **`builder claim`** — order 0048's rename reached the CLI's own help text and **not the files the
+   CLI generates.** A rename is not done when the binary is renamed.
+4. **The outbox envelope was never specified.** It inferred `{v,seq,layer,kind,ts,body}` and guessed
+   `seq` — and the fields it invented were **exactly the ones the server overrides**, which is why no
+   test had ever needed them written down.
+
+**Honest caveat, stated by the build unprompted:** the scenario was an empty repo, so the agent could
+not do the *work*. **The coordination path ran end to end; the code-writing path has still never been
+driven by a real agent.** Not claimed.
+
+## Entry 79 — OPEN: an agent has no way to claim a task
+
+`current-task.md` names a **CLI command**, the protocol defines **no claim event an agent can
+append**, and the agent **declined to invent one**.
+
+That is the correct behaviour and it exposes a genuine hole. The whole architecture is that an agent
+speaks filesystem and the CLI performs anything atomic — so claiming, which is the most
+contention-sensitive operation in the system, is precisely what an agent must *not* do directly. But
+nothing lets it ask.
+
+**Ruling: the agent appends intent; the bridge performs the claim.** A `claim_requested` line in the
+outbox, the bridge calls the verified `claimTask`, and the outcome returns on the inbox as
+coordination-layer. That keeps the atomic operation where it is already proven contended, keeps the
+agent off the network, and fits the existing envelope rather than widening the agent's powers.
+
+## Entry 80 — an assertion that was vacuous and said PASS
+
+The same-uid-across-logins check **passed on its first run while comparing `undefined === undefined`**
+— `signInWithCustomToken` returns no `localId`. It was caught only because *"the uid exists"* is
+asserted **before** *"the uid matches"*.
+
+**Rule: an equality assertion must first prove both sides exist.** Otherwise a missing field reads as
+agreement, and the test reports the strongest possible result for the weakest possible reason.
+
+The fix also added the contrast that makes the claim meaningful: two **anonymous** sign-ins give
+**different** uids, so "the same uid" is a property of Google identity rather than of the harness.
+
+## Entry 81 — the project id is out of the bundle, checked in the artifact
+
+Direct grep of the built `drydock/dist/drydock.js` for `multiplayer-agents-eec02`: **0**. Asserted
+twice — the build fails if the bundle names any project id from this repo's config, and `packtest.mjs`
+re-checks the **installed** bundle after a tarball install.
+
+Two near-misses worth keeping. The first version used a **shape regex** and flagged `x-agent-token`
+and `rev-parse`; there is no reliable shape for a Firebase project id, and **a check that cries wolf
+gets deleted.** The second nearly shipped comparing against an **empty set** of known ids — it now
+proves it can fire before a pass is trusted.
+
+And the tarball test gained the direction that matters: an **unconfigured install refuses
+`drydock new`** and names `drydock init`, then the same binary succeeds once configured, with `HOME`
+redirected so the sandbox is genuinely fresh.
+
 ## Entry 74 — multi-user auth is deployed, and the enforcement is where the user cannot reach it
 
 ```
