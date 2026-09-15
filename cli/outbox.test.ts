@@ -177,7 +177,10 @@ test('B2b generation is deterministic: same inputs, identical bytes', async () =
 test('B2c AGENTS.md reports merge:no from the role pack', () => {
   const text = renderAgentsMd(ROLE, PROJECT);
   assert.match(text, /merge: no/);
-  assert.match(text, /push branches: yes/);
+  // "branches pushed FOR YOU", not "push branches" — the old wording read as an instruction to
+  // run git, which contradicted the role pack's "never run git yourself". A real agent hit that
+  // contradiction on its first run and stopped to report it rather than guessing.
+  assert.match(text, /branches pushed for you: yes/);
   // If a role ever did carry merge, the file must say so rather than lie — the enforcement is
   // server-side, and a hardcoded "no" here would hide a real misconfiguration.
   const withMerge = renderAgentsMd({ ...ROLE, merge: true }, PROJECT);
@@ -480,7 +483,7 @@ test('reconnecting does not truncate a queued outbox or an unread inbox', async 
   const outboxBefore = await fs.readFile(path.join(root, LAYOUT.outbox), 'utf8');
   const inboxBefore = await fs.readFile(path.join(root, LAYOUT.inbox), 'utf8');
 
-  // A second connect, as would happen on `builder connect` being run twice.
+  // A second connect, as would happen on `drydock connect` being run twice.
   await writeAgenticTree(
     root,
     { role: ROLE, project: PROJECT, task: makeTask('task_items_crud'), state: { agent_id: 'agent_be01', last_seen_seq: 0, last_written_seq: 0 } },

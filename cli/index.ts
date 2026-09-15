@@ -540,6 +540,9 @@ function rolePackFor(me: WhoAmI): RolePack {
 
 const USAGE = `drydock — agentic coordination CLI
 
+  drydock init --project <id>  point this install at a Firebase project
+  drydock login                sign in with Google (--anonymous for a disposable identity)
+
   drydock new <name>           create a project here, connect this repo, write .agentic/
   drydock ls                   projects you are a member of
   drydock members <project_id> the roster
@@ -579,6 +582,17 @@ export function registerProjectCommands(cmds: ProjectCommands): void {
   projectCommands = cmds;
 }
 
+/** `init` and `login`. Injected for the same reason: they touch the SDK, this file must not. */
+export interface AuthCommands {
+  init: (project_id: string, api_key?: string) => Promise<number>;
+  login: (anonymous: boolean) => Promise<number>;
+}
+
+let authCommands: AuthCommands | null = null;
+export function registerAuthCommands(cmds: AuthCommands): void {
+  authCommands = cmds;
+}
+
 export async function main(argv: string[]): Promise<number> {
   const root = process.env.BUILDER_ROOT ?? process.cwd();
   const [cmd, ...rest] = argv;
@@ -590,6 +604,20 @@ export async function main(argv: string[]): Promise<number> {
   };
 
   switch (cmd) {
+    case 'init': {
+      const i = rest.indexOf('--project');
+      const project = i > -1 ? rest[i + 1] : rest.find((a) => !a.startsWith('--'));
+      if (!project) {
+        log.warn('cli.usage_drydock_init', 'usage: drydock init --project <firebase-project-id>');
+        return 1;
+      }
+      if (!authCommands) return needsBackend();
+      const k = rest.indexOf('--api-key');
+      return authCommands.init(project, k > -1 ? rest[k + 1] : undefined);
+    }
+    case 'login':
+      if (!authCommands) return needsBackend();
+      return authCommands.login(rest.includes('--anonymous'));
     case 'new': {
       const name = rest.filter((a) => !a.startsWith('--')).join(' ').trim();
       if (!name) {

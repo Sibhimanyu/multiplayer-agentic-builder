@@ -111,12 +111,21 @@ export function renderAgentsMd(role: RolePack, project: ProjectFile): string {
     '## Your file scope',
     `You may edit:      ${role.may_edit.join(', ')}`,
     `You may not edit:  ${role.may_not_edit.join(', ')}`,
-    `Push to:           ${role.branch_prefix}<task-slug>`,
+    `Branches are named:  ${role.branch_prefix}<task-slug>`,
     '',
     '## How you communicate',
-    `Append one JSON line to ${LAYOUT.outbox}. Never call the network.`,
-    `Read ${LAYOUT.inbox} from the offset in ${LAYOUT.inbox_cursor}.`,
-    `Contracts you need are already on disk in ${LAYOUT.contracts_dir}/.`,
+    `Append one JSON line to ${LAYOUT.outbox}. Never call the network, and never run git —`,
+    'the bridge does both for you. A branch named above is pushed on your behalf.',
+    '',
+    'The line you append needs exactly two fields: `kind` and `body`. Everything else —',
+    '`seq`, `layer`, `ts`, your identity — is assigned by the server. Extra fields are',
+    'ignored rather than rejected, but you do not need to invent them.',
+    '',
+    `Read ${LAYOUT.inbox} from the offset in ${LAYOUT.inbox_cursor}, and write the new`,
+    'offset back when you have read it. That file is yours.',
+    `Published contracts are fetched to ${LAYOUT.contracts_dir}/ BEFORE they are announced`,
+    'to you, so when an inbox line names one, the file is already there. Until then that',
+    'directory is empty, which is normal and not a fault.',
     '',
     'Do not ask other agents questions. If you are blocked, append task_blocked',
     'with a reason and stop. A human will unblock you.',
@@ -126,7 +135,10 @@ export function renderAgentsMd(role: RolePack, project: ProjectFile): string {
     'contract_published naming that file. Do not commit it yourself.',
     '',
     '## Permissions',
-    `push branches: ${yn(role.push_branches)}    open PRs: ${yn(role.open_prs)}    merge: ${yn(role.merge)}`,
+    // "push branches: yes" used to read as an instruction to run git, contradicting the role
+    // pack's "never run git yourself". Both were true of the SYSTEM and only one was true of
+    // the AGENT. A real agent hit the contradiction on its first run and stopped to report it.
+    `branches pushed for you: ${yn(role.push_branches)}    PRs opened for you: ${yn(role.open_prs)}    merge: ${yn(role.merge)}`,
   ];
   // Project name appears nowhere above on purpose: it is in project.json. Interpolating it
   // here would be fine for identity, but every extra field is another chance for the two
@@ -200,7 +212,10 @@ export function renderCurrentTask(task: TaskView | null): string {
     return [
       '# No task claimed',
       '',
-      'You have not claimed a task yet. Run `builder claim <task_id>`, or wait for the',
+      // `builder claim` — the old product name, missed by order 0048's rename because that pass
+      // covered cli/index.ts's own help text and not the files the CLI GENERATES. A real agent
+      // read this, looked for a `builder` binary, and correctly reported that it did not exist.
+      'You have not claimed a task yet. Run `drydock claim <task_id>`, or wait for the',
       'owner to assign one.',
     ].join('\n');
   }

@@ -79,17 +79,41 @@ check(!/\bbuilder\b/.test(help.out), 'and the word "builder" appears nowhere in 
 const bogus = await run(bin, ['definitely-not-a-command'], { cwd: SANDBOX });
 check(bogus.code !== 0, `an unknown subcommand is REFUSED (exit ${bogus.code}) -- so the dispatcher is reading argv`);
 
-console.log('\n4. drydock new, from the installed binary, against a throwaway repo\n');
+console.log('\n4. an UNCONFIGURED install must refuse, not guess\n');
 const demo = path.join(SANDBOX, 'demo-repo');
 await fs.mkdir(demo, { recursive: true });
 await run('git', ['init', '-q'], { cwd: demo });
 await run('git', ['remote', 'add', 'origin', 'https://github.com/Sibhimanyu/inventory-tracker.git'], { cwd: demo });
 
+// HOME is redirected into the sandbox so this exercises a genuinely fresh install and cannot
+// read -- or clobber -- the real ~/.drydock on this machine.
+const FAKE_HOME = path.join(SANDBOX, 'home');
+await fs.mkdir(FAKE_HOME, { recursive: true });
+const cleanEnv = { ...process.env, HOME: FAKE_HOME, DRYDOCK_UID: 'uid_packtest', BUILDER_ROOT: demo };
+delete cleanEnv.DRYDOCK_PROJECT;
+delete cleanEnv.FB_PROJECT_ID;
+
 const name = `Packtest ${Date.now().toString(36)}`;
-const created = await run(bin, ['new', name], {
-  cwd: demo,
-  env: { ...process.env, DRYDOCK_UID: 'uid_packtest', BUILDER_ROOT: demo },
+const unconfigured = await run(bin, ['new', name], { cwd: demo, env: cleanEnv });
+check(unconfigured.code !== 0, `unconfigured \`drydock new\` FAILS (exit ${unconfigured.code}) rather than defaulting`);
+check(/drydock init --project/.test(unconfigured.out), 'and the error names the command to run');
+// THE ARTIFACT AGAIN: the project id must not be recoverable from the shipped bundle even by
+// reading it. Source being clean proved nothing; this is the file a stranger receives.
+const bundle = await fs.readFile(path.join(SANDBOX, 'node_modules', 'drydock-cli', 'dist', 'drydock.js'), 'utf8');
+check(!bundle.includes('multiplayer-agents-eec02'),
+  'and the INSTALLED bundle does not contain the project it was built against');
+
+console.log('\n5. drydock init, then new, from the installed binary\n');
+const apiKey = (await fs.readFile(path.join(repo, 'client', '.env.local'), 'utf8'))
+  .split('\n').find((l) => l.startsWith('VITE_FIREBASE_API_KEY='))?.split('=')[1]?.trim();
+const init = await run(bin, ['init', '--project', 'multiplayer-agents-eec02', '--api-key', apiKey ?? ''], {
+  cwd: demo, env: cleanEnv,
 });
+console.log(init.out.trimEnd().split('\n').filter((l) => !l.startsWith('{')).map((l) => `  | ${l}`).join('\n'));
+check(init.code === 0, `drydock init exits 0 (${init.code})`);
+check(/cloudfunctions\.net\/write/.test(init.out), 'and the write URL is DERIVED from the project id, not stored separately');
+
+const created = await run(bin, ['new', name], { cwd: demo, env: cleanEnv });
 console.log(created.out.trimEnd().split('\n').filter((l) => !l.startsWith('{')).map((l) => `  | ${l}`).join('\n'));
 check(created.code === 0, `drydock new exits 0${created.code ? ` (${created.code})` : ''}`);
 check(/created proj_packtest/.test(created.out), 'it created a project');
