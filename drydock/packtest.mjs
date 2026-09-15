@@ -113,17 +113,30 @@ console.log(init.out.trimEnd().split('\n').filter((l) => !l.startsWith('{')).map
 check(init.code === 0, `drydock init exits 0 (${init.code})`);
 check(/cloudfunctions\.net\/write/.test(init.out), 'and the write URL is DERIVED from the project id, not stored separately');
 
-const created = await run(bin, ['new', name], { cwd: demo, env: cleanEnv });
-console.log(created.out.trimEnd().split('\n').filter((l) => !l.startsWith('{')).map((l) => `  | ${l}`).join('\n'));
-check(created.code === 0, `drydock new exits 0${created.code ? ` (${created.code})` : ''}`);
-check(/created proj_packtest/.test(created.out), 'it created a project');
+// `new` NOW REQUIRES AN IDENTITY, and this file deliberately never logs in.
+//
+// Order 0051 moved project creation off the Admin SDK and onto the user's token, and these
+// assertions -- written when `new` used admin credentials -- were not re-run afterwards. They
+// have been failing silently since. A test only covers what it is re-run against.
+//
+// The division now: PACKTEST proves the PACKAGE (it installs, the bin resolves, the binary runs,
+// it refuses correctly). STRANGER proves the FLOW, including a login. Making packtest log in too
+// would duplicate that and give two places to keep in step.
+const notSignedIn = await run(bin, ['new', name], { cwd: demo, env: cleanEnv });
+console.log(notSignedIn.out.trimEnd().split('\n').filter((l) => !l.startsWith('{')).map((l) => `  | ${l}`).join('\n'));
+check(notSignedIn.code === 1, `installed + configured but NOT logged in: \`new\` refuses (exit ${notSignedIn.code})`);
+check(/not signed in/i.test(notSignedIn.out), 'and says "not signed in"');
+check(/drydock login/.test(notSignedIn.out), 'naming the command to run');
+check(!/default credentials/i.test(notSignedIn.out), 'and not a credentials-library error');
 
-// The ARTIFACT on disk, in the throwaway repo -- not the command's own claim about itself.
+// AND IT WROTE NOTHING. A refusal that had already scaffolded half a project would leave the
+// repo looking set up when it is not -- worse than the error it printed.
 const scaffold = await fs.readFile(path.join(demo, '.agentic', 'project.json'), 'utf8').catch(() => null);
-check(scaffold !== null, '.agentic/project.json exists in the throwaway repo');
-check(/Sibhimanyu\/inventory-tracker/.test(scaffold ?? ''), 'and records the repo it detected from origin');
-const packs = await fs.readdir(path.join(demo, '.agentic', 'roles')).catch(() => []);
-check(packs.length === 6, `six role packs written (${packs.length}): ${packs.join(', ')}`);
+check(scaffold === null, 'and scaffolded NOTHING -- a refused create leaves no .agentic/project.json');
+
+// Creating a project end to end, with a login, is drydock/stranger.mjs. Stated here so the gap
+// is a decision rather than something nobody noticed.
+console.log('\n   (project creation end to end, including login, is drydock/stranger.mjs)');
 
 await fs.rm(tarball, { force: true });
 console.log(`\n${failed === 0 ? 'PACKAGE VERIFIED FROM A TARBALL INSTALL' : `PACK TEST FAILED (${failed})`}`);

@@ -17,7 +17,7 @@ import { boardUrl, fetchApiKey, loadConfig, saveConfig, writeUrl } from '../cli/
 import { loginUrl, loopbackReady, saveCredential, startLoopback } from '../cli/auth.ts';
 import { WriteClient } from '../cli/writeclient.ts';
 import { RemoteDirectory } from '../cli/remotedirectory.ts';
-import { createFirestoreDirectory } from './directory.ts';
+import { ReadClient } from '../cli/readclient.ts';
 import { ProjectExistsError } from '../shared/store/directory.ts';
 import { consoleLogger } from '../shared/log.ts';
 
@@ -27,22 +27,18 @@ import { consoleLogger } from '../shared/log.ts';
 // there for the same reason.
 const uid = () => process.env.DRYDOCK_UID ?? `uid_${process.env.USER ?? 'local'}`;
 
-/**
- * The admin SDK, loaded ONLY when a command actually needs it.
- *
- * `init` and `login` need no backend at all -- init records a project id, login talks to a
- * browser -- and a static import made them pull in firebase-admin anyway. That is how `init`
- * ended up requiring Application Default Credentials: the SDK was already there, so reaching for
- * it looked free. Making the import lazy makes the dependency visible.
- */
-async function connect() {
-  const cfg = await loadConfig();
-  const { deleteApp, initializeApp } = await import('firebase-admin/app');
-  const { getFirestore } = await import('firebase-admin/firestore');
-  const app = initializeApp({ projectId: cfg.project_id }, `drydock-${Date.now()}`);
-  const directory = createFirestoreDirectory({ db: getFirestore(app), log: consoleLogger });
-  return { cfg, directory, close: () => deleteApp(app) };
-}
+// NO ADMIN SDK PATH REMAINS IN THIS BINARY.
+//
+// There used to be a `connect()` helper here that built an admin Firestore client. Making its
+// import lazy stopped `init` and `login` from reaching for Application Default Credentials, but
+// `ls` and `members` still called it -- so on a stranger's machine they printed "Could not load
+// the default credentials", a message about Google's auth library shown to someone whose actual
+// problem was that they had not run `drydock login`.
+//
+// Deleting it rather than fixing its callers is deliberate: while the helper existed, the next
+// command added would reach for it too, and the bug would come back wearing a different name.
+// Every command now takes the user's identity -- writes through the deployed function, reads
+// through firestore.rules -- and there is no third path to fall into.
 
 registerAuthCommands({
   /**
@@ -161,36 +157,36 @@ registerProjectCommands({
     }
   },
 
+  // AS THE SIGNED-IN USER, through the security rules -- not the Admin SDK.
+  //
+  // These two used connect(), which builds an admin client and therefore reaches for Application
+  // Default Credentials. On a stranger's machine that produced "Could not load the default
+  // credentials" instead of "not signed in", which is a message about Google's auth library shown
+  // to someone whose actual problem was that they had not run `drydock login`.
   async ls() {
-    const { directory, close } = await connect();
-    try {
-      const projects = await directory.listProjects(uid());
-      if (projects.length === 0) {
-        console.log(`no projects for ${uid()}. Run \`drydock new <name>\` in your repo.`);
-      } else {
-        console.log(`projects for ${uid()}:\n`);
-        for (const p of projects) {
-          console.log(`  ${p.role.padEnd(9)} ${p.project_id.padEnd(28)} ${p.repo_url}`);
-        }
+    const cfg = await loadConfig();
+    const projects = await new ReadClient({ project_id: cfg.project_id, api_key: cfg.api_key })
+      .listProjects();
+    if (projects.length === 0) {
+      console.log('no projects yet. Run `drydock new <name>` in your repo.');
+    } else {
+      console.log('your projects:\n');
+      for (const p of projects) {
+        console.log(`  ${p.role.padEnd(9)} ${p.project_id.padEnd(28)} ${p.repo_url}`);
       }
-      return 0;
-    } finally {
-      await close();
     }
+    return 0;
   },
 
   async members(project_id) {
-    const { directory, close } = await connect();
-    try {
-      const members = await directory.listMembers(project_id);
-      if (members.length === 0) console.log(`no members, or ${project_id} does not exist.`);
-      for (const m of members) {
-        console.log(`  ${m.role.padEnd(9)} ${m.uid.padEnd(24)} ${m.label}${m.revoked ? '  (revoked)' : ''}`);
-      }
-      return 0;
-    } finally {
-      await close();
+    const cfg = await loadConfig();
+    const members = await new ReadClient({ project_id: cfg.project_id, api_key: cfg.api_key })
+      .listMembers(project_id);
+    if (members.length === 0) console.log(`no members, or ${project_id} does not exist.`);
+    for (const m of members) {
+      console.log(`  ${m.role.padEnd(9)} ${m.uid.padEnd(24)} ${m.label}${m.revoked ? '  (revoked)' : ''}`);
     }
+    return 0;
   },
 });
 

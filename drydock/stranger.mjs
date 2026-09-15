@@ -88,6 +88,58 @@ check(!/\bat .*\.js:\d+/.test(bare.out) && !/\^\s*$/m.test(bare.out),
 const dbg = await run(bin, ['ls'], { cwd: SANDBOX, env: { ...env, DRYDOCK_DEBUG: '1' } });
 check(/at /.test(dbg.out), 'DRYDOCK_DEBUG=1 does show the stack, for whoever has to fix it');
 
+// ---------------------------------------------------------------- 2b. NOT-SIGNED-IN, per command
+//
+// `ls` and `members` shipped broken while this test was green, because it never ran them
+// unauthenticated. Both fell through to Application Default Credentials and printed a message
+// about Google's auth library to someone who had simply not logged in.
+//
+// ASSERT THE MESSAGE, NOT THE EXIT CODE. An ADC crash also exits 1, so exit status cannot tell
+// "asked you to log in" from "crashed looking for credentials" -- and that distinction IS the
+// bug. A test that only checked the exit code would have passed throughout.
+console.log('\n2b. every command that needs an identity says so, once configured but not signed in');
+const cfgOnlyHome = path.join(SANDBOX, 'home-cfg');
+await fs.mkdir(path.join(cfgOnlyHome, '.drydock'), { recursive: true });
+await fs.writeFile(
+  path.join(cfgOnlyHome, '.drydock', 'config.json'),
+  JSON.stringify({ project_id: FB_PROJECT, api_key: 'AIzaPlaceholder', region: 'us-central1' }),
+);
+const cfgEnv = strangerEnv({ HOME: cfgOnlyHome });
+
+for (const args of [['ls'], ['members', 'proj_anything'], ['new', 'Some Project']]) {
+  const r = await run(bin, args, { cwd: SANDBOX, env: cfgEnv });
+  const label = `drydock ${args[0]}`;
+  check(/not signed in/i.test(r.out), `${label}: says "not signed in"`);
+  check(/drydock login/.test(r.out), `${label}: and names \`drydock login\``);
+  check(!/default credentials/i.test(r.out), `${label}: and does NOT mention default credentials`);
+}
+
+// ---------------------------------------------------------------- 2c. THE SWEEP
+//
+// A per-command list goes stale the moment someone adds a command. This asks the binary what
+// commands it has -- from its own --help -- and holds every one of them to the rule.
+console.log('\n2c. sweep: NO command leaks a credentials error under a scrubbed environment');
+const helpText = (await run(bin, ['--help'], { cwd: SANDBOX, env: cfgEnv })).out;
+const discovered = [...helpText.matchAll(/^\s{2}drydock\s+([a-z-]+)/gm)].map((m) => m[1]);
+check(discovered.length >= 6, `discovered ${discovered.length} commands from --help: ${discovered.join(', ')}`);
+
+const leaks = [];
+for (const cmd of discovered) {
+  // `login` opens a browser and blocks on the loopback; it is excluded by NAME and the exclusion
+  // is printed, so it cannot quietly grow to cover a command that should have been checked.
+  if (cmd === 'login') continue;
+  const r = await run(bin, [cmd, 'arg-if-needed'], { cwd: SANDBOX, env: cfgEnv });
+  if (/default credentials/i.test(r.out)) leaks.push(cmd);
+}
+check(leaks.length === 0, `no command mentions "default credentials" (leaking: ${leaks.join(', ') || 'none'})`);
+console.log('        excluded by name: login (opens a browser and blocks on the loopback)');
+
+// THE CONTROL for the sweep. "No command printed it" is vacuous unless the check can detect it
+// printing. This is the exact string the broken build emitted, run through the exact predicate.
+const KNOWN_LEAK = 'drydock: Could not load the default credentials. Browse to https://cloud.google.com/...';
+check(/default credentials/i.test(KNOWN_LEAK),
+  'the leak detector FIRES on the string the broken build actually printed');
+
 // ---------------------------------------------------------------- 3. init
 console.log('\n3. drydock init -- must need NO credentials');
 const init = await run(bin, ['init', '--project', FB_PROJECT], { cwd: SANDBOX, env });
