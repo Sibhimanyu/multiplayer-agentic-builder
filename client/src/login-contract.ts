@@ -24,6 +24,8 @@ export interface LoginParams {
   port: number;
   nonce: string;
   anonymous: boolean;
+  /** `?popup=1` opts into signInWithPopup. Redirect is the default; see Login.tsx. */
+  popup: boolean;
 }
 
 export type ParseResult =
@@ -65,7 +67,7 @@ export function parseLoginParams(search: string): ParseResult {
   // `anonymous=1`. Both are read, because the CLI is what actually opens this page and a flag
   // understood only one way works until someone compares it with the spec.
   const anonymous = q.get('provider') === 'anonymous' || q.get('anonymous') === '1';
-  return { ok: true, params: { port, nonce, anonymous } };
+  return { ok: true, params: { port, nonce, anonymous, popup: q.get('popup') === '1' } };
 }
 
 export interface CredentialPayload {
@@ -101,13 +103,37 @@ export async function payloadFor(nonce: string, user: SignedInUser): Promise<Cre
   };
 }
 
-export type PostOutcome = { ok: true } | { ok: false; status: number | null; reason: string };
+/**
+ * `recoverable` means RECOVERABLE IN THIS PAGE, with what it already has.
+ *
+ * It is the difference between offering a retry button and telling the user to go back to their
+ * terminal, and it has to be decided per failure rather than guessed from severity. Telling
+ * someone to retry when the nonce is burned is a loop they cannot leave; telling them to re-run a
+ * command when a button would have worked sends them to a terminal for nothing.
+ */
+export type PostOutcome =
+  | { ok: true }
+  | { ok: false; status: number | null; reason: string; recoverable: boolean };
+
+/**
+ * Is this a WebKit browser that is not Chrome?
+ *
+ * Used ONLY to decide which explanation to put first when the POST fails, never to decide what
+ * the page does. A wrong guess reorders two sentences and hides nothing.
+ *
+ * Chrome and Edge on macOS both carry "Safari" and "AppleWebKit" in their user agent, so they
+ * have to be excluded by name or every Chrome user is told to switch to Chrome.
+ */
+export function looksLikeWebKit(ua: string): boolean {
+  return /AppleWebKit/.test(ua) && !/Chrome|Chromium|Edg\//.test(ua);
+}
 
 /** Hand the credential to the waiting CLI. */
 export async function postCredential(
   port: number,
   payload: CredentialPayload,
   fetchImpl: typeof fetch = fetch,
+  ua: string = typeof navigator === 'undefined' ? '' : navigator.userAgent,
 ): Promise<PostOutcome> {
   let res: Response;
   try {
@@ -117,28 +143,125 @@ export async function postCredential(
       body: JSON.stringify(payload),
     });
   } catch (err) {
-    // Much the commonest real cause: the CLI stopped waiting, so nothing is listening.
+    // TWO CAUSES, INDISTINGUISHABLE FROM HERE. The fetch throws the same opaque "Load failed"
+    // whether the CLI has exited or the browser refused to make the request at all:
+    //
+    //   - the CLI stopped waiting, so nothing is listening; or
+    //   - the BROWSER BLOCKED IT. WebKit treats http://127.0.0.1 from an https page as mixed
+    //     content and blocks it outright. Chrome does not -- it follows the Secure Contexts spec,
+    //     under which loopback is potentially trustworthy. Measured, in both engines:
+    //     firebase/login-webkit.mjs section 4 and firebase/login-browser.mjs section 3.
+    //
+    // Both are named, because guessing wrong and printing only one leaves the user re-running a
+    // command that cannot work. Neither is recoverable by a retry button in this page, so the
+    // page must say what WOULD work instead -- which, in the blocked case, is another browser.
+    const webkit = looksLikeWebKit(ua);
+    const blocked = 'This browser may have blocked the request: Safari refuses connections from '
+      + 'an https page to http://127.0.0.1. Opening this same link in Chrome will work.';
+    const gone = `The CLI may have stopped waiting — check the terminal running \`flotilla login\`.`;
     return {
       ok: false,
       status: null,
-      reason:
-        `Could not reach the flotilla CLI on port ${port}. ` +
-        `Is \`flotilla login\` still running in your terminal? (${(err as Error).message})`,
+      recoverable: false,
+      reason: `Could not reach the flotilla CLI on port ${port}. `
+        + (webkit ? `${blocked} ${gone}` : `${gone} ${blocked}`)
+        + ` (${(err as Error).message})`,
     };
   }
   if (res.status === 403) {
-    return { ok: false, status: 403, reason: 'The CLI rejected the nonce. Run `flotilla login` again.' };
+    // The nonce is wrong or spent. The CLI will never accept it, so a retry button here would be
+    // a button that cannot work.
+    return {
+      ok: false, status: 403, recoverable: false,
+      reason: 'The CLI rejected the nonce. This login link can no longer be used.',
+    };
   }
   if (res.status === 409) {
-    return { ok: false, status: 409, reason: 'That login was already completed. You can close this tab.' };
+    return {
+      ok: false, status: 409, recoverable: false,
+      reason: 'That login was already completed. You can close this tab.',
+    };
   }
   if (res.status === 400) {
-    return { ok: false, status: 400, reason: 'The CLI could not read the credential this page sent.' };
+    // The nonce was right and the credential was not usable. The CLI deliberately does NOT burn
+    // the nonce on this path, so signing in again and re-posting genuinely can succeed.
+    return {
+      ok: false, status: 400, recoverable: true,
+      reason: 'The CLI could not read the credential this page sent.',
+    };
   }
   if (!res.ok) {
-    return { ok: false, status: res.status, reason: `The CLI refused the credential (HTTP ${res.status}).` };
+    return {
+      ok: false, status: res.status, recoverable: true,
+      reason: `The CLI refused the credential (HTTP ${res.status}).`,
+    };
   }
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Surviving the redirect
+//
+// signInWithRedirect is a TOP-LEVEL NAVIGATION: this page is unloaded, Google takes over, and the
+// browser comes back to /login carrying Google's query parameters rather than the CLI's. The port
+// and nonce have to be waiting when it returns.
+//
+// sessionStorage, not localStorage: the value is scoped to this tab and dies with it. A nonce
+// left in localStorage would outlive the login it belongs to and be found by the next one.
+// ---------------------------------------------------------------------------------------------
+
+export const PENDING_KEY = 'flotilla.login.pending';
+
+/** Just enough of the Storage interface to be handed a fake one in a test. */
+export interface KeyValueStore {
+  getItem: (k: string) => string | null;
+  setItem: (k: string, v: string) => void;
+  removeItem: (k: string) => void;
+}
+
+/**
+ * Remember the CLI's port and nonce BEFORE navigating away.
+ *
+ * Called before signInWithRedirect, never after: once the navigation starts this code is gone,
+ * and a nonce that was not written by then is a login that comes back as "malformed nonce" --
+ * a worse failure than the blocked popup being fixed, because it looks like the CLI's fault.
+ */
+export function stashPendingLogin(store: KeyValueStore, params: LoginParams): void {
+  store.setItem(PENDING_KEY, JSON.stringify({ ...params, stashed_at: new Date().toISOString() }));
+}
+
+/**
+ * Recover them on the way back.
+ *
+ * Re-validated rather than trusted: sessionStorage is writable by any script on this origin, and
+ * a value that arrives malformed must fail the same way a malformed URL does instead of being
+ * posted at a port it made up.
+ */
+export function readPendingLogin(store: KeyValueStore | null | undefined): LoginParams | null {
+  if (!store) return null;
+  let raw: string | null;
+  try {
+    raw = store.getItem(PENDING_KEY);
+  } catch {
+    return null; // Safari throws on storage access in some privacy modes rather than returning null
+  }
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw) as Record<string, unknown>;
+    const check = parseLoginParams(
+      `?port=${encodeURIComponent(String(v.port))}&nonce=${encodeURIComponent(String(v.nonce))}` +
+        `${v.anonymous ? '&anonymous=1' : ''}${v.popup ? '&popup=1' : ''}`,
+    );
+    return check.ok ? check.params : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearPendingLogin(store: KeyValueStore | null | undefined): void {
+  try {
+    store?.removeItem(PENDING_KEY);
+  } catch { /* see readPendingLogin */ }
 }
 
 /**
@@ -151,33 +274,81 @@ export async function postCredential(
 export type LoginState =
   | { step: 'ready'; params: LoginParams }
   | { step: 'signing-in'; params: LoginParams }
+  /** Back from Google, resolving the redirect result. The URL now carries Google's parameters. */
+  | { step: 'returning'; params: LoginParams }
   | { step: 'posting'; params: LoginParams }
   | { step: 'done'; uid: string; email?: string }
-  | { step: 'error'; at: string; detail: string };
+  /**
+   * `params` is present exactly when the page can try again itself. Carrying the port and nonce
+   * on the error state is what makes the retry button possible: the thing needed to retry is
+   * already in hand, so there is nothing to go back to the terminal for.
+   */
+  | { step: 'error'; at: string; detail: string; params?: LoginParams };
 
 /**
- * The first frame, computed synchronously from the URL.
+ * The first frame, computed synchronously from the URL and whatever a redirect left behind.
  *
- * Deliberately not an effect: rendering "checking…" and then an error one tick later means the
- * server-rendered assertions could only ever see the placeholder, and a user on a bad link would
- * watch a spinner before being told the link was unreadable from the start.
+ * Not an effect: a server render could only ever see the placeholder, and a user on a bad link
+ * would watch a spinner before being told the link was unreadable from the start.
+ *
+ * THE ORDER OF THESE TWO CHECKS IS THE WHOLE REDIRECT FLOW. On the way out the URL has the CLI's
+ * parameters; on the way back it has Google's, and the CLI's are in sessionStorage. Reading the
+ * URL first and the stash second covers both without either knowing about the other.
  */
-export function initialLoginState(search: string): LoginState {
+export function initialLoginState(search: string, store?: KeyValueStore | null): LoginState {
   const parsed = parseLoginParams(search);
-  if (!parsed.ok) return { step: 'error', at: 'the login link', detail: parsed.error };
-  return { step: 'ready', params: parsed.params };
+  if (parsed.ok) return { step: 'ready', params: parsed.params };
+
+  const pending = readPendingLogin(store);
+  if (pending) return { step: 'returning', params: pending };
+
+  // No usable link and nothing pending. Not recoverable in the page -- there is no port to post
+  // to and no nonce to echo -- so no `params`, and the render names the command instead.
+  return { step: 'error', at: 'the login link', detail: parsed.error };
 }
 
-/** Sign-in failures the user can act on, separated from the ones they can only report. */
-export function signInFailure(err: unknown): string {
+export interface SignInFailure {
+  detail: string;
+  /** Can the page itself do anything about it? Drives the retry button. */
+  recoverable: boolean;
+}
+
+/**
+ * Sign-in failures, and whether a retry button would do anything.
+ *
+ * The popup codes are kept even though redirect is now the default: `?popup=1` still reaches
+ * signInWithPopup, and a stale tab can still be mid-popup when this ships.
+ */
+export function signInFailure(err: unknown): SignInFailure {
   const code = (err as { code?: string } | undefined)?.code ?? '';
-  if (code === 'auth/popup-closed-by-user') return 'The sign-in window was closed before it finished.';
-  if (code === 'auth/cancelled-popup-request') return 'The sign-in window was replaced by another one.';
-  if (code === 'auth/popup-blocked') {
-    return 'Your browser blocked the sign-in popup. Allow popups for this site, then try again.';
+  switch (code) {
+    case 'auth/popup-closed-by-user':
+      return { detail: 'The sign-in window was closed before it finished.', recoverable: true };
+    case 'auth/cancelled-popup-request':
+      return { detail: 'The sign-in window was replaced by another one.', recoverable: true };
+    case 'auth/popup-blocked':
+      // THE BUG FROM ORDER 0056. Still reachable via ?popup=1, and now it says the thing that is
+      // actually true: press the button, this page will use a redirect instead. It does not ask
+      // the user to go and change a browser setting.
+      return {
+        detail: 'Your browser blocked the sign-in popup. Trying again will use a full-page ' +
+          'redirect instead, which browsers do not block.',
+        recoverable: true,
+      };
+    case 'auth/network-request-failed':
+      return { detail: 'The network request to Firebase failed.', recoverable: true };
+    case 'auth/operation-not-allowed':
+      // A project configuration problem. Retrying cannot enable a sign-in provider.
+      return { detail: 'This sign-in method is not enabled on the Firebase project.', recoverable: false };
+    case 'auth/unauthorized-domain':
+      return {
+        detail: 'This domain is not in the Firebase project\'s authorised domains.',
+        recoverable: false,
+      };
+    default:
+      // Unknown failures are treated as recoverable ON PURPOSE. Offering a button that might not
+      // help costs a click; withholding one that would have helped strands the user, which is
+      // exactly the dead end being fixed.
+      return { detail: code || (err as Error)?.message || String(err), recoverable: true };
   }
-  if (code === 'auth/operation-not-allowed') {
-    return 'This sign-in method is not enabled on the Firebase project.';
-  }
-  return code || (err as Error)?.message || String(err);
 }

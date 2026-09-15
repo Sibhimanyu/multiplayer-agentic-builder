@@ -16,7 +16,11 @@
 //            payload shape is asserted against a Google-shaped user.
 //
 // The browser half -- that a page served over https may POST to http://127.0.0.1 at all -- is not
-// decidable here and is verified in a real browser by firebase/login-browser.mjs.
+// decidable here, because node's fetch has no mixed-content policy. It is browser-specific and
+// the two answers DISAGREE:
+//   Chrome  allows it (firebase/login-browser.mjs)  -- loopback is a potentially trustworthy origin
+//   WebKit  BLOCKS it (firebase/login-webkit.mjs)   -- it is treated as plain mixed content
+// So everything below passing says nothing about whether a Safari user can log in.
 //
 //   node firebase/login-loopback.mjs
 import fs from 'node:fs/promises';
@@ -26,7 +30,8 @@ import path from 'node:path';
 import { startLoopback, loopbackReady, mintIdToken, saveCredential, loadCredential, loginUrl }
   from '../cli/auth.ts';
 import {
-  parseLoginParams, payloadFor, postCredential, initialLoginState, signInFailure,
+  PENDING_KEY, clearPendingLogin, initialLoginState, parseLoginParams, payloadFor, postCredential,
+  looksLikeWebKit, readPendingLogin, signInFailure, stashPendingLogin,
 } from '../client/src/login-contract.ts';
 
 let failed = 0;
@@ -244,21 +249,166 @@ console.log('\n6. when the CLI has stopped waiting, the page says so');
     nonce: 'q'.repeat(43), refresh_token: 'r', id_token: 'i', uid: 'u',
   });
   check(!out.ok && out.status === null, 'a dead listener is a transport failure, not a silent success');
-  check(/flotilla login/.test(out.reason), `and the message names the command to re-run: "${out.reason}"`);
+  check(/stopped waiting/.test(out.reason), 'and names the CLI having stopped as a cause');
+  // BOTH causes, always. The fetch failure is identical whether the CLI exited or WebKit blocked
+  // the request as mixed content, and printing only one sends half of all users to re-run a
+  // command that cannot work in their browser.
+  check(/Chrome/.test(out.reason) && /https page to http:\/\/127\.0\.0\.1/.test(out.reason),
+    'and names the browser blocking it as the other, with what to do about it');
+
+  // Which explanation comes FIRST follows the user agent. It only reorders; nothing is hidden.
+  const safariUA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 '
+    + '(KHTML, like Gecko) Version/18.5 Safari/605.1.15';
+  const chromeUA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
+    + '(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
+  check(looksLikeWebKit(safariUA), 'Safari is detected as WebKit');
+  check(!looksLikeWebKit(chromeUA),
+    'and Chrome on macOS is NOT, despite carrying "Safari" and "AppleWebKit" in its UA');
+  const inSafari = await postCredential(port, { nonce: 'q'.repeat(43), refresh_token: 'r', id_token: 'i', uid: 'u' }, fetch, safariUA);
+  const inChrome = await postCredential(port, { nonce: 'q'.repeat(43), refresh_token: 'r', id_token: 'i', uid: 'u' }, fetch, chromeUA);
+  check(inSafari.reason.indexOf('blocked') < inSafari.reason.indexOf('stopped waiting'),
+    'in Safari the browser-blocked explanation comes first');
+  check(inChrome.reason.indexOf('stopped waiting') < inChrome.reason.indexOf('blocked'),
+    'in Chrome the CLI-stopped explanation comes first');
+  // The command to re-run is no longer in this string. It belongs to the RENDER, which shows it
+  // only on failures a retry cannot fix -- putting it here as well would have printed "run
+  // flotilla login" next to a Try again button on recoverable failures too.
+  check(out.recoverable === false, 'and is marked unrecoverable, so the page names the command instead');
   lb.result.catch(() => {});
 }
 
 // ============================================================ 7. failure messages exist
-console.log('\n7. every sign-in failure has words');
-for (const [code, expect] of [
-  ['auth/popup-closed-by-user', /closed/i],
-  ['auth/popup-blocked', /popup/i],
-  ['auth/operation-not-allowed', /not enabled/i],
+console.log('\n7. every sign-in failure has words, and says whether a retry would help');
+for (const [code, expect, recoverable] of [
+  ['auth/popup-closed-by-user', /closed/i, true],
+  ['auth/popup-blocked', /redirect/i, true],
+  ['auth/network-request-failed', /network/i, true],
+  ['auth/operation-not-allowed', /not enabled/i, false],
+  ['auth/unauthorized-domain', /authorised domains/i, false],
 ]) {
-  const msg = signInFailure({ code });
-  check(expect.test(msg), `${code} → "${msg}"`);
+  const f = signInFailure({ code });
+  check(expect.test(f.detail), `${code} → "${f.detail}"`);
+  check(f.recoverable === recoverable,
+    `  → ${recoverable ? 'offers a retry' : 'does NOT offer a retry (a button could not fix it)'}`);
 }
-check(signInFailure(new Error('network fell over')).length > 0, 'an unknown failure still says something');
+{
+  const f = signInFailure(new Error('network fell over'));
+  check(f.detail.length > 0, 'an unknown failure still says something');
+  // Unknown failures lean toward offering the button: a click that may not help costs little,
+  // stranding the user is the bug being fixed.
+  check(f.recoverable === true, 'and still offers a way forward');
+}
+
+// ============================================================ 8. surviving the redirect
+//
+// ORDER 0056'S CENTRAL RISK. signInWithRedirect unloads this page; Google brings the browser back
+// to /login with ITS OWN query string, so the CLI's port and nonce are gone from the URL. If they
+// do not survive, a working login returns as "malformed nonce" -- a worse bug than the blocked
+// popup, because it reads as the CLI's fault.
+//
+// Simulated exactly that way: stash, then throw the URL away and replace it with Google's.
+console.log('\n8. the port and nonce survive the round trip to Google');
+{
+  // A real sessionStorage, minus the browser: the same three methods the page uses.
+  const makeStore = () => {
+    const m = new Map();
+    return {
+      getItem: (k) => (m.has(k) ? m.get(k) : null),
+      setItem: (k, v) => m.set(k, String(v)),
+      removeItem: (k) => m.delete(k),
+      _map: m,
+    };
+  };
+
+  const store = makeStore();
+  const lb = startLoopback({ log, timeout_ms: 10_000 });
+  const port = await loopbackReady(lb);
+
+  // --- outbound leg: the CLI's URL ---
+  const outbound = new URL(`${loginUrl('https://example.web.app', port, lb.nonce)}&provider=google`).search;
+  const before = initialLoginState(outbound, store);
+  check(before.step === 'ready', 'outbound: the CLI\'s link renders the sign-in button');
+  stashPendingLogin(store, before.params);
+  check(!!store.getItem(PENDING_KEY), 'the port and nonce are stashed BEFORE the navigation');
+
+  // --- Google's return leg. The CLI's query string is GONE. ---
+  //
+  // This is what Firebase's redirect handler actually comes back with.
+  const googles = '?state=AMbdmDl7&code=4/0AeanS0abc&scope=email%20profile&authuser=0&prompt=consent';
+  check(!parseLoginParams(googles).ok, 'Google\'s own query string does NOT parse as a login link');
+
+  const after = initialLoginState(googles, store);
+  check(after.step === 'returning', `the page knows it is a return leg, not a bad link (${after.step})`);
+  check(after.params.port === port, `the port survived (${after.params.port})`);
+  check(after.params.nonce === lb.nonce, 'and the nonce survived VERBATIM');
+  check(after.params.anonymous === false && after.params.popup === false, 'along with the provider choice');
+
+  // THE POINT OF ALL OF IT: the restored nonce is one the REAL CLI accepts. Asserted against the
+  // listener rather than against the string it was stashed from -- comparing the value to itself
+  // would pass even if both halves were wrong.
+  const out = await postCredential(after.params.port, {
+    nonce: after.params.nonce, refresh_token: 'r_after_redirect', id_token: 'i', uid: 'u_after_redirect',
+  });
+  check(out.ok, `the CLI accepts the restored nonce (${out.ok ? '200' : out.status})`);
+  const got = await lb.result;
+  check(got.uid === 'u_after_redirect', 'and resolves the login the redirect started');
+  lb.close();
+
+  clearPendingLogin(store);
+  check(store.getItem(PENDING_KEY) === null, 'the stash is cleared once the credential is delivered');
+
+  // THE CONTROL. All of the above is vacuous unless a MISSING stash actually fails -- otherwise
+  // the "returning" state could be arriving from somewhere else entirely.
+  const cold = initialLoginState(googles, makeStore());
+  check(cold.step === 'error', 'with nothing stashed, Google\'s query string IS an error (the control)');
+  check(!cold.params, 'and that error offers no retry, because there is no nonce to retry with');
+
+  // A stash that is corrupt must fail like a bad URL, not be trusted. sessionStorage is writable
+  // by anything on this origin.
+  for (const [bad, label] of [
+    ['not json at all', 'unparseable'],
+    ['{"port":0,"nonce":"' + 'n'.repeat(43) + '"}', 'port 0'],
+    ['{"port":51234,"nonce":"short"}', 'truncated nonce'],
+    ['{"port":"../../etc","nonce":"' + 'n'.repeat(43) + '"}', 'a non-numeric port'],
+  ]) {
+    const s = makeStore();
+    s.setItem(PENDING_KEY, bad);
+    check(readPendingLogin(s) === null, `a corrupt stash is refused: ${label}`);
+  }
+  // Control: the same reader accepts a good one.
+  const good = makeStore();
+  stashPendingLogin(good, { port: 51234, nonce: 'n'.repeat(43), anonymous: false, popup: false });
+  check(readPendingLogin(good)?.port === 51234, 'and a well-formed stash is read back (the control)');
+}
+
+// ============================================================ 9. the dead end is gone
+//
+// Order 0056 in one assertion: the failure that stranded the user now carries what a retry needs,
+// and the failures a retry cannot fix still do not pretend otherwise.
+console.log('\n9. every failure either offers a retry or explains why it cannot');
+{
+  const params = { port: 51234, nonce: 'p'.repeat(43), anonymous: false, popup: false };
+  const blocked = signInFailure({ code: 'auth/popup-blocked' });
+  check(blocked.recoverable, 'a blocked popup is recoverable IN THE PAGE (it was a dead end)');
+  check(/redirect/i.test(blocked.detail) && !/allow popups/i.test(blocked.detail),
+    'and no longer tells the user to go and change a browser setting');
+
+  const lb = startLoopback({ log, timeout_ms: 10_000 });
+  const p = await loopbackReady(lb);
+  const spent = await postCredential(p, { nonce: 'w'.repeat(43), refresh_token: 'r', id_token: 'i', uid: 'u' });
+  check(spent.status === 403 && spent.recoverable === false,
+    'a rejected nonce is NOT recoverable -- a retry button there could never work');
+  const unusable = await postCredential(p, { nonce: lb.nonce, refresh_token: '', id_token: '', uid: '' });
+  check(unusable.status === 400 && unusable.recoverable === true,
+    'a 400 IS recoverable -- the CLI deliberately does not burn the nonce on that path');
+  lb.close();
+  lb.result.catch(() => {});
+
+  const dead = await postCredential(p, { nonce: lb.nonce, refresh_token: 'r', id_token: 'i', uid: 'u' });
+  check(dead.status === null && dead.recoverable === false,
+    'a CLI that has stopped waiting is NOT recoverable in the browser');
+  void params;
+}
 
 await fs.rm(HOME, { recursive: true, force: true });
 await authMod.signOut(auth).catch(() => {});

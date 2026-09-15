@@ -14,6 +14,7 @@ import { BoardView, ProjectsIndex, blockedChain, isLoginPath, projectIdFromPath 
 import { TriagePanel } from '../src/components';
 import { LoginView } from '../src/Login';
 import type { LoginState } from '../src/login-contract';
+import { authDomainFor } from '../src/store/firebase';
 import type {
   AgentPresence, ContractPointer, Freshness, Snapshot, TaskStatus, TaskView,
 } from '../src/store/types';
@@ -298,7 +299,7 @@ const render = (snap: Snapshot, freshness: Freshness = LIVE, selected: string | 
 // What it cannot see is the transitions; those are driven against the real listener by
 // firebase/login-loopback.mjs.
 {
-  const params = { port: 51234, nonce: 'n'.repeat(43), anonymous: false };
+  const params = { port: 51234, nonce: 'n'.repeat(43), anonymous: false, popup: false };
   const view = (state: LoginState) => renderToStaticMarkup(<LoginView state={state} />);
 
   const ready = view({ step: 'ready', params });
@@ -324,17 +325,55 @@ const render = (snap: Snapshot, freshness: Freshness = LIVE, selected: string | 
   const anonDone = view({ step: 'done', uid: 'uid_abc' });
   check(/Signed in\./.test(anonDone), 'login: success with no email reads cleanly, not "Signed in as ."');
 
-  // Every error names WHICH STEP failed and what to do. A page that says only "login failed"
-  // leaves three places to look for one fact.
+  // Every error names WHICH STEP failed. A page that says only "login failed" leaves three
+  // places to look for one fact.
   for (const [at, detail] of [
     ['the login link', 'The login link has no nonce.'],
-    ['sign-in', 'Your browser blocked the sign-in popup. Allow popups for this site, then try again.'],
+    ['sign-in', 'Google would not sign you in.'],
     ['handing the credential to the CLI', 'Could not reach the flotilla CLI on port 51234.'],
   ] as const) {
     const err = view({ step: 'error', at, detail });
     check(err.includes(`Login failed at ${at}.`), `login: the error names the step "${at}"`);
     check(err.includes(detail), 'login:   and carries the detail');
-    check(err.includes('flotilla login'), 'login:   and the command that starts a real one');
+  }
+
+  // ---- order 0056: the dead end ----
+  //
+  // The page must offer a way out when there is one, and must not pretend there is one when
+  // there is not. `params` on the error state is what distinguishes them, and both halves are
+  // asserted because either alone would pass a page that always did the same thing.
+  {
+    const recoverable = view({
+      step: 'error', at: 'sign-in', params,
+      detail: 'Your browser blocked the sign-in popup.',
+    });
+    check(recoverable.includes('Try again'), 'login: a recoverable failure offers a RETRY BUTTON');
+    check(recoverable.includes('51234'), 'login:   and says the terminal is still waiting on the port');
+    check(!/Start a new login from your terminal/.test(recoverable),
+      'login:   and does NOT send the user to a terminal they do not need');
+
+    const terminal = view({
+      step: 'error', at: 'handing the credential to the CLI',
+      detail: 'The CLI rejected the nonce. This login link can no longer be used.',
+    });
+    check(!terminal.includes('Try again'),
+      'login: an unrecoverable failure offers NO retry button -- it could not work');
+    check(terminal.includes('flotilla login'), 'login:   and names the command that starts a real login');
+    check(/cannot be retried from here/.test(terminal), 'login:   and says plainly why');
+  }
+
+  // Redirect, not popup: the outbound screen must not promise a popup, because it does not open
+  // one. The words on the page are the only thing telling the user what is about to happen.
+  {
+    const ready = view({ step: 'ready', params });
+    check(/sent to Google and brought back/i.test(ready), 'login: the button explains the redirect');
+    check(!/popup|pop-up/i.test(ready), 'login: and never mentions a popup');
+    const signingIn = view({ step: 'signing-in', params });
+    check(/Taking you to Google/i.test(signingIn), 'login: the in-flight state describes a navigation');
+    check(!/popup|pop-up/i.test(signingIn), 'login:   not a window that may not exist');
+
+    const returning = view({ step: 'returning', params });
+    check(/Back from Google/i.test(returning), 'login: the return leg has a state of its own');
   }
 
   // A SILENT BLANK PAGE IS THE BUG BEING FIXED. Assert no state renders an empty shell -- a
@@ -342,7 +381,8 @@ const render = (snap: Snapshot, freshness: Freshness = LIVE, selected: string | 
   // the volume turned down.
   const states: LoginState[] = [
     { step: 'ready', params }, { step: 'ready', params: { ...params, anonymous: true } },
-    { step: 'signing-in', params }, { step: 'posting', params },
+    { step: 'signing-in', params }, { step: 'returning', params }, { step: 'posting', params },
+    { step: 'error', at: 'sign-in', detail: 'x', params },
     { step: 'done', uid: 'u' }, { step: 'error', at: 'sign-in', detail: 'x' },
   ];
   const text = (html: string) =>
@@ -353,6 +393,25 @@ const render = (snap: Snapshot, freshness: Freshness = LIVE, selected: string | 
   // The control: the emptiness check can see an empty render when there is one.
   check(text(renderToStaticMarkup(<div className="stage" />)).length <= 20,
     'login: (control) the empty-render check does fire on an actually empty render');
+
+  // The auth handler's origin. Safari's ITP partitions storage across origins, so a redirect
+  // sign-in routed through <project>.firebaseapp.com while the board is on <project>.web.app
+  // comes back with nothing and reads as "cancelled". Same-origin removes the problem.
+  {
+    const env = { VITE_FIREBASE_PROJECT_ID: 'proj-abc' };
+    check(authDomainFor(env, { hostname: 'proj-abc.web.app' }) === 'proj-abc.web.app',
+      'authDomain: served from the project\'s web.app, the auth handler is SAME-ORIGIN');
+    check(authDomainFor({ ...env, VITE_FIREBASE_AUTH_DOMAIN: 'proj-abc.firebaseapp.com' },
+      { hostname: 'proj-abc.web.app' }) === 'proj-abc.web.app',
+      'authDomain: the console\'s default value is treated as unset, not as a decision');
+    check(authDomainFor({ ...env, VITE_FIREBASE_AUTH_DOMAIN: 'auth.example.com' },
+      { hostname: 'proj-abc.web.app' }) === 'auth.example.com',
+      'authDomain: a genuine custom domain still wins');
+    check(authDomainFor(env, { hostname: 'localhost' }) === 'proj-abc.firebaseapp.com',
+      'authDomain: anywhere else falls back — no other host serves /__/auth/handler');
+    check(authDomainFor(env, undefined) === 'proj-abc.firebaseapp.com',
+      'authDomain: and it does not need a window to answer');
+  }
 
   // Routing, at the level the CLI depends on: the path it opens must match.
   for (const p of ['/login', '/login/']) check(isLoginPath(p), `login: ${p} routes to the login page`);
