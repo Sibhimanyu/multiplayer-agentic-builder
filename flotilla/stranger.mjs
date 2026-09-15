@@ -155,10 +155,12 @@ check(typeof cfg?.api_key === 'string' && cfg.api_key.length > 10,
   'and the web API key, fetched from the project\'s PUBLIC hosting config');
 
 // ---------------------------------------------------------------- 4. login (STUBBED)
-console.log('\n4. flotilla login -- STUBBED, and only this step');
+console.log('\n4. flotilla login -- STUBBED HERE, and only this step');
 console.log('        Google sign-in needs a browser and a human; it cannot be driven headlessly.');
 console.log('        Everything either side of it is real. The stub writes the SAME credential');
 console.log('        file the loopback flow writes, and nothing downstream knows the difference.');
+console.log('        The browser half is NOT unproven: firebase/login-browser.mjs runs the real');
+console.log('        `flotilla login --anonymous` against the hosted page in a real Chrome.');
 const su = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${cfg.api_key}`, {
   method: 'POST', headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ returnSecureToken: true }),
@@ -303,5 +305,7 @@ try {
 
 console.log(`\n${failed === 0 ? 'STRANGER PATH PASSED' : `STRANGER PATH FAILED (${failed})`}`);
 console.log(`${results.length - failed}/${results.length} assertions.`);
-console.log('STUBBED: the browser half of `flotilla login` only. Everything else ran.');
+console.log('STUBBED IN THIS SUITE: the browser half of `flotilla login` only. Everything else ran.');
+console.log('  That half is covered by firebase/login-browser.mjs -- real Chrome, hosted page,');
+console.log('  real `flotilla login --anonymous`, credential asserted on disk.');
 process.exit(failed === 0 ? 0 : 1);

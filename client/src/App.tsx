@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { COLUMNS, type AgentPresence, type Freshness, type Snapshot, type TaskView } from './store/types';
 import { createFirestoreStore, type StoreStatus } from './store/firebase';
 import { DetailPanel, EmptyColumn, ProjectCard, ProjectsEmpty, TaskCard, TopNav } from './components';
+import { LoginPage } from './Login';
 
 /**
  * Which project the URL is asking for. `/p/:project_id`, or null for the index.
@@ -229,9 +230,21 @@ function ProjectBoard({ project_id }: { project_id: string }) {
   );
 }
 
+/**
+ * `/login` — where `flotilla login` sends the browser.
+ *
+ * This route's absence was the whole of a user-visible bug: the CLI opened /login, hosting's SPA
+ * rewrite served index.html, no route matched, and the fallthrough below rendered the projects
+ * index — a page with nothing on it to sign in with, and no error, because as far as the router
+ * was concerned nothing had gone wrong. Matched before the fallthrough for that reason.
+ */
+export function isLoginPath(pathname: string): boolean {
+  return /^\/login\/?$/.test(pathname);
+}
+
 export default function App() {
-  // Two routes, no router dependency. pathname is read once and updated on popstate, so the
-  // back button works without pulling in a routing library for a two-entry table.
+  // Three routes, no router dependency. pathname is read once and updated on popstate, so the
+  // back button works without pulling in a routing library for a three-entry table.
   const [pathname, setPathname] = useState(() =>
     typeof window === 'undefined' ? '/' : window.location.pathname,
   );
@@ -246,6 +259,9 @@ export default function App() {
     setPathname(to);
   };
 
+  if (isLoginPath(pathname)) {
+    return <LoginPage search={typeof window === 'undefined' ? '' : window.location.search} />;
+  }
   const project_id = projectIdFromPath(pathname);
   if (project_id) return <ProjectBoard project_id={project_id} />;
   return <ProjectsIndexRoute onOpen={(id) => navigate(`/p/${id}`)} />;

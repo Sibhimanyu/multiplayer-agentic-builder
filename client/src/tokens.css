@@ -52,6 +52,18 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .fresh[data-mode="poll"] .dot{animation:pulse 2.6s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.32}}
 
+/* ---- /login ---- */
+/* The handoff page for `flotilla login`. Not in dashboard.md: it is a route the design never
+   covered, added when the CLI turned out to be opening a page that did not exist. */
+.login{max-width:520px;padding:40px 28px;display:grid;gap:12px;justify-items:start}
+.login h2{font-family:var(--serif);font-size:20px;font-weight:600;letter-spacing:-.015em}
+.login h2.bad{color:var(--red)}
+.login p{color:var(--ink2);line-height:1.6}
+.login p.uid{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.login code{font-family:var(--mono);font-size:12px;background:var(--paper);
+       border:1px solid var(--line);border-radius:var(--r-tag);padding:1px 5px}
+.login .cta{margin-top:6px}
+
 /* ---- board ---- */
 /* padding-right lets the last column scroll clear of the overlay panel */
 .stage{position:relative;min-height:0;overflow:hidden}

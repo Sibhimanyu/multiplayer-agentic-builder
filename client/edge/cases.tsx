@@ -10,8 +10,10 @@
 // Built and run by client/edge/run.mjs.
 
 import { renderToStaticMarkup } from 'react-dom/server';
-import { BoardView, ProjectsIndex, blockedChain, projectIdFromPath } from '../src/App';
+import { BoardView, ProjectsIndex, blockedChain, isLoginPath, projectIdFromPath } from '../src/App';
 import { TriagePanel } from '../src/components';
+import { LoginView } from '../src/Login';
+import type { LoginState } from '../src/login-contract';
 import type {
   AgentPresence, ContractPointer, Freshness, Snapshot, TaskStatus, TaskView,
 } from '../src/store/types';
@@ -283,6 +285,82 @@ const render = (snap: Snapshot, freshness: Freshness = LIVE, selected: string | 
   );
   check(empty.includes('class="empty"') && empty.includes('Nothing to triage'),
     'triage: the empty state is the dashed idiom, not a blank');
+}
+
+// ---------------------------------------------------------------- /login (order 0055)
+//
+// The route whose ABSENCE was the bug: `flotilla login` opened /login, the SPA rewrite served
+// index.html, nothing matched, and the projects index rendered with nothing to sign in with.
+//
+// renderToStaticMarkup does not run effects, so LoginView -- the pure render of a LoginState --
+// is what is asserted here, state by state. That covers every screen the user can reach,
+// including the two on the far side of the popup that no server render could otherwise see.
+// What it cannot see is the transitions; those are driven against the real listener by
+// firebase/login-loopback.mjs.
+{
+  const params = { port: 51234, nonce: 'n'.repeat(43), anonymous: false };
+  const view = (state: LoginState) => renderToStaticMarkup(<LoginView state={state} />);
+
+  const ready = view({ step: 'ready', params });
+  check(ready.includes('Continue with Google'), 'login: the Google link renders a button to click');
+  check(ready.includes('data-login-step="ready"'), 'login: and reports its state for the browser check');
+
+  // THE BUG, ASSERTED DIRECTLY: whatever /login renders, it is never the projects board.
+  check(!ready.includes('<h3>Open</h3>') && !ready.includes('<h3>Projects</h3>'),
+    'login: /login does NOT render the board or the projects index');
+
+  const anon = view({ step: 'ready', params: { ...params, anonymous: true } });
+  check(!anon.includes('Continue with Google'), 'login: the anonymous link offers no Google button');
+  check(/Signing in anonymously/.test(anon), 'login: it says what it is doing instead');
+
+  const posting = view({ step: 'posting', params });
+  check(posting.includes('127.0.0.1:51234'), 'login: the handoff names the port it is posting to');
+
+  const done = view({ step: 'done', uid: 'uid_abc', email: 'someone@example.com' });
+  check(done.includes('someone@example.com'), 'login: success names who signed in');
+  check(/You can close this tab/.test(done), 'login: and says the tab is finished with');
+  check(done.includes('uid_abc'), 'login: and shows the uid the CLI now holds');
+
+  const anonDone = view({ step: 'done', uid: 'uid_abc' });
+  check(/Signed in\./.test(anonDone), 'login: success with no email reads cleanly, not "Signed in as ."');
+
+  // Every error names WHICH STEP failed and what to do. A page that says only "login failed"
+  // leaves three places to look for one fact.
+  for (const [at, detail] of [
+    ['the login link', 'The login link has no nonce.'],
+    ['sign-in', 'Your browser blocked the sign-in popup. Allow popups for this site, then try again.'],
+    ['handing the credential to the CLI', 'Could not reach the flotilla CLI on port 51234.'],
+  ] as const) {
+    const err = view({ step: 'error', at, detail });
+    check(err.includes(`Login failed at ${at}.`), `login: the error names the step "${at}"`);
+    check(err.includes(detail), 'login:   and carries the detail');
+    check(err.includes('flotilla login'), 'login:   and the command that starts a real one');
+  }
+
+  // A SILENT BLANK PAGE IS THE BUG BEING FIXED. Assert no state renders an empty shell -- a
+  // spinner with no terminal state, or a switch falling through, would be the same failure with
+  // the volume turned down.
+  const states: LoginState[] = [
+    { step: 'ready', params }, { step: 'ready', params: { ...params, anonymous: true } },
+    { step: 'signing-in', params }, { step: 'posting', params },
+    { step: 'done', uid: 'u' }, { step: 'error', at: 'sign-in', detail: 'x' },
+  ];
+  const text = (html: string) =>
+    html.replace(/<[^>]+>/g, ' ').replace(/Flotilla|FL/g, '').replace(/\s+/g, ' ').trim();
+  for (const s of states) {
+    check(text(view(s)).length > 20, `login: the "${s.step}" state renders words, not an empty shell`);
+  }
+  // The control: the emptiness check can see an empty render when there is one.
+  check(text(renderToStaticMarkup(<div className="stage" />)).length <= 20,
+    'login: (control) the empty-render check does fire on an actually empty render');
+
+  // Routing, at the level the CLI depends on: the path it opens must match.
+  for (const p of ['/login', '/login/']) check(isLoginPath(p), `login: ${p} routes to the login page`);
+  for (const p of ['/', '/p/proj_x', '/loginx', '/x/login']) {
+    check(!isLoginPath(p), `login: ${p} does not`);
+  }
+  // And the two routes stay disjoint -- /login must not read as a project id.
+  check(projectIdFromPath('/login') === null, 'login: /login is not mistaken for a project');
 }
 
 console.log(results.join('\n'));
