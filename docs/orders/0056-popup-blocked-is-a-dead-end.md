@@ -45,3 +45,25 @@ path itself is testable: assert the nonce and port survive a simulated round tri
 `sessionStorage`, with the query string replaced by Google's.
 
 Report which browsers you actually exercised.
+
+---
+
+## Addendum — there is no way to ask "am I signed in?"
+
+The user asked for the command. There isn't one. `whoami()` exists on the client and is called in
+four places internally, but it is **not a subcommand** — `flotilla whoami` returns
+`unknown command`. The only way to check is `flotilla ls`, which answers the question as a side
+effect of doing something else.
+
+Add **`flotilla whoami`**:
+
+- **Signed in** → uid, email if present, the configured project, and where the credential lives.
+  Exit 0.
+- **Not signed in** → say so, name `flotilla login`. Exit 1, so scripts can branch on it.
+- **Not configured** → the existing unconfigured message. Exit 1.
+
+Three states, three exit codes' worth of meaning — a command whose whole job is answering a question
+must not answer it only in prose.
+
+**Print it in `--help`.** Order 0048's lesson: a rename that misses generated files is not done, and
+a command that is not in the help does not exist for the person who needs it.
