@@ -9,15 +9,14 @@
 // shipped artifact is a bundle -- shared/** and cli/** are compiled in, and firebase-admin stays
 // external because it is a real dependency with native pieces.
 
-import { deleteApp, initializeApp } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
-
 import { spawn } from 'node:child_process';
 
 import { main, registerAuthCommands, registerProjectCommands } from '../cli/index.ts';
 import { newProject } from '../cli/newproject.ts';
 import { boardUrl, fetchApiKey, loadConfig, saveConfig, writeUrl } from '../cli/config.ts';
 import { loginUrl, loopbackReady, saveCredential, startLoopback } from '../cli/auth.ts';
+import { WriteClient } from '../cli/writeclient.ts';
+import { RemoteDirectory } from '../cli/remotedirectory.ts';
 import { createFirestoreDirectory } from './directory.ts';
 import { ProjectExistsError } from '../shared/store/directory.ts';
 import { consoleLogger } from '../shared/log.ts';
@@ -28,8 +27,18 @@ import { consoleLogger } from '../shared/log.ts';
 // there for the same reason.
 const uid = () => process.env.DRYDOCK_UID ?? `uid_${process.env.USER ?? 'local'}`;
 
+/**
+ * The admin SDK, loaded ONLY when a command actually needs it.
+ *
+ * `init` and `login` need no backend at all -- init records a project id, login talks to a
+ * browser -- and a static import made them pull in firebase-admin anyway. That is how `init`
+ * ended up requiring Application Default Credentials: the SDK was already there, so reaching for
+ * it looked free. Making the import lazy makes the dependency visible.
+ */
 async function connect() {
   const cfg = await loadConfig();
+  const { deleteApp, initializeApp } = await import('firebase-admin/app');
+  const { getFirestore } = await import('firebase-admin/firestore');
   const app = initializeApp({ projectId: cfg.project_id }, `drydock-${Date.now()}`);
   const directory = createFirestoreDirectory({ db: getFirestore(app), log: consoleLogger });
   return { cfg, directory, close: () => deleteApp(app) };
@@ -44,13 +53,12 @@ registerAuthCommands({
    * administer, since the lookup needs owner credentials and the key itself is public.
    */
   async init(project_id, api_key_flag) {
+    // NO CREDENTIALS, NO SDK. init runs before login by definition; requiring a token to record
+    // a project id is a circular dependency that only works on a machine that already has one.
     let api_key = api_key_flag;
     if (!api_key) {
       try {
-        const probe = initializeApp({ projectId: project_id }, `init-${Date.now()}`);
-        const token = await probe.options.credential?.getAccessToken?.();
-        api_key = await fetchApiKey(project_id, token?.access_token ?? '');
-        await deleteApp(probe);
+        api_key = await fetchApiKey(project_id);
       } catch (err) {
         console.error(`\n${err instanceof Error ? err.message : String(err)}`);
         return 1;
@@ -116,7 +124,15 @@ registerAuthCommands({
 
 registerProjectCommands({
   async new(root, name, repo) {
-    const { directory, close } = await connect();
+    // THROUGH THE WRITE FUNCTION, with the user's own token. Not the Admin SDK: a stranger has a
+    // user credential from `drydock login` and no service-account key, and this is the first
+    // real command they run.
+    const cfg = await loadConfig();
+    const client = new WriteClient({
+      api_url: writeUrl(cfg), api_key: cfg.api_key, log: consoleLogger,
+    });
+    const directory = new RemoteDirectory(client);
+    const close = async () => {};
     try {
       const r = await newProject({
         root, name, directory, owner_uid: uid(), owner_label: process.env.USER ?? 'owner',
@@ -178,4 +194,30 @@ registerProjectCommands({
   },
 });
 
-process.exitCode = await main(process.argv.slice(2));
+/**
+ * ONE CLEAN LINE, NOT A CRASH DUMP.
+ *
+ * An unconfigured install used to print `dist/drydock.js:1783`, the throw statement and a caret.
+ * Exit 1 was right; the output told the user they had found a bug in the tool rather than that
+ * they had one step left to run. A stack trace is a message to whoever wrote the program, and
+ * every line of it is noise to whoever is using it.
+ *
+ * NotConfigured and its kin already carry the instruction, so they print as-is. Anything else is
+ * genuinely unexpected and says so, with the stack available behind DRYDOCK_DEBUG=1 for whoever
+ * has to fix it.
+ */
+const EXPECTED = new Set(['NotConfigured', 'NotLoggedIn', 'AuthError', 'ProjectExistsError', 'BlackboardError']);
+
+try {
+  process.exitCode = await main(process.argv.slice(2));
+} catch (err) {
+  const e = err as Error;
+  if (EXPECTED.has(e.name)) {
+    console.error(`\n${e.message}\n`);
+  } else {
+    console.error(`\ndrydock: ${e.message || String(err)}\n`);
+    console.error('This is unexpected. Re-run with DRYDOCK_DEBUG=1 for the full stack.\n');
+  }
+  if (process.env.DRYDOCK_DEBUG === '1') console.error(e.stack ?? err);
+  process.exitCode = 1;
+}

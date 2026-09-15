@@ -107,7 +107,15 @@ export interface NewProjectResult {
 export interface NewProjectOptions {
   root: string;
   name: string;
-  directory: ProjectDirectory;
+  /**
+   * Only createProject is needed, so only createProject is required.
+   *
+   * That lets the CLI pass a RemoteDirectory -- which writes through the deployed function with
+   * the user's token -- where it used to require the full Admin-SDK-backed directory. A stranger
+   * has a user token and no service-account key, so demanding the whole interface demanded
+   * credentials they cannot have.
+   */
+  directory: Pick<ProjectDirectory, 'createProject'>;
   owner_uid: string;
   owner_label: string;
   /** Overrides the repo detected from `git remote get-url origin`. */

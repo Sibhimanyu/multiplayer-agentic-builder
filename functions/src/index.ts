@@ -21,6 +21,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { createFirestoreStore } from '../../firebase/store.ts';
 import { handleApi, statusFor } from './api.ts';
 import { handleWrite, type WriteRequest } from './write-api.ts';
+import { createFirestoreDirectory } from '../../firebase/directory.ts';
 import { mapDelivery, repoKey, verifySignature } from './webhook.ts';
 import { reapAll } from '../../firebase/reaper.ts';
 import { consoleLogger } from '../../shared/log.ts';
@@ -246,7 +247,12 @@ export const write = onRequest({ cors: true }, async (req, res) => {
     return;
   }
   const out = await handleWrite(
-    { auth: getAuth(), db, log, store },
+    {
+      auth: getAuth(), db, log, store,
+      // The directory is constructed per request rather than at module scope: it is only needed
+      // by create_project, and a cold start should not pay for it.
+      createProject: (input) => createFirestoreDirectory({ db, log }).createProject(input),
+    },
     req.headers.authorization,
     req.body as WriteRequest,
   );

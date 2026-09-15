@@ -117,6 +117,8 @@ export async function publishRecord(
   rec: OutboxRecord,
   log: Logger,
   blackboard?: BlackboardConfig,
+  /** Workspace root, so a claim LOSS can be reported back on the agent's inbox. */
+  inbox_root?: string,
 ): Promise<{ published: boolean; seq: number; note?: string }> {
   let body = rec.body ?? {};
 
@@ -130,7 +132,7 @@ export async function publishRecord(
   // Done before appendEvent, not after, and that ordering is the whole design: an event
   // announcing a contract that is not yet pushed is a pointer into nothing. A consumer that
   // acted on it would fetch a 404 from the CDN. Publish the artifact, then announce it.
-  if (BLACKBOARD_KINDS.has(rec.kind) && blackboard) {
+  if (BLACKBOARD_KINDS.has(rec.kind as EventKind) && blackboard) {
     const source = typeof body.file === 'string' ? body.file
       : typeof body.source_file === 'string' ? body.source_file
       : null;
@@ -159,8 +161,14 @@ export async function publishRecord(
   const task_id = typeof body.task_id === 'string' ? body.task_id : null;
   const agent_id = typeof body.agent_id === 'string' ? body.agent_id : 'agent_local';
 
-  if (rec.kind === 'task_claimed') {
-    if (!task_id) return { published: false, seq: 0, note: 'task_claimed without task_id' };
+  // `claim_requested` is how an AGENT asks for a task. Order 0051, entry 79.
+  //
+  // The agent appends a request; the BRIDGE calls claimTask. That keeps the atomic operation
+  // exactly where it is already verified contended -- 20 racers x 50 rounds, 256 concurrent
+  // single-document writers -- and keeps the agent off the network, holding no credential, as
+  // the file contract requires. `task_claimed` is still accepted for the CLI's own use.
+  if (rec.kind === 'claim_requested' || rec.kind === 'task_claimed') {
+    if (!task_id) return { published: false, seq: 0, note: `${rec.kind} without task_id` };
     const res = await store.claimTask(project_id, task_id, agent_id);
     if (!res.ok) {
       // A lost claim is a NORMAL outcome, not an error. It is published in the sense that the
@@ -168,6 +176,22 @@ export async function publishRecord(
       log.info('bridge.claim_lost', 'claim lost to another agent', {
         project_id, task_id, agent_id, owner: res.owner,
       });
+      // AND THE AGENT IS TOLD. A loss produces no ledger event -- nothing happened -- so without
+      // this the agent waits forever for a reply that cannot come. Delivered on the inbox as
+      // coordination layer, which is where the agent already looks, and phrased as a result
+      // rather than an error because losing a race is the system working.
+      if (inbox_root) {
+        await appendInbox(
+          inbox_root,
+          {
+            v: '0.2', seq: 0, layer: 'coordination', kind: 'claim_denied',
+            ts: new Date().toISOString(),
+            body: { task_id, agent_id, owner: res.owner, claimed_at: res.claimed_at,
+                    reason: 'another agent claimed it first' },
+          },
+          log,
+        );
+      }
       return { published: true, seq: 0, note: `lost to ${res.owner}` };
     }
     const after = await store.readEvents(project_id, 0);
@@ -215,7 +239,7 @@ export async function drainOnce(opts: BridgeOptions): Promise<{ published: numbe
 
   for (const rec of pending.sort((a, b) => a.order - b.order)) {
     try {
-      const r = await publishRecord(opts.store, opts.project_id, rec, opts.log, opts.blackboard);
+      const r = await publishRecord(opts.store, opts.project_id, rec, opts.log, opts.blackboard, opts.root);
       if (!r.published) {
         opts.log.warn('bridge.unpublishable', 'record cannot ever be published, skipping', {
           kind: rec.kind, note: r.note,

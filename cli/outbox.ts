@@ -27,7 +27,13 @@ export const SPOOL_THRESHOLD_BYTES = 4096;
 export interface OutboxRecord {
   /** Stable across restarts. Used as the idempotency key. */
   idempotency_key: string;
-  kind: EventKind;
+  /**
+   * A ledger event kind, OR an outbox-only request kind (see OUTBOX_REQUEST_KINDS).
+   *
+   * The union is what makes `claim_requested` expressible without pretending it is a fact the
+   * ledger records. The bridge narrows it before publishing.
+   */
+  kind: EventKind | OutboxRequestKind;
   body: Record<string, unknown>;
   /** Where it came from, for logging and for the spool cleanup. */
   source: { type: 'jsonl'; offset: number; length: number } | { type: 'spool'; file: string };
@@ -39,6 +45,22 @@ const enc = new TextEncoder();
 
 export const keyFor = (payload: string, offset: number): string =>
   `ob:${createHash('sha256').update(`${offset}:${payload}`, 'utf8').digest('hex').slice(0, 40)}`;
+
+/**
+ * Kinds an agent may WRITE that are not ledger events.
+ *
+ * `claim_requested` is a REQUEST, not a fact. The ledger records what happened -- `task_claimed`
+ * -- and a request that lost a race produced nothing to record. Putting it in LAYER_OF would
+ * make it an event and imply it belongs on the ledger, so it lives here instead: accepted from
+ * the outbox, translated by the bridge, and never appended as itself.
+ *
+ * This is the gap that stopped the loop (entry 79): an agent had no sanctioned way to claim a
+ * task. A real agent found it, correctly refused to invent an event kind, and stopped.
+ */
+export const OUTBOX_REQUEST_KINDS = new Set<string>(['claim_requested']);
+
+/** The outbox-only kinds, as a type. */
+export type OutboxRequestKind = 'claim_requested';
 
 /** Read the cursor. A missing or corrupt cursor means "start from zero", loudly. */
 export async function readCursor(root: string, rel: string, log: Logger): Promise<number> {
@@ -125,7 +147,7 @@ export async function readPending(root: string, log: Logger): Promise<OutboxReco
     }
 
     const kind = parsed.kind;
-    if (typeof kind !== 'string' || !(kind in LAYER_OF)) {
+    if (typeof kind !== 'string' || (!(kind in LAYER_OF) && !OUTBOX_REQUEST_KINDS.has(kind))) {
       log.warn('cli.outbox_line_has_an', 'outbox line has an unknown kind, skipping it', { offset: lineOffset, kind: String(kind) });
       continue;
     }
@@ -177,7 +199,7 @@ export async function readPending(root: string, log: Logger): Promise<OutboxReco
       continue;
     }
     const kind = parsed.kind;
-    if (typeof kind !== 'string' || !(kind in LAYER_OF)) {
+    if (typeof kind !== 'string' || (!(kind in LAYER_OF) && !OUTBOX_REQUEST_KINDS.has(kind))) {
       log.warn('cli.spool_file_has_an', 'spool file has an unknown kind, leaving it in place', { file: s.file, kind: String(kind) });
       continue;
     }

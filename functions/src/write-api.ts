@@ -33,7 +33,9 @@ import type { Logger } from '../../shared/log.ts';
 
 export interface WriteRequest {
   project_id: string;
-  op: 'claim' | 'release' | 'acquire_scope' | 'release_scope' | 'append_event' | 'heartbeat' | 'deploy';
+  op:
+    | 'claim' | 'release' | 'acquire_scope' | 'release_scope' | 'append_event' | 'heartbeat'
+    | 'deploy' | 'create_project';
   /** Operation payload. Shape depends on `op`. */
   body: Record<string, unknown>;
 }
@@ -56,10 +58,15 @@ export interface WriteDeps {
     appendEvent(pid: string, event: Record<string, unknown>, key: string): Promise<unknown>;
     heartbeat(pid: string, agent_id: string, status: string, task?: string | null, branch?: string | null): Promise<void>;
   };
+  /** The directory's createProject. Separate port, so the write path does not grow a second one. */
+  createProject: (input: {
+    project_id: string; project_name: string; repo_url: string;
+    owner_uid: string; owner_label: string;
+  }) => Promise<unknown>;
 }
 
 /** Which capability each operation requires. Explicit, so adding an op forces the decision. */
-const REQUIRES: Record<WriteRequest['op'], Capability> = {
+const REQUIRES: Partial<Record<WriteRequest["op"], Capability>> = {
   claim: 'claim',
   release: 'claim',
   acquire_scope: 'acquire_scope',
@@ -144,9 +151,52 @@ export async function handleWrite(
   req: WriteRequest,
 ): Promise<WriteResult> {
   let caller: { uid: string; email?: string };
-  let grant: { role: string; file_scope: string[]; deploy_scope: string[] };
   try {
     caller = await identify(deps, authorization);
+  } catch (err) {
+    if (err instanceof Unauthorized) return { status: err.status, body: { error: err.message } };
+    throw err;
+  }
+
+  // CREATE_PROJECT IS AUTHORIZED DIFFERENTLY, and it has to be: every other operation checks
+  // membership of the project, and a project that does not exist yet has no members. Requiring
+  // membership here would make it impossible for anyone to create their first project.
+  //
+  // So the check is only that the caller is a REAL, verified identity — and the owner uid comes
+  // from the TOKEN, never from the body, so a caller cannot create a project owned by someone
+  // else. This is also why `drydock new` cannot use the Admin SDK: a stranger has a user token
+  // and no service-account key, and the first thing they run would fail with "could not load the
+  // default credentials". Found by running the flow as a stranger, which is the only way to see
+  // it — every previous test had admin credentials in the environment.
+  if (req.op === 'create_project') {
+    const b = req.body;
+    if (typeof b.project_name !== 'string' || typeof b.repo_url !== 'string') {
+      return { status: 400, body: { error: 'create_project needs project_name and repo_url' } };
+    }
+    try {
+      const rec = await deps.createProject({
+        project_id: req.project_id,
+        project_name: b.project_name,
+        repo_url: b.repo_url,
+        owner_uid: caller.uid,
+        owner_label: typeof b.owner_label === 'string' ? b.owner_label : (caller.email ?? caller.uid),
+      });
+      deps.log.info('api.project_created', 'project created through the write path', {
+        project_id: req.project_id, owner_uid: caller.uid,
+      });
+      return { status: 200, body: { ok: true, project: rec as unknown as Record<string, unknown> } };
+    } catch (err) {
+      // An id collision is the intended outcome for two clones of one repo, so it reads as a
+      // conflict rather than a crash.
+      if ((err as Error).name === 'ProjectExistsError') {
+        return { status: 409, body: { error: (err as Error).message } };
+      }
+      throw err;
+    }
+  }
+
+  let grant: { role: string; file_scope: string[]; deploy_scope: string[] };
+  try {
     grant = await authorize(deps, caller.uid, req.project_id);
   } catch (err) {
     if (err instanceof Unauthorized) return { status: err.status, body: { error: err.message } };

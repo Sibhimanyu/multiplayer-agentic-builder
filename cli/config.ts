@@ -87,30 +87,56 @@ export async function saveConfig(cfg: DrydockConfig, home = os.homedir()): Promi
 }
 
 /**
- * Look the web API key up FROM the project, so the caller supplies one identifier rather than two.
+ * Look the web API key up FROM the project id, WITHOUT ANY CREDENTIALS.
  *
- * Uses the Firebase Management API, which needs credentials the project owner has and a stranger
- * does not -- so `--api-key` stays available for anyone configuring a project they do not
- * administer. Both paths end at the same stored value.
+ * `drydock init` runs BEFORE `drydock login`, by definition -- it records which project to talk
+ * to, which is the thing login needs in order to know where to sign in. So it cannot require a
+ * credential, and the first version did: it called the Firebase Management API through
+ * Application Default Credentials, which every developer on this machine happens to have and no
+ * stranger does. It died with "Could not load the default credentials" and wrote no config.
+ *
+ * Firebase Hosting serves the web config at a RESERVED, PUBLIC url on every project that has
+ * hosting: `/__/firebase/init.json`. That is genuinely deriving the key from the project id --
+ * no token, no SDK, one GET.
+ *
+ * If a project has no hosting, there is nothing public to read and `--api-key` is required. That
+ * is stated in the error rather than left for the user to infer.
  */
 export async function fetchApiKey(
   project_id: string,
-  access_token: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<string> {
-  const res = await fetchImpl(
-    `https://firebase.googleapis.com/v1beta1/projects/${project_id}/webApps/-/config`,
-    { headers: { Authorization: `Bearer ${access_token}` } },
-  );
-  if (!res.ok) {
-    throw new Error(
-      `could not read the web config for "${project_id}" (HTTP ${res.status}). ` +
-        'Pass --api-key instead; it is on the Firebase console under Project settings.',
-    );
+  // Both hosting domains, because a project may have one and not the other.
+  const urls = [
+    `https://${project_id}.web.app/__/firebase/init.json`,
+    `https://${project_id}.firebaseapp.com/__/firebase/init.json`,
+  ];
+  const tried: string[] = [];
+  for (const url of urls) {
+    try {
+      const res = await fetchImpl(url, { signal: AbortSignal.timeout(15_000) });
+      if (!res.ok) { tried.push(`${url} -> HTTP ${res.status}`); continue; }
+      const body = (await res.json()) as { apiKey?: string; projectId?: string };
+      // Not "it did not throw": a 200 with no key would store an empty string and fail much
+      // later, at sign-in, looking like an auth problem rather than a setup one.
+      if (!body.apiKey) { tried.push(`${url} -> no apiKey in the response`); continue; }
+      // And the config must belong to the project that was ASKED for. A hosting domain that
+      // redirects elsewhere would otherwise silently configure the wrong project.
+      if (body.projectId && body.projectId !== project_id) {
+        tried.push(`${url} -> config is for "${body.projectId}", not "${project_id}"`);
+        continue;
+      }
+      return body.apiKey;
+    } catch (err) {
+      tried.push(`${url} -> ${(err as Error).name}`);
+    }
   }
-  const body = (await res.json()) as { apiKey?: string };
-  // Not "it did not throw": a 200 with no key would store an empty string and fail much later,
-  // at sign-in, looking like an auth problem.
-  if (!body.apiKey) throw new Error(`the web config for "${project_id}" contained no apiKey`);
-  return body.apiKey;
+  throw new Error(
+    `Could not read the public web config for "${project_id}".\n` +
+      tried.map((t) => `    ${t}`).join('\n') +
+      '\n\n  Pass it explicitly:\n' +
+      `    drydock init --project ${project_id} --api-key <key>\n\n` +
+      '  The key is on the Firebase console under Project settings > General > Web API Key.\n' +
+      '  It is public configuration, not a secret.',
+  );
 }
