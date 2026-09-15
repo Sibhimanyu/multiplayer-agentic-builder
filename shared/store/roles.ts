@@ -53,7 +53,10 @@ export function globContains(allowed: string, requested: string): boolean {
       // '**' on the allowed side absorbs zero or more requested segments.
       out = go(i + 1, j) || (j < r.length && go(i, j + 1));
     } else if (j >= r.length) out = false;
-    else out = segContains(a[i], r[j]) && go(i + 1, j + 1);
+    // `?? ''` rather than a non-null assertion: both indices are bounds-checked above, so this
+    // is unreachable, and an empty segment fails segContains closed rather than throwing. The
+    // functions/ build runs with noUncheckedIndexedAccess, which is how this surfaced.
+    else out = segContains(a[i] ?? '', r[j] ?? '') && go(i + 1, j + 1);
 
     memo.set(key, out);
     return out;

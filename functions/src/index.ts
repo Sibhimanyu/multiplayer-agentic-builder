@@ -16,9 +16,11 @@ import { onRequest } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { defineSecret } from 'firebase-functions/params';
 import { initializeApp } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { createFirestoreStore } from '../../firebase/store.ts';
 import { handleApi, statusFor } from './api.ts';
+import { handleWrite, type WriteRequest } from './write-api.ts';
 import { mapDelivery, repoKey, verifySignature } from './webhook.ts';
 import { reapAll } from '../../firebase/reaper.ts';
 import { consoleLogger } from '../../shared/log.ts';
@@ -27,7 +29,25 @@ import { consoleLogger } from '../../shared/log.ts';
 // creates a SECOND function rather than moving the first.
 setGlobalOptions({ region: 'us-central1', maxInstances: 10 });
 
-const GITHUB_WEBHOOK_SECRET = defineSecret('GITHUB_WEBHOOK_SECRET');
+/**
+ * NOT DECLARED, and not an oversight.
+ *
+ * `defineSecret` runs at module scope, so firebase-tools resolves it while ANALYSING the
+ * codebase -- before, and regardless of, `--only functions:write`. That made deploying the write
+ * path require the Secret Manager API, which is disabled on this project and which the service
+ * account is denied permission to enable. One dead function was blocking a live one.
+ *
+ * And the webhook is genuinely dead here: ORDER 0043 REPLACED IT WITH THE BRIDGE'S GITHUB POLL,
+ * because Spark had no Cloud Functions to receive a webhook. Blaze is on now, but the poll is
+ * the shipped mechanism, the checklist says so, and the empty-state copy says so. Exporting a
+ * receiver nobody sends to would put the third name on a mechanism that already has one.
+ *
+ * The handler and its tests are untouched in webhook.ts. If the webhook is ever revived, this is
+ * the line to restore, and Secret Manager has to be enabled first:
+ *
+ *   const GITHUB_WEBHOOK_SECRET = defineSecret('GITHUB_WEBHOOK_SECRET');
+ */
+void defineSecret;
 
 initializeApp();
 const db = getFirestore();
@@ -52,8 +72,10 @@ const store = createFirestoreStore({ db, log });
  *    A BAD SIGNATURE is different: that gets 401, because it is not a delivery we should
  *    acknowledge.
  */
-export const githubWebhook = onRequest(
-  { secrets: [GITHUB_WEBHOOK_SECRET], cors: false },
+// NOT EXPORTED — superseded by the bridge's GitHub poll (order 0043). See the note at the
+// former GITHUB_WEBHOOK_SECRET declaration above. Kept compiling so it does not rot.
+const githubWebhook = onRequest(
+  { cors: false },
   async (req, res) => {
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'method_not_allowed' });
@@ -72,7 +94,10 @@ export const githubWebhook = onRequest(
     const verdict = verifySignature(
       raw,
       req.header('x-hub-signature-256'),
-      GITHUB_WEBHOOK_SECRET.value(),
+      // Read from the environment rather than a declared secret, so no module-scope
+      // defineSecret exists for firebase-tools to resolve at analysis time. Only reachable if
+      // this function is exported again, which it is not.
+      process.env.GITHUB_WEBHOOK_SECRET ?? '',
     );
     if (!verdict.ok) {
       log.warn('fn.webhook_signature_rejected', 'webhook signature rejected', { reason: verdict.reason });
@@ -199,4 +224,31 @@ export const reapClaims = onSchedule('every 5 minutes', async () => {
   const results = await reapAll(db, store, log, { claim_timeout_ms: 15 * 60_000 });
   const released = results.reduce((n, r) => n + r.released.length, 0);
   log.info('fn.reaper_run_complete', 'reaper run complete', { projects: results.length, released });
+});
+
+// ---- write ------------------------------------------------------------------------------
+
+/**
+ * THE WRITE PATH for a teammate's CLI. Order 0049.
+ *
+ * firestore.rules is `allow write: if false` on every collection and STAYS that way. This is the
+ * only door, and it is on a server because authorization has to live somewhere the person being
+ * authorized cannot edit — a local process is, by construction, under the control of the user it
+ * is meant to constrain.
+ *
+ * Identity comes from a verified Firebase ID token and NEVER from the request body. The uid a
+ * caller claims is ignored, which closes the forged-actor_id hole by construction rather than by
+ * validating a field.
+ */
+export const write = onRequest({ cors: true }, async (req, res) => {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'POST only' });
+    return;
+  }
+  const out = await handleWrite(
+    { auth: getAuth(), db, log, store },
+    req.headers.authorization,
+    req.body as WriteRequest,
+  );
+  res.status(out.status).json(out.body);
 });
