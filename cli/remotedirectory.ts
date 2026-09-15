@@ -1,6 +1,6 @@
 // createProject through the deployed write function, carrying the USER'S token.
 //
-// Not the Admin SDK. `drydock new` is the first real command a stranger runs, and the Admin SDK
+// Not the Admin SDK. `flotilla new` is the first real command a stranger runs, and the Admin SDK
 // needs a service-account key that only the project's owner has -- so the previous version died
 // with "Could not load the default credentials" on step one, for everyone except the person who
 // built it. Every test before the stranger test had that key in the environment.

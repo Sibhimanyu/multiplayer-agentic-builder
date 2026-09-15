@@ -5,12 +5,12 @@ import path from 'node:path';
 
 const exec = promisify(execFile);
 const repo = path.resolve(import.meta.dirname, '..');
-const bin = path.join(repo, '.agentic', 'stranger', 'node_modules', '.bin', 'drydock');
+const bin = path.join(repo, '.agentic', 'stranger', 'node_modules', '.bin', 'flotilla');
 const HOME = path.join(repo, '.agentic', 'stranger', 'home');
 
 const env = { ...process.env, HOME };
 for (const k of ['GOOGLE_APPLICATION_CREDENTIALS', 'FIREBASE_TOKEN', 'GCLOUD_PROJECT',
-  'GOOGLE_CLOUD_PROJECT', 'DRYDOCK_PROJECT', 'DRYDOCK_API_KEY', 'FB_PROJECT_ID']) delete env[k];
+  'GOOGLE_CLOUD_PROJECT', 'FLOTILLA_PROJECT', 'FLOTILLA_API_KEY', 'FB_PROJECT_ID']) delete env[k];
 
 for (const args of [['ls'], ['members', 'proj_x'], ['new', 'X'], ['status']]) {
   let out = '';
@@ -23,6 +23,6 @@ for (const args of [['ls'], ['members', 'proj_x'], ['new', 'X'], ['status']]) {
     out = `${e.stdout ?? ''}${e.stderr ?? ''}`;
   }
   const leak = /default credentials/i.test(out);
-  console.log(`${leak ? 'LEAK' : 'ok  '}  exit ${code}  drydock ${args.join(' ')}`);
+  console.log(`${leak ? 'LEAK' : 'ok  '}  exit ${code}  flotilla ${args.join(' ')}`);
   console.log(`        ${out.trim().split('\n').filter(Boolean)[0]?.slice(0, 110) ?? '(no output)'}`);
 }

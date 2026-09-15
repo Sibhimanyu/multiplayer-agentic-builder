@@ -483,7 +483,7 @@ test('reconnecting does not truncate a queued outbox or an unread inbox', async 
   const outboxBefore = await fs.readFile(path.join(root, LAYOUT.outbox), 'utf8');
   const inboxBefore = await fs.readFile(path.join(root, LAYOUT.inbox), 'utf8');
 
-  // A second connect, as would happen on `drydock connect` being run twice.
+  // A second connect, as would happen on `flotilla connect` being run twice.
   await writeAgenticTree(
     root,
     { role: ROLE, project: PROJECT, task: makeTask('task_items_crud'), state: { agent_id: 'agent_be01', last_seen_seq: 0, last_written_seq: 0 } },

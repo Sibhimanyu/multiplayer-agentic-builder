@@ -16,12 +16,15 @@ dist/
 .DS_Store
 *.tsbuildinfo
 
-# agent credential, written by `builder connect`. NEVER commit this.
 # npm pack output; packtest.mjs removes its own, this catches a manual run
 *.tgz
 
+# agent credential, written by `flotilla connect`. NEVER commit this.
+.flotilla-token
+# Superseded names. Kept ignored ONLY so a stale credential written before a rename cannot be
+# committed by accident -- nothing reads these, and that is deliberate: decision 0004 is a clean
+# break, so `flotilla init` must not silently pick up a previous product's config.
 .drydock-token
-# the old name, kept ignored so a stale credential from before the rename cannot be committed
 .builder-token
 
 # compiled Cloud Functions deploy artifact

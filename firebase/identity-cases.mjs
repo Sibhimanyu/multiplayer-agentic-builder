@@ -102,16 +102,16 @@ try {
   // ============================================================ 2. config
   console.log('\n2. the project id is configuration, not a constant');
 
-  delete process.env.DRYDOCK_PROJECT;
-  delete process.env.DRYDOCK_API_KEY;
+  delete process.env.FLOTILLA_PROJECT;
+  delete process.env.FLOTILLA_API_KEY;
   let threw = null;
   try { await loadConfig(HOME); } catch (e) { threw = e; }
   check(threw instanceof NotConfigured, 'unconfigured FAILS rather than defaulting to somebody\'s project');
-  check(/drydock init --project/.test(threw?.message ?? ''), 'and the error names the command to run');
+  check(/flotilla init --project/.test(threw?.message ?? ''), 'and the error names the command to run');
 
   const cfg = { project_id: 'someone-elses-proj', api_key: 'AIzaFake', region: 'us-central1' };
   const file = await saveConfig(cfg, HOME);
-  check(file === configPath(HOME), `written to ~/.drydock/config.json`);
+  check(file === configPath(HOME), `written to ~/.flotilla/config.json`);
   const loaded = await loadConfig(HOME);
   check(loaded.project_id === 'someone-elses-proj', 'and read back');
 
@@ -120,15 +120,15 @@ try {
     `the function URL is derived from the project id (${writeUrl(loaded)})`);
   check(boardUrl(loaded) === 'https://someone-elses-proj.web.app', 'and so is the board URL');
 
-  process.env.DRYDOCK_PROJECT = 'override-proj';
-  check((await loadConfig(HOME)).project_id === 'override-proj', 'DRYDOCK_PROJECT overrides the file');
+  process.env.FLOTILLA_PROJECT = 'override-proj';
+  check((await loadConfig(HOME)).project_id === 'override-proj', 'FLOTILLA_PROJECT overrides the file');
   check(writeUrl(await loadConfig(HOME)).includes('override-proj'), 'and the derived URL follows the override');
-  delete process.env.DRYDOCK_PROJECT;
+  delete process.env.FLOTILLA_PROJECT;
 
   const st = await fs.stat(file);
   check((st.mode & 0o777) === 0o644, `config.json is 0644 (${(st.mode & 0o777).toString(8)}) -- it holds nothing secret`);
   const credDir = await fs.stat(path.dirname(file));
-  check((credDir.mode & 0o777) === 0o700, 'while ~/.drydock itself stays 0700');
+  check((credDir.mode & 0o777) === 0o700, 'while ~/.flotilla itself stays 0700');
 } finally {
   await deleteApp(app);
   await fs.rm(HOME, { recursive: true, force: true });

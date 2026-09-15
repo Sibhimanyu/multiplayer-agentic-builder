@@ -1,4 +1,4 @@
-// Build the `drydock` binary to plain JS.
+// Build the `flotilla` binary to plain JS.
 //
 // WHY A BUNDLE AND NOT tsc. Two reasons, both about the installed user rather than this repo:
 //
@@ -23,12 +23,12 @@ import fs from 'node:fs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '..');
-const out = path.join(here, 'dist', 'drydock.js');
+const out = path.join(here, 'dist', 'flotilla.js');
 
 const esbuild = await import(path.join(repo, 'client', 'node_modules', 'esbuild', 'lib', 'main.js'));
 
 await esbuild.build({
-  entryPoints: [path.join(repo, 'firebase', 'drydock-main.ts')],
+  entryPoints: [path.join(repo, 'firebase', 'flotilla-main.ts')],
   outfile: out,
   bundle: true,
   platform: 'node',
@@ -100,3 +100,39 @@ if (!`${built}\n// ${canary}`.includes(canary)) {
   process.exit(1);
 }
 console.log(`no project id in the bundle (checked ${known.size} known id(s), e.g. ${canary})`);
+
+// NO SUPERSEDED PRODUCT NAME IN THE SHIPPED BUNDLE.
+//
+// Checked on the BUILT FILE for the same reason the project id is: source being clean proves
+// nothing about what a stranger receives. Order 0048's rename was reported done while
+// `builder claim` sat in a generated role pack, and nothing looked at the artifact.
+//
+// A LIST of dead names, not a check against the current one, so the next rename inherits this by
+// adding an entry -- and so retired names keep being tested, which is where the rot lives.
+const DEAD = [
+  { name: 'drydock', re: /drydock/gi },
+  { name: 'catalyst-builder', re: /catalyst-builder/gi },
+  // Whole-word only: backend-builder and frontend-builder are ROLE SLUGS, data rather than the
+  // product, and must survive every rename.
+  { name: 'builder (as a command)', re: /\bbuilder\s+(connect|claim|start|status|report|new|init|login)\b/gi },
+];
+const stale = DEAD.flatMap(({ name, re }) => {
+  const hits = built.match(re) ?? [];
+  return hits.length ? [`${name} x${hits.length}`] : [];
+});
+if (stale.length > 0) {
+  console.error(`FAIL: the bundle still contains a retired product name: ${stale.join(', ')}`);
+  console.error('  A rename is not done when the binary is renamed.');
+  process.exit(1);
+}
+// The control: the check must be able to see a name when one is present.
+if (!/drydock/gi.test('a string containing drydock')) {
+  console.error('FAIL: the stale-name check cannot detect a retired name even when present.');
+  process.exit(1);
+}
+// And the bundle must actually name the CURRENT product, or the rename deleted rather than replaced.
+if (!/flotilla/i.test(built)) {
+  console.error('FAIL: the bundle does not mention "flotilla" at all.');
+  process.exit(1);
+}
+console.log(`no retired product name in the bundle (checked ${DEAD.length}: ${DEAD.map((d) => d.name).join(', ')})`);

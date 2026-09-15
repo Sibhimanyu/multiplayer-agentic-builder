@@ -80,7 +80,7 @@ try {
   await page.screenshot({ path: path.join(OUT, '1-projects-index.png') });
   const indexText = await page.evaluate(() => document.body.innerText);
   console.log('1. projects index');
-  check(/Drydock/.test(indexText), 'the index renders and is branded Drydock');
+  check(/Flotilla/.test(indexText), 'the index renders and is branded Flotilla');
 
   // ---- 2. the board, denied, naming the uid ----
   await page.goto(`${BASE}/p/${PID}`, { waitUntil: 'networkidle2', timeout: 60_000 });
@@ -96,7 +96,7 @@ try {
   const uid = /--admit\s+([A-Za-z0-9]+)/.exec(deniedText)?.[1] ?? null;
   if (/Not a member/.test(deniedText)) {
     check(!!uid, `the denied screen NAMES the uid and the command (${uid ?? 'none'})`);
-    check(/drydock|admit/i.test(deniedText), 'and tells the user exactly what to run');
+    check(/flotilla|admit/i.test(deniedText), 'and tells the user exactly what to run');
   } else {
     console.log('  (already a member, or a different state)');
   }

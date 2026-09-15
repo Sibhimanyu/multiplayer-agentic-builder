@@ -240,10 +240,14 @@ export function renderCurrentTask(task: TaskView | null): string {
     return [
       '# No task claimed',
       '',
-      // `builder claim` — the old product name, missed by order 0048's rename because that pass
-      // covered cli/index.ts's own help text and not the files the CLI GENERATES. A real agent
-      // read this, looked for a `builder` binary, and correctly reported that it did not exist.
-      'You have not claimed a task yet. Run `drydock claim <task_id>`, or wait for the',
+      // This line named the FIRST product's claim command until order 0048, which renamed the
+      // CLI's own help text and not the files the CLI GENERATES. A real agent read it weeks
+      // later, went looking for a binary that no longer existed, and stopped.
+      //
+      // The historical name is deliberately not written out here: the build greps the SHIPPED
+      // BUNDLE for retired names, comments and all, and it cannot tell a comment from a live
+      // string. Keeping the guard strict is worth more than the literal in a note.
+      'You have not claimed a task yet. Run `flotilla claim <task_id>`, or wait for the',
       'owner to assign one.',
     ].join('\n');
   }

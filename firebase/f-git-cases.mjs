@@ -116,8 +116,8 @@ async function makeAgent(name) {
   const root = path.join(ROOT, name);
   await fs.mkdir(path.join(root, '.agentic'), { recursive: true });
   await run(['init', '-q'], root);
-  await run(['config', 'user.email', 'agent@drydock.local'], root);
-  await run(['config', 'user.name', `drydock ${name}`], root);
+  await run(['config', 'user.email', 'agent@flotilla.local'], root);
+  await run(['config', 'user.name', `flotilla ${name}`], root);
   await run(['remote', 'add', 'origin', BARE], root);
   // A root commit so the worktree has somewhere to start from.
   await fs.writeFile(path.join(root, 'README.md'), `# ${name}\n`, 'utf8');

@@ -1,4 +1,4 @@
-// `drydock start` spawns the agent harness. Process management plus the file contract.
+// `flotilla start` spawns the agent harness. Process management plus the file contract.
 //
 // NO SERVER IS NEEDED FOR THIS PART, and it is worth being precise about what "bounded by
 // file_scope" does and does not mean here, because the difference is the whole lesson of order
@@ -101,9 +101,9 @@ export async function startHarness(opts: HarnessOptions): Promise<HarnessHandle>
     env: {
       ...process.env,
       // Read by the agent's own tooling if it wants them; the role pack is the primary channel.
-      DRYDOCK_ROLE: opts.role_slug,
-      DRYDOCK_AGENT_ID: opts.agent_id,
-      DRYDOCK_FILE_SCOPE: opts.file_scope.join(':'),
+      FLOTILLA_ROLE: opts.role_slug,
+      FLOTILLA_AGENT_ID: opts.agent_id,
+      FLOTILLA_FILE_SCOPE: opts.file_scope.join(':'),
       // Deliberately absent: any credential. The agent holds none, before or after this change.
     },
   });

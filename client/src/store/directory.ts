@@ -40,7 +40,7 @@ export class BrowserDirectory {
    * `revoked` is filtered HERE rather than in the query: adding a second `where` makes it a
    * composite query, which production refuses until a composite index is deployed. The emulator
    * does not enforce indexes at all, so that difference only ever shows up in production — it
-   * did, on the first run of `drydock ls`.
+   * did, on the first run of `flotilla ls`.
    */
   async listProjects(uid: string): Promise<ProjectSummary[]> {
     const memberships = await getDocs(query(collectionGroup(this.db, 'members'), where('uid', '==', uid)));

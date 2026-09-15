@@ -15,7 +15,7 @@ import { CapturingLogger } from '../shared/log.ts';
 import { systemClock } from '../shared/clock.ts';
 
 const PROJECT = process.env.FB_PROJECT_ID ?? 'multiplayer-agents-eec02';
-const URL_ = process.env.DRYDOCK_WRITE_URL
+const URL_ = process.env.FLOTILLA_WRITE_URL
   ?? `https://us-central1-${PROJECT}.cloudfunctions.net/write`;
 const STAMP = Date.now().toString(36);
 const PID = `proj_dep_${STAMP}`;

@@ -1,28 +1,28 @@
-# drydock-cli
+# flotilla-cli
 
 Multiplayer agentic coordination for coding agents — claims, file-scope locks, presence and a git
 blackboard, on infrastructure you already have.
 
 ```
-npm install -g drydock-cli
-drydock new "Inventory Tracker"     # in your repo
+npm install -g flotilla-cli
+flotilla new "Inventory Tracker"     # in your repo
 ```
 
-The package is `drydock-cli`; the command it installs is `drydock`. (`drydock` was already taken
+The package is `flotilla-cli`; the command it installs is `flotilla`. (`flotilla` was already taken
 on npm; `bin` is independent of package name, so the thing you type is unaffected.)
 
 ## Commands
 
 ```
-drydock new <name>           create a project here, connect this repo, write .agentic/
-drydock ls                   projects you are a member of
-drydock members <id>         the roster
+flotilla new <name>           create a project here, connect this repo, write .agentic/
+flotilla ls                   projects you are a member of
+flotilla members <id>         the roster
 
-drydock connect <invite>     write AGENTS.md + .agentic/, store the agent token
-drydock status               what the board thinks is happening
-drydock claim <task_id>      atomic claim, then acquire the declared file scope
-drydock report "<message>"   queue one progress line in the outbox
-drydock start                drain the outbox, deliver the inbox, heartbeat
+flotilla connect <invite>     write AGENTS.md + .agentic/, store the agent token
+flotilla status               what the board thinks is happening
+flotilla claim <task_id>      atomic claim, then acquire the declared file scope
+flotilla report "<message>"   queue one progress line in the outbox
+flotilla start                drain the outbox, deliver the inbox, heartbeat
 ```
 
 ## What it does
@@ -41,7 +41,7 @@ file rather than making a request.
 | variable | purpose |
 | --- | --- |
 | `FB_PROJECT_ID` | Firebase project holding the coordination substrate |
-| `DRYDOCK_UID` | your member id; defaults to `uid_$USER` |
+| `FLOTILLA_UID` | your member id; defaults to `uid_$USER` |
 | `GOOGLE_APPLICATION_CREDENTIALS` | service-account key path, for the project-tier commands |
 | `BUILDER_API_URL` | coordination API base url, for `connect`/`claim`/`report`/`start` |
 | `BUILDER_REPO` | `owner/repo` for the git blackboard |

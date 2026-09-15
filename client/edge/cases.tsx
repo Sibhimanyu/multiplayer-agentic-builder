@@ -230,7 +230,7 @@ const render = (snap: Snapshot, freshness: Freshness = LIVE, selected: string | 
   const empty = renderToStaticMarkup(<ProjectsIndex projects={[]} onOpen={() => {}} />);
   check(empty.includes('class="empty"'), 'index: zero projects gets the dashed empty state, not a blank');
   check(empty.includes('No projects yet'), 'index: and says so');
-  check(empty.includes('drydock new'), 'index: the empty state teaches the command');
+  check(empty.includes('flotilla new'), 'index: the empty state teaches the command');
   check(!/<button[^>]*>\s*(New|Create)/i.test(empty), 'index: and offers no button that could not work');
   check(empty.includes('<span class="count">0</span>'), 'index: the count is honest at zero');
 }

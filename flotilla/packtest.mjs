@@ -9,7 +9,7 @@
 // So: pack, install into a directory that has no relationship to this repo, and run the REAL
 // binary from there.
 //
-//   node drydock/packtest.mjs
+//   node flotilla/packtest.mjs
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
@@ -55,7 +55,7 @@ console.log(`  tarball   ${meta.filename}  ${(meta.size / 1024).toFixed(1)} KiB,
 // The CONTENTS, before trusting the install. A tarball with no dist/ installs fine and fails on
 // first run, which is a much worse place to find out.
 const names = meta.files.map((f) => f.path);
-check(names.includes('dist/drydock.js'), 'the tarball CONTAINS dist/drydock.js');
+check(names.includes('dist/flotilla.js'), 'the tarball CONTAINS dist/flotilla.js');
 check(names.includes('package.json'), 'and package.json');
 check(!names.some((n) => n.startsWith('..')), 'and nothing reaching above the package root');
 
@@ -64,14 +64,14 @@ await fs.writeFile(path.join(SANDBOX, 'package.json'), JSON.stringify({ name: 'p
 const install = await run('npm', ['install', '--no-audit', '--no-fund', tarball], { cwd: SANDBOX });
 check(install.code === 0, `npm install <tarball> exits 0${install.code ? `: ${install.out.slice(0, 300)}` : ''}`);
 
-const bin = path.join(SANDBOX, 'node_modules', '.bin', 'drydock');
-check(await fs.stat(bin).then(() => true, () => false), 'the `drydock` binary is on .bin');
+const bin = path.join(SANDBOX, 'node_modules', '.bin', 'flotilla');
+check(await fs.stat(bin).then(() => true, () => false), 'the `flotilla` binary is on .bin');
 
 console.log('\n3. run the REAL binary from the clean directory\n');
 const help = await run(bin, ['--help'], { cwd: SANDBOX });
 console.log(help.out.trimEnd().split('\n').map((l) => `  | ${l}`).join('\n'));
-check(help.code === 0, 'drydock --help exits 0');
-check(/drydock new <name>/.test(help.out), 'help ADVERTISES `drydock new` -- the string the UI shows');
+check(help.code === 0, 'flotilla --help exits 0');
+check(/flotilla new <name>/.test(help.out), 'help ADVERTISES `flotilla new` -- the string the UI shows');
 check(!/\bbuilder\b/.test(help.out), 'and the word "builder" appears nowhere in it');
 
 // A CONTROL for the help assertion: a command that does not exist must be refused, or "--help
@@ -86,31 +86,31 @@ await run('git', ['init', '-q'], { cwd: demo });
 await run('git', ['remote', 'add', 'origin', 'https://github.com/Sibhimanyu/inventory-tracker.git'], { cwd: demo });
 
 // HOME is redirected into the sandbox so this exercises a genuinely fresh install and cannot
-// read -- or clobber -- the real ~/.drydock on this machine.
+// read -- or clobber -- the real ~/.flotilla on this machine.
 const FAKE_HOME = path.join(SANDBOX, 'home');
 await fs.mkdir(FAKE_HOME, { recursive: true });
-const cleanEnv = { ...process.env, HOME: FAKE_HOME, DRYDOCK_UID: 'uid_packtest', BUILDER_ROOT: demo };
-delete cleanEnv.DRYDOCK_PROJECT;
+const cleanEnv = { ...process.env, HOME: FAKE_HOME, FLOTILLA_UID: 'uid_packtest', BUILDER_ROOT: demo };
+delete cleanEnv.FLOTILLA_PROJECT;
 delete cleanEnv.FB_PROJECT_ID;
 
 const name = `Packtest ${Date.now().toString(36)}`;
 const unconfigured = await run(bin, ['new', name], { cwd: demo, env: cleanEnv });
-check(unconfigured.code !== 0, `unconfigured \`drydock new\` FAILS (exit ${unconfigured.code}) rather than defaulting`);
-check(/drydock init --project/.test(unconfigured.out), 'and the error names the command to run');
+check(unconfigured.code !== 0, `unconfigured \`flotilla new\` FAILS (exit ${unconfigured.code}) rather than defaulting`);
+check(/flotilla init --project/.test(unconfigured.out), 'and the error names the command to run');
 // THE ARTIFACT AGAIN: the project id must not be recoverable from the shipped bundle even by
 // reading it. Source being clean proved nothing; this is the file a stranger receives.
-const bundle = await fs.readFile(path.join(SANDBOX, 'node_modules', 'drydock-cli', 'dist', 'drydock.js'), 'utf8');
+const bundle = await fs.readFile(path.join(SANDBOX, 'node_modules', 'flotilla-cli', 'dist', 'flotilla.js'), 'utf8');
 check(!bundle.includes('multiplayer-agents-eec02'),
   'and the INSTALLED bundle does not contain the project it was built against');
 
-console.log('\n5. drydock init, then new, from the installed binary\n');
+console.log('\n5. flotilla init, then new, from the installed binary\n');
 const apiKey = (await fs.readFile(path.join(repo, 'client', '.env.local'), 'utf8'))
   .split('\n').find((l) => l.startsWith('VITE_FIREBASE_API_KEY='))?.split('=')[1]?.trim();
 const init = await run(bin, ['init', '--project', 'multiplayer-agents-eec02', '--api-key', apiKey ?? ''], {
   cwd: demo, env: cleanEnv,
 });
 console.log(init.out.trimEnd().split('\n').filter((l) => !l.startsWith('{')).map((l) => `  | ${l}`).join('\n'));
-check(init.code === 0, `drydock init exits 0 (${init.code})`);
+check(init.code === 0, `flotilla init exits 0 (${init.code})`);
 check(/cloudfunctions\.net\/write/.test(init.out), 'and the write URL is DERIVED from the project id, not stored separately');
 
 // `new` NOW REQUIRES AN IDENTITY, and this file deliberately never logs in.
@@ -126,7 +126,7 @@ const notSignedIn = await run(bin, ['new', name], { cwd: demo, env: cleanEnv });
 console.log(notSignedIn.out.trimEnd().split('\n').filter((l) => !l.startsWith('{')).map((l) => `  | ${l}`).join('\n'));
 check(notSignedIn.code === 1, `installed + configured but NOT logged in: \`new\` refuses (exit ${notSignedIn.code})`);
 check(/not signed in/i.test(notSignedIn.out), 'and says "not signed in"');
-check(/drydock login/.test(notSignedIn.out), 'naming the command to run');
+check(/flotilla login/.test(notSignedIn.out), 'naming the command to run');
 check(!/default credentials/i.test(notSignedIn.out), 'and not a credentials-library error');
 
 // AND IT WROTE NOTHING. A refusal that had already scaffolded half a project would leave the
@@ -134,9 +134,9 @@ check(!/default credentials/i.test(notSignedIn.out), 'and not a credentials-libr
 const scaffold = await fs.readFile(path.join(demo, '.agentic', 'project.json'), 'utf8').catch(() => null);
 check(scaffold === null, 'and scaffolded NOTHING -- a refused create leaves no .agentic/project.json');
 
-// Creating a project end to end, with a login, is drydock/stranger.mjs. Stated here so the gap
+// Creating a project end to end, with a login, is flotilla/stranger.mjs. Stated here so the gap
 // is a decision rather than something nobody noticed.
-console.log('\n   (project creation end to end, including login, is drydock/stranger.mjs)');
+console.log('\n   (project creation end to end, including login, is flotilla/stranger.mjs)');
 
 await fs.rm(tarball, { force: true });
 console.log(`\n${failed === 0 ? 'PACKAGE VERIFIED FROM A TARBALL INSTALL' : `PACK TEST FAILED (${failed})`}`);

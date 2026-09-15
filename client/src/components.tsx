@@ -80,13 +80,13 @@ export function TopNav({ snap, freshness }: { snap: Snapshot; freshness: Freshne
   return (
     <nav className="nav">
       {/*
-        Drydock, decision 0002. The UI BRAND only: the repo, the branches and the project ids
+        Flotilla, decision 0002. The UI BRAND only: the repo, the branches and the project ids
         deliberately keep their old names, because they are live infrastructure and the
         comparison record has to stay readable. Renaming a project id would invalidate every
         measurement that names it.
       */}
-      <div className="mark">DD</div>
-      <div className="brand">Drydock</div>
+      <div className="mark">FL</div>
+      <div className="brand">Flotilla</div>
       <div className="sep" />
       <div className="proj">{snap.project_name}</div>
       <div className="repo">{snap.repo_url}</div>
@@ -197,7 +197,7 @@ export function ProjectsEmpty() {
   return (
     <div className="empty">
       <b>No projects yet</b>
-      Run <code>drydock new &lt;name&gt;</code> in your repo.
+      Run <code>flotilla new &lt;name&gt;</code> in your repo.
     </div>
   );
 }

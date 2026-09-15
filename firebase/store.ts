@@ -949,7 +949,7 @@ export class FirestoreStore implements CoordinationStore {
     // creation, not a law that holds before anyone has configured anything.
     //
     // So: a project with a role policy enforces it; a project without one is unbounded, exactly
-    // as before. `drydock new` always writes the policy. The gap that leaves -- a project created
+    // as before. `flotilla new` always writes the policy. The gap that leaves -- a project created
     // by some other path is unenforced -- is real, and is logged rather than left silent.
     const agentDoc = await this.agentsRef(pid).doc(agent_id).get();
     const role_slug = (agentDoc.get('role_slug') as string) ?? 'client';

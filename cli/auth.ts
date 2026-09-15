@@ -1,4 +1,4 @@
-// `drydock login` — the loopback flow, and the credential store.
+// `flotilla login` — the loopback flow, and the credential store.
 //
 // Shaped after `gh auth login` and `firebase login`, for the reason those tools are shaped that
 // way: THE CLI NEVER HANDLES THE PASSWORD. The user signs in in their browser, where a real
@@ -30,8 +30,8 @@ import path from 'node:path';
 
 import type { Logger } from '../shared/log.ts';
 
-/** ~/.drydock/credentials.json — outside any repo, so it cannot be committed by accident. */
-export const credentialsDir = (home = os.homedir()): string => path.join(home, '.drydock');
+/** ~/.flotilla/credentials.json — outside any repo, so it cannot be committed by accident. */
+export const credentialsDir = (home = os.homedir()): string => path.join(home, '.flotilla');
 export const credentialsPath = (home = os.homedir()): string =>
   path.join(credentialsDir(home), 'credentials.json');
 
@@ -146,7 +146,7 @@ export function startLoopback(opts: { timeout_ms?: number; log: Logger }): Loopb
       // Burned only now, on a response that is both authentic AND usable.
       used = true;
 
-      res.writeHead(200, { 'content-type': 'text/plain' }).end('drydock: signed in. You can close this tab.');
+      res.writeHead(200, { 'content-type': 'text/plain' }).end('flotilla: signed in. You can close this tab.');
       settle({ refresh_token, id_token, uid, email: typeof parsed.email === 'string' ? parsed.email : undefined });
     });
   });
@@ -231,7 +231,7 @@ export async function mintIdToken(
   if (!res.ok) {
     throw new AuthError(
       `could not refresh the session (${res.status}: ${String((body as any).error?.message ?? 'unknown')}). ` +
-        'Run `drydock login` again.',
+        'Run `flotilla login` again.',
     );
   }
   const id_token = typeof body.id_token === 'string' ? body.id_token : '';

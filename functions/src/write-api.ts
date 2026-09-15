@@ -164,7 +164,7 @@ export async function handleWrite(
   //
   // So the check is only that the caller is a REAL, verified identity — and the owner uid comes
   // from the TOKEN, never from the body, so a caller cannot create a project owned by someone
-  // else. This is also why `drydock new` cannot use the Admin SDK: a stranger has a user token
+  // else. This is also why `flotilla new` cannot use the Admin SDK: a stranger has a user token
   // and no service-account key, and the first thing they run would fail with "could not load the
   // default credentials". Found by running the flow as a stranger, which is the only way to see
   // it — every previous test had admin credentials in the environment.

@@ -2,7 +2,7 @@
 //
 // These three waited on the project tier and the connect flow, which now exist.
 //
-//   F1  owner creates the project and connects the repo     -> `drydock new`
+//   F1  owner creates the project and connects the repo     -> `flotilla new`
 //   F2  owner invites 3 builders, assigns architect/backend/frontend
 //   F3  each builder runs connect then start in a separate worktree
 //

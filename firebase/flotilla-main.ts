@@ -1,11 +1,11 @@
-// The `drydock` binary's entry point. Order 0048.
+// The `flotilla` binary's entry point. Order 0048.
 //
 // This is the COMPOSITION ROOT: the one place allowed to import a backend SDK and hand the
 // resulting ports to code that only knows the interfaces. cli/index.ts routes `new`, `ls` and
 // `members` through registerProjectCommands and never learns what is behind them, which is the
 // same boundary firebase/bridge-run.ts holds for the bridge.
 //
-// Built to plain JS by drydock/build.mjs. An installed user has no TypeScript loader, so the
+// Built to plain JS by flotilla/build.mjs. An installed user has no TypeScript loader, so the
 // shipped artifact is a bundle -- shared/** and cli/** are compiled in, and firebase-admin stays
 // external because it is a real dependency with native pieces.
 
@@ -23,9 +23,9 @@ import { consoleLogger } from '../shared/log.ts';
 
 // NO BAKED-IN PROJECT ID. It used to read `?? 'multiplayer-agents-eec02'`, which compiled one
 // person's Firebase project into a public package -- found by grepping the BUILT BUNDLE, not the
-// source, which is the only place it was visible. drydock/packtest.mjs now asserts its absence
+// source, which is the only place it was visible. flotilla/packtest.mjs now asserts its absence
 // there for the same reason.
-const uid = () => process.env.DRYDOCK_UID ?? `uid_${process.env.USER ?? 'local'}`;
+const uid = () => process.env.FLOTILLA_UID ?? `uid_${process.env.USER ?? 'local'}`;
 
 // NO ADMIN SDK PATH REMAINS IN THIS BINARY.
 //
@@ -33,7 +33,7 @@ const uid = () => process.env.DRYDOCK_UID ?? `uid_${process.env.USER ?? 'local'}
 // import lazy stopped `init` and `login` from reaching for Application Default Credentials, but
 // `ls` and `members` still called it -- so on a stranger's machine they printed "Could not load
 // the default credentials", a message about Google's auth library shown to someone whose actual
-// problem was that they had not run `drydock login`.
+// problem was that they had not run `flotilla login`.
 //
 // Deleting it rather than fixing its callers is deliberate: while the helper existed, the next
 // command added would reach for it too, and the bug would come back wearing a different name.
@@ -42,7 +42,7 @@ const uid = () => process.env.DRYDOCK_UID ?? `uid_${process.env.USER ?? 'local'}
 
 registerAuthCommands({
   /**
-   * `drydock init --project <id>` — the one identifier a user supplies.
+   * `flotilla init --project <id>` — the one identifier a user supplies.
    *
    * The web API key is looked up FROM that project rather than asked for, so there is no second
    * constant to get wrong. `--api-key` stays for anyone configuring a project they do not
@@ -66,12 +66,12 @@ registerAuthCommands({
     console.log(`  config     ${file}`);
     console.log(`  write url  ${writeUrl(cfg)}`);
     console.log(`  board      ${boardUrl(cfg)}`);
-    console.log('\nNext:  drydock login');
+    console.log('\nNext:  flotilla login');
     return 0;
   },
 
   /**
-   * `drydock login` — the loopback flow, now with a real provider.
+   * `flotilla login` — the loopback flow, now with a real provider.
    *
    * GOOGLE by default; `--anonymous` keeps the disposable path working, because that is what
    * lets someone open the board, see the denied state and read their own uid off the screen
@@ -121,7 +121,7 @@ registerAuthCommands({
 registerProjectCommands({
   async new(root, name, repo) {
     // THROUGH THE WRITE FUNCTION, with the user's own token. Not the Admin SDK: a stranger has a
-    // user credential from `drydock login` and no service-account key, and this is the first
+    // user credential from `flotilla login` and no service-account key, and this is the first
     // real command they run.
     const cfg = await loadConfig();
     const client = new WriteClient({
@@ -147,7 +147,7 @@ registerProjectCommands({
       if (err instanceof ProjectExistsError) {
         console.error(`\n${err.project_id} already exists.`);
         console.error(`Two clones of the same repo are one project. Ask an owner to add you:`);
-        console.error(`  drydock members ${err.project_id}`);
+        console.error(`  flotilla members ${err.project_id}`);
       } else {
         console.error(`\n${err instanceof Error ? err.message : String(err)}`);
       }
@@ -162,13 +162,13 @@ registerProjectCommands({
   // These two used connect(), which builds an admin client and therefore reaches for Application
   // Default Credentials. On a stranger's machine that produced "Could not load the default
   // credentials" instead of "not signed in", which is a message about Google's auth library shown
-  // to someone whose actual problem was that they had not run `drydock login`.
+  // to someone whose actual problem was that they had not run `flotilla login`.
   async ls() {
     const cfg = await loadConfig();
     const projects = await new ReadClient({ project_id: cfg.project_id, api_key: cfg.api_key })
       .listProjects();
     if (projects.length === 0) {
-      console.log('no projects yet. Run `drydock new <name>` in your repo.');
+      console.log('no projects yet. Run `flotilla new <name>` in your repo.');
     } else {
       console.log('your projects:\n');
       for (const p of projects) {
@@ -193,13 +193,13 @@ registerProjectCommands({
 /**
  * ONE CLEAN LINE, NOT A CRASH DUMP.
  *
- * An unconfigured install used to print `dist/drydock.js:1783`, the throw statement and a caret.
+ * An unconfigured install used to print `dist/flotilla.js:1783`, the throw statement and a caret.
  * Exit 1 was right; the output told the user they had found a bug in the tool rather than that
  * they had one step left to run. A stack trace is a message to whoever wrote the program, and
  * every line of it is noise to whoever is using it.
  *
  * NotConfigured and its kin already carry the instruction, so they print as-is. Anything else is
- * genuinely unexpected and says so, with the stack available behind DRYDOCK_DEBUG=1 for whoever
+ * genuinely unexpected and says so, with the stack available behind FLOTILLA_DEBUG=1 for whoever
  * has to fix it.
  */
 const EXPECTED = new Set(['NotConfigured', 'NotLoggedIn', 'AuthError', 'ProjectExistsError', 'BlackboardError']);
@@ -211,9 +211,9 @@ try {
   if (EXPECTED.has(e.name)) {
     console.error(`\n${e.message}\n`);
   } else {
-    console.error(`\ndrydock: ${e.message || String(err)}\n`);
-    console.error('This is unexpected. Re-run with DRYDOCK_DEBUG=1 for the full stack.\n');
+    console.error(`\nflotilla: ${e.message || String(err)}\n`);
+    console.error('This is unexpected. Re-run with FLOTILLA_DEBUG=1 for the full stack.\n');
   }
-  if (process.env.DRYDOCK_DEBUG === '1') console.error(e.stack ?? err);
+  if (process.env.FLOTILLA_DEBUG === '1') console.error(e.stack ?? err);
   process.exitCode = 1;
 }

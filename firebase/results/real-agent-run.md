@@ -48,14 +48,14 @@ Now: *"Branches are named: …"*, *"never run git — the bridge does both for y
 agent checked, found nothing, and flagged the file as wrong.
 
 This is the **third** instance of the same class: entry 70's webhook string, order 0048's
-`drydock new` that did not exist, and now this. Product copy asserting something the product does
+`flotilla new` that did not exist, and now this. Product copy asserting something the product does
 not do. Now the sentence explains the *ordering guarantee* it was trying to express — contracts are
 fetched to disk **before** being announced, so an empty directory is normal until one is.
 
 ### 3. `builder claim` — FIXED
 
 `tasks/current-task.md` told the agent to run `builder claim <task_id>`. Order 0048 renamed the CLI
-to `drydock`, but that pass covered `cli/index.ts`'s own help text and **not the files the CLI
+to `flotilla`, but that pass covered `cli/index.ts`'s own help text and **not the files the CLI
 generates**. The agent looked for a `builder` binary, did not find one, and said so.
 
 ### 4. The outbox envelope was never specified — FIXED

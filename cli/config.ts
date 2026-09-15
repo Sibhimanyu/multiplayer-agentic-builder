@@ -1,6 +1,6 @@
-// Which Firebase project this install talks to. ~/.drydock/config.json.
+// Which Firebase project this install talks to. ~/.flotilla/config.json.
 //
-// THERE IS NO DEFAULT, AND THAT IS THE POINT. `drydock-cli` is a public package; a fallback to
+// THERE IS NO DEFAULT, AND THAT IS THE POINT. `flotilla-cli` is a public package; a fallback to
 // whichever project the author happened to build against means a stranger's CLI quietly writes
 // into someone else's database, and they would never see an error telling them so. Unconfigured
 // FAILS, naming the command to run.
@@ -8,7 +8,7 @@
 // EVERYTHING DERIVES FROM THE PROJECT ID. The function URL is computed, not stored, so it cannot
 // drift out of step with the project it is supposed to belong to -- a second constant is a
 // second thing to forget. The web API key is the one value that cannot be computed (it is issued
-// by Firebase, not derived), so `drydock init` FETCHES it from the named project and stores it
+// by Firebase, not derived), so `flotilla init` FETCHES it from the named project and stores it
 // alongside. That is still deriving it from the project id; it is just a lookup rather than
 // arithmetic.
 //
@@ -20,9 +20,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 export const configPath = (home = os.homedir()): string =>
-  path.join(home, '.drydock', 'config.json');
+  path.join(home, '.flotilla', 'config.json');
 
-export interface DrydockConfig {
+export interface FlotillaConfig {
   project_id: string;
   /** Public web config. Identifies the project; authorises nothing. */
   api_key: string;
@@ -34,9 +34,9 @@ export class NotConfigured extends Error {
   constructor(detail: string) {
     super(
       `${detail}\n\n` +
-        '  Run:  drydock init --project <firebase-project-id>\n' +
-        '  Or:   DRYDOCK_PROJECT=<id> drydock ...\n\n' +
-        'There is no default project: drydock-cli is a public package, and silently\n' +
+        '  Run:  flotilla init --project <firebase-project-id>\n' +
+        '  Or:   FLOTILLA_PROJECT=<id> flotilla ...\n\n' +
+        'There is no default project: flotilla-cli is a public package, and silently\n' +
         'writing into whichever project it was built against would be worse than failing.',
     );
     this.name = 'NotConfigured';
@@ -44,28 +44,28 @@ export class NotConfigured extends Error {
 }
 
 /** The write function's URL, DERIVED. Never stored, so it cannot disagree with project_id. */
-export const writeUrl = (cfg: Pick<DrydockConfig, 'project_id' | 'region'>): string =>
+export const writeUrl = (cfg: Pick<FlotillaConfig, 'project_id' | 'region'>): string =>
   `https://${cfg.region}-${cfg.project_id}.cloudfunctions.net/write`;
 
 /** The hosted board, also derived. */
-export const boardUrl = (cfg: Pick<DrydockConfig, 'project_id'>): string =>
+export const boardUrl = (cfg: Pick<FlotillaConfig, 'project_id'>): string =>
   `https://${cfg.project_id}.web.app`;
 
-export async function loadConfig(home = os.homedir()): Promise<DrydockConfig> {
+export async function loadConfig(home = os.homedir()): Promise<FlotillaConfig> {
   // The env override wins, for CI and for anyone running against two projects at once. It still
   // needs an api_key, which comes from the stored config when present.
-  const override = process.env.DRYDOCK_PROJECT;
-  let stored: Partial<DrydockConfig> = {};
+  const override = process.env.FLOTILLA_PROJECT;
+  let stored: Partial<FlotillaConfig> = {};
   try {
-    stored = JSON.parse(await fs.readFile(configPath(home), 'utf8')) as Partial<DrydockConfig>;
+    stored = JSON.parse(await fs.readFile(configPath(home), 'utf8')) as Partial<FlotillaConfig>;
   } catch {
-    if (!override) throw new NotConfigured('drydock is not configured.');
+    if (!override) throw new NotConfigured('flotilla is not configured.');
   }
 
   const project_id = override ?? stored.project_id;
-  if (!project_id) throw new NotConfigured('No project id in ~/.drydock/config.json.');
+  if (!project_id) throw new NotConfigured('No project id in ~/.flotilla/config.json.');
 
-  const api_key = process.env.DRYDOCK_API_KEY ?? stored.api_key;
+  const api_key = process.env.FLOTILLA_API_KEY ?? stored.api_key;
   if (!api_key) {
     throw new NotConfigured(
       `No web API key for "${project_id}". It is public config, not a secret, but it cannot be derived.`,
@@ -76,7 +76,7 @@ export async function loadConfig(home = os.homedir()): Promise<DrydockConfig> {
   return { project_id, api_key, region: stored.region ?? 'us-central1' };
 }
 
-export async function saveConfig(cfg: DrydockConfig, home = os.homedir()): Promise<string> {
+export async function saveConfig(cfg: FlotillaConfig, home = os.homedir()): Promise<string> {
   const dir = path.dirname(configPath(home));
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const file = configPath(home);
@@ -89,7 +89,7 @@ export async function saveConfig(cfg: DrydockConfig, home = os.homedir()): Promi
 /**
  * Look the web API key up FROM the project id, WITHOUT ANY CREDENTIALS.
  *
- * `drydock init` runs BEFORE `drydock login`, by definition -- it records which project to talk
+ * `flotilla init` runs BEFORE `flotilla login`, by definition -- it records which project to talk
  * to, which is the thing login needs in order to know where to sign in. So it cannot require a
  * credential, and the first version did: it called the Firebase Management API through
  * Application Default Credentials, which every developer on this machine happens to have and no
@@ -135,7 +135,7 @@ export async function fetchApiKey(
     `Could not read the public web config for "${project_id}".\n` +
       tried.map((t) => `    ${t}`).join('\n') +
       '\n\n  Pass it explicitly:\n' +
-      `    drydock init --project ${project_id} --api-key <key>\n\n` +
+      `    flotilla init --project ${project_id} --api-key <key>\n\n` +
       '  The key is on the Firebase console under Project settings > General > Web API Key.\n' +
       '  It is public configuration, not a secret.',
   );

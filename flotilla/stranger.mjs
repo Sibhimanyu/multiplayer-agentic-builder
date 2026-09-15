@@ -1,17 +1,17 @@
 // The whole path, as someone who has never touched this machine. Order 0051.
 //
-//   install tarball -> drydock init -> drydock login -> drydock new
+//   install tarball -> flotilla init -> flotilla login -> flotilla new
 //     -> agent appends claim_requested -> bridge claims -> card moves -> agent reports -> ledger
 //
 // THE ENVIRONMENT IS SCRUBBED, AND THAT IS THE POINT. The previous stranger test redirected HOME
-// and left GOOGLE_APPLICATION_CREDENTIALS exported, so `drydock init` found credentials nobody
+// and left GOOGLE_APPLICATION_CREDENTIALS exported, so `flotilla init` found credentials nobody
 // else has and went green on a command that was broken for everyone. A redirected HOME is not a
 // fresh machine. Every child below runs with those variables REMOVED, not overridden.
 //
 // Assertions are on ARTIFACTS -- the config file, the project document, the claim document, the
 // ledger event -- never on a command's exit code alone.
 //
-//   node drydock/stranger.mjs
+//   node flotilla/stranger.mjs
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
@@ -34,14 +34,14 @@ const check = (ok, label) => {
 
 /**
  * A stranger's environment: no Google credentials, no Firebase token, no ambient project, and a
- * HOME that has never seen drydock. Built by DELETION from a copy, so a variable added to this
+ * HOME that has never seen flotilla. Built by DELETION from a copy, so a variable added to this
  * machine later cannot silently leak in.
  */
 const strangerEnv = (extra = {}) => {
   const e = { ...process.env, ...extra };
   for (const k of [
     'GOOGLE_APPLICATION_CREDENTIALS', 'FIREBASE_TOKEN', 'GCLOUD_PROJECT',
-    'GOOGLE_CLOUD_PROJECT', 'DRYDOCK_PROJECT', 'DRYDOCK_API_KEY', 'FB_PROJECT_ID',
+    'GOOGLE_CLOUD_PROJECT', 'FLOTILLA_PROJECT', 'FLOTILLA_API_KEY', 'FB_PROJECT_ID',
   ]) delete e[k];
   return e;
 };
@@ -64,7 +64,7 @@ const env = strangerEnv({ HOME });
 
 console.log('THE STRANGER PATH');
 console.log('  env scrubbed of GOOGLE_APPLICATION_CREDENTIALS, FIREBASE_TOKEN, GCLOUD_PROJECT,');
-console.log(`  GOOGLE_CLOUD_PROJECT, DRYDOCK_*, FB_PROJECT_ID;  HOME=${path.relative(repo, HOME)}\n`);
+console.log(`  GOOGLE_CLOUD_PROJECT, FLOTILLA_*, FB_PROJECT_ID;  HOME=${path.relative(repo, HOME)}\n`);
 
 // ---------------------------------------------------------------- 1. install
 console.log('1. install the tarball into a clean directory');
@@ -74,19 +74,19 @@ const tarball = path.join(here, meta.filename);
 await fs.writeFile(path.join(SANDBOX, 'package.json'), JSON.stringify({ name: 'stranger', private: true }));
 const install = await run('npm', ['install', '--no-audit', '--no-fund', tarball], { cwd: SANDBOX, env });
 check(install.code === 0, `npm install <tarball> (${meta.filename})`);
-const bin = path.join(SANDBOX, 'node_modules', '.bin', 'drydock');
-check(await fs.stat(bin).then(() => true, () => false), 'the `drydock` binary is installed');
+const bin = path.join(SANDBOX, 'node_modules', '.bin', 'flotilla');
+check(await fs.stat(bin).then(() => true, () => false), 'the `flotilla` binary is installed');
 
 // ---------------------------------------------------------------- 2. errors are messages
 console.log('\n2. an unconfigured install explains itself');
 const bare = await run(bin, ['ls'], { cwd: SANDBOX, env });
 console.log(quote(bare.out));
 check(bare.code === 1, `exits 1 (${bare.code})`);
-check(/drydock init --project/.test(bare.out), 'names the command to run');
+check(/flotilla init --project/.test(bare.out), 'names the command to run');
 check(!/\bat .*\.js:\d+/.test(bare.out) && !/\^\s*$/m.test(bare.out),
   'and prints NO stack trace -- a crash dump is a message to whoever wrote the tool');
-const dbg = await run(bin, ['ls'], { cwd: SANDBOX, env: { ...env, DRYDOCK_DEBUG: '1' } });
-check(/at /.test(dbg.out), 'DRYDOCK_DEBUG=1 does show the stack, for whoever has to fix it');
+const dbg = await run(bin, ['ls'], { cwd: SANDBOX, env: { ...env, FLOTILLA_DEBUG: '1' } });
+check(/at /.test(dbg.out), 'FLOTILLA_DEBUG=1 does show the stack, for whoever has to fix it');
 
 // ---------------------------------------------------------------- 2b. NOT-SIGNED-IN, per command
 //
@@ -99,18 +99,18 @@ check(/at /.test(dbg.out), 'DRYDOCK_DEBUG=1 does show the stack, for whoever has
 // bug. A test that only checked the exit code would have passed throughout.
 console.log('\n2b. every command that needs an identity says so, once configured but not signed in');
 const cfgOnlyHome = path.join(SANDBOX, 'home-cfg');
-await fs.mkdir(path.join(cfgOnlyHome, '.drydock'), { recursive: true });
+await fs.mkdir(path.join(cfgOnlyHome, '.flotilla'), { recursive: true });
 await fs.writeFile(
-  path.join(cfgOnlyHome, '.drydock', 'config.json'),
+  path.join(cfgOnlyHome, '.flotilla', 'config.json'),
   JSON.stringify({ project_id: FB_PROJECT, api_key: 'AIzaPlaceholder', region: 'us-central1' }),
 );
 const cfgEnv = strangerEnv({ HOME: cfgOnlyHome });
 
 for (const args of [['ls'], ['members', 'proj_anything'], ['new', 'Some Project']]) {
   const r = await run(bin, args, { cwd: SANDBOX, env: cfgEnv });
-  const label = `drydock ${args[0]}`;
+  const label = `flotilla ${args[0]}`;
   check(/not signed in/i.test(r.out), `${label}: says "not signed in"`);
-  check(/drydock login/.test(r.out), `${label}: and names \`drydock login\``);
+  check(/flotilla login/.test(r.out), `${label}: and names \`flotilla login\``);
   check(!/default credentials/i.test(r.out), `${label}: and does NOT mention default credentials`);
 }
 
@@ -120,7 +120,7 @@ for (const args of [['ls'], ['members', 'proj_anything'], ['new', 'Some Project'
 // commands it has -- from its own --help -- and holds every one of them to the rule.
 console.log('\n2c. sweep: NO command leaks a credentials error under a scrubbed environment');
 const helpText = (await run(bin, ['--help'], { cwd: SANDBOX, env: cfgEnv })).out;
-const discovered = [...helpText.matchAll(/^\s{2}drydock\s+([a-z-]+)/gm)].map((m) => m[1]);
+const discovered = [...helpText.matchAll(/^\s{2}flotilla\s+([a-z-]+)/gm)].map((m) => m[1]);
 check(discovered.length >= 6, `discovered ${discovered.length} commands from --help: ${discovered.join(', ')}`);
 
 const leaks = [];
@@ -136,18 +136,18 @@ console.log('        excluded by name: login (opens a browser and blocks on the 
 
 // THE CONTROL for the sweep. "No command printed it" is vacuous unless the check can detect it
 // printing. This is the exact string the broken build emitted, run through the exact predicate.
-const KNOWN_LEAK = 'drydock: Could not load the default credentials. Browse to https://cloud.google.com/...';
+const KNOWN_LEAK = 'flotilla: Could not load the default credentials. Browse to https://cloud.google.com/...';
 check(/default credentials/i.test(KNOWN_LEAK),
   'the leak detector FIRES on the string the broken build actually printed');
 
 // ---------------------------------------------------------------- 3. init
-console.log('\n3. drydock init -- must need NO credentials');
+console.log('\n3. flotilla init -- must need NO credentials');
 const init = await run(bin, ['init', '--project', FB_PROJECT], { cwd: SANDBOX, env });
 console.log(quote(init.out));
-check(init.code === 0, `drydock init exits 0 (${init.code})`);
+check(init.code === 0, `flotilla init exits 0 (${init.code})`);
 check(!/default credentials/i.test(init.out), 'and does not ask for Application Default Credentials');
 // THE ARTIFACT: the config file, not the exit code.
-const cfgPath = path.join(HOME, '.drydock', 'config.json');
+const cfgPath = path.join(HOME, '.flotilla', 'config.json');
 const cfg = await fs.readFile(cfgPath, 'utf8').then(JSON.parse, () => null);
 check(cfg !== null, 'config.json exists');
 check(cfg?.project_id === FB_PROJECT, `and records the project id (${cfg?.project_id})`);
@@ -155,7 +155,7 @@ check(typeof cfg?.api_key === 'string' && cfg.api_key.length > 10,
   'and the web API key, fetched from the project\'s PUBLIC hosting config');
 
 // ---------------------------------------------------------------- 4. login (STUBBED)
-console.log('\n4. drydock login -- STUBBED, and only this step');
+console.log('\n4. flotilla login -- STUBBED, and only this step');
 console.log('        Google sign-in needs a browser and a human; it cannot be driven headlessly.');
 console.log('        Everything either side of it is real. The stub writes the SAME credential');
 console.log('        file the loopback flow writes, and nothing downstream knows the difference.');
@@ -166,7 +166,7 @@ const su = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signU
 const session = await su.json();
 check(su.ok && !!session.refreshToken, 'a real Firebase identity was issued (the stub is the BROWSER, not the auth)');
 await fs.writeFile(
-  path.join(HOME, '.drydock', 'credentials.json'),
+  path.join(HOME, '.flotilla', 'credentials.json'),
   JSON.stringify({
     refresh_token: session.refreshToken, uid: session.localId,
     project_id: FB_PROJECT, obtained_at: new Date().toISOString(),
@@ -177,15 +177,15 @@ const UID = session.localId;
 check(!!UID, `signed in as ${String(UID).slice(0, 10)}...`);
 
 // ---------------------------------------------------------------- 5. new
-console.log('\n5. drydock new, in a repo the stranger just made');
+console.log('\n5. flotilla new, in a repo the stranger just made');
 const demo = path.join(SANDBOX, 'my-repo');
 await fs.mkdir(demo, { recursive: true });
 await run('git', ['init', '-q'], { cwd: demo, env });
 await run('git', ['remote', 'add', 'origin', 'https://github.com/Sibhimanyu/inventory-tracker.git'], { cwd: demo, env });
 const NAME = `Stranger ${Date.now().toString(36)}`;
-const created = await run(bin, ['new', NAME], { cwd: demo, env: { ...env, DRYDOCK_UID: UID, BUILDER_ROOT: demo } });
+const created = await run(bin, ['new', NAME], { cwd: demo, env: { ...env, FLOTILLA_UID: UID, BUILDER_ROOT: demo } });
 console.log(quote(created.out, 7));
-check(created.code === 0, `drydock new exits 0 (${created.code})`);
+check(created.code === 0, `flotilla new exits 0 (${created.code})`);
 const PID = /created (proj_[a-z0-9_]+)/.exec(created.out)?.[1];
 check(!!PID, `project id (${PID})`);
 const scaffold = await fs.readFile(path.join(demo, '.agentic', 'project.json'), 'utf8').then(JSON.parse, () => null);
@@ -303,5 +303,5 @@ try {
 
 console.log(`\n${failed === 0 ? 'STRANGER PATH PASSED' : `STRANGER PATH FAILED (${failed})`}`);
 console.log(`${results.length - failed}/${results.length} assertions.`);
-console.log('STUBBED: the browser half of `drydock login` only. Everything else ran.');
+console.log('STUBBED: the browser half of `flotilla login` only. Everything else ran.');
 process.exit(failed === 0 ? 0 : 1);

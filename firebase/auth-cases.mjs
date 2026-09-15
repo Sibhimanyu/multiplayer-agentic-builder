@@ -66,7 +66,7 @@ console.log(`project ${PROJECT}, namespace ${PID}\n`);
 let server;
 try {
   // ============================================================ 1. the loopback flow
-  console.log('1. drydock login -- loopback, nonce, credential store');
+  console.log('1. flotilla login -- loopback, nonce, credential store');
 
   const lb = startLoopback({ log, timeout_ms: 30_000 });
   const port = await loopbackReady(lb);
@@ -87,7 +87,7 @@ try {
   const evil = await post({ nonce: 'not-the-nonce', refresh_token: 'attacker', uid: 'uid_attacker' });
   check(evil.status === 403, `a response with the WRONG nonce is refused (${evil.status})`);
   // And it must not have KILLED the pending login -- otherwise any page the user visits is a
-  // denial of service on `drydock login`. The legitimate response below proves it survived.
+  // denial of service on `flotilla login`. The legitimate response below proves it survived.
 
   // THE CONTROL: the same listener, same shape, correct nonce -- so the 403 above is the nonce
   // check working, not the listener rejecting everything.
@@ -108,7 +108,7 @@ try {
   const st = await fs.stat(file);
   check((st.mode & 0o777) === 0o600, `credentials.json is mode 600 (got ${(st.mode & 0o777).toString(8)})`);
   const dirSt = await fs.stat(path.dirname(file));
-  check((dirSt.mode & 0o777) === 0o700, `~/.drydock is mode 700 (got ${(dirSt.mode & 0o777).toString(8)})`);
+  check((dirSt.mode & 0o777) === 0o700, `~/.flotilla is mode 700 (got ${(dirSt.mode & 0o777).toString(8)})`);
   const stored = await loadCredential(HOME);
   check(stored?.refresh_token === 'rt_real', 'the REFRESH token is what was stored');
   check(!('id_token' in (stored ?? {})), 'and no id_token was persisted -- they expire in an hour');

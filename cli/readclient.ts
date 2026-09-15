@@ -2,7 +2,7 @@
 //
 // `ls` and `members` used the ADMIN SDK, so on a stranger's machine they fell through to
 // Application Default Credentials and died with "Could not load the default credentials" -- a
-// message about Google's auth library, printed to someone who simply had not run `drydock login`.
+// message about Google's auth library, printed to someone who simply had not run `flotilla login`.
 // `new` already took the user's identity; these now take the same path.
 //
 // WRITES go through the deployed function, because authorization must live where the user cannot

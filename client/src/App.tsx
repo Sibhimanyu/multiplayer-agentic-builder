@@ -37,8 +37,8 @@ export function ProjectsIndex({
   return (
     <>
       <nav className="nav">
-        <div className="mark">DD</div>
-        <div className="brand">Drydock</div>
+        <div className="mark">FL</div>
+        <div className="brand">Flotilla</div>
         <span className="grow" />
       </nav>
       <div className="stage">

@@ -75,7 +75,7 @@ const client = (responses: Parameters<typeof stub>[0], token = 'tok') => {
 
 // ---- B3 ---------------------------------------------------------------------------------
 
-test('B3 a lost claim is a VALUE, not a throw, so `drydock claim` can exit 0', async () => {
+test('B3 a lost claim is a VALUE, not a throw, so `flotilla claim` can exit 0', async () => {
   const { api } = client([
     { status: 200, body: { ok: false, owner: 'agent_be000001', claimed_at: '2026-08-25T09:00:00Z' } },
   ]);

@@ -12,7 +12,7 @@ import { saveCredential, credentialsPath } from './auth.ts';
 import { CapturingLogger } from '../shared/log.ts';
 
 const tmp = async () => {
-  const d = await fs.mkdtemp(path.join(os.tmpdir(), 'drydock-h-'));
+  const d = await fs.mkdtemp(path.join(os.tmpdir(), 'flotilla-h-'));
   return d;
 };
 
@@ -66,11 +66,11 @@ test('startHarness spawns the command and reports its exit code', async () => {
   assert.equal(await h.exited, 0);
   assert.equal(calls.length, 1, 'the harness was actually spawned');
   assert.equal(calls[0].cmd, 'claude');
-  assert.equal(calls[0].env.DRYDOCK_FILE_SCOPE, 'functions/**');
-  assert.equal(calls[0].env.DRYDOCK_ROLE, 'backend');
+  assert.equal(calls[0].env.FLOTILLA_FILE_SCOPE, 'functions/**');
+  assert.equal(calls[0].env.FLOTILLA_ROLE, 'backend');
   // The agent holds NO credential. Asserted, because the whole design depends on it.
-  assert.ok(!('GOOGLE_APPLICATION_CREDENTIALS' in calls[0].env) || !calls[0].env.DRYDOCK_TOKEN,
-    'no drydock credential is placed in the agent environment');
+  assert.ok(!('GOOGLE_APPLICATION_CREDENTIALS' in calls[0].env) || !calls[0].env.FLOTILLA_TOKEN,
+    'no flotilla credential is placed in the agent environment');
 });
 
 test('a missing harness binary is reported, not thrown as a stack', async () => {

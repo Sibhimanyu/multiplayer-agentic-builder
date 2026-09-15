@@ -302,7 +302,7 @@ export async function drain(
 /**
  * Append one event to the outbox the way an agent would.
  *
- * Used by `drydock report` and by tests. Enforces the 4 KiB rule: over threshold goes to the
+ * Used by `flotilla report` and by tests. Enforces the 4 KiB rule: over threshold goes to the
  * spool via temp-file-and-rename, never appended (B5).
  */
 export async function appendOutbox(

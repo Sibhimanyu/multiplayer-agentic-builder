@@ -1,8 +1,8 @@
-// `drydock new <name>` — create a project, connect the repo, write .agentic/, generate role packs.
+// `flotilla new <name>` — create a project, connect the repo, write .agentic/, generate role packs.
 //
 // Takes a ProjectDirectory, not an adapter: this file must not import a backend SDK, for the same
 // reason cli/bridge.ts must not. The runnable entry point that constructs the directory lives in
-// firebase/drydock.ts.
+// firebase/flotilla.ts.
 //
 // WHY THE CLI DOES THIS AND NOT THE BROWSER. Creating a project connects a repo, writes .agentic/
 // into a working tree, and generates role packs on disk. A browser cannot do any of that without
@@ -44,7 +44,7 @@ function git(args: string[], cwd: string, timeout_ms = 15_000): Promise<{ code: 
 /**
  * `Inventory Tracker` -> `proj_inventory_tracker`.
  *
- * Deterministic, not random: running `drydock new` twice with the same name in the same repo must
+ * Deterministic, not random: running `flotilla new` twice with the same name in the same repo must
  * COLLIDE rather than quietly create a second project. createProject throws ProjectExistsError,
  * which is the intended outcome — two clones of one repo are one project.
  */

@@ -13,7 +13,7 @@ import type { Logger } from '../shared/log.ts';
 
 export class NotLoggedIn extends Error {
   constructor() {
-    super('not signed in. Run `drydock login`.');
+    super('not signed in. Run `flotilla login`.');
     this.name = 'NotLoggedIn';
   }
 }

@@ -80,7 +80,7 @@ export class FirestoreDirectory implements ProjectDirectory {
     await this.db.runTransaction(async (tx: Transaction) => {
       const ref = this.projectRef(input.project_id);
       const existing = await tx.get(ref);
-      // Reads before writes, and the existence check inside the transaction: two `drydock new`
+      // Reads before writes, and the existence check inside the transaction: two `flotilla new`
       // runs racing on the same id must produce one project and one clear error, not a silent
       // merge of two people's repos.
       if (existing.exists) throw new ProjectExistsError(input.project_id);
@@ -133,7 +133,7 @@ export class FirestoreDirectory implements ProjectDirectory {
     // FAILED_PRECONDITION until a composite index is built and deployed.
     //
     // Worth recording how that surfaced: THE EMULATOR DOES NOT ENFORCE INDEXES, so the
-    // conformance suite passed on it while `drydock ls` failed against production on the very
+    // conformance suite passed on it while `flotilla ls` failed against production on the very
     // first run. Same class of emulator/production divergence as order 0042's lock-timeout, and
     // the same lesson -- the emulator is not a scale model of production, it is a different
     // implementation that agrees about most things.

@@ -202,7 +202,7 @@ export interface ProjectDirectory {
    * one -- it produces a project nobody can see, list, or delete.
    *
    * Throws ProjectExistsError rather than overwriting. Creation is not idempotent: two people
-   * running `drydock new` in two clones of the same repo must not silently share a project.
+   * running `flotilla new` in two clones of the same repo must not silently share a project.
    */
   createProject(input: CreateProjectInput): Promise<ProjectRecord>;
 

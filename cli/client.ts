@@ -180,7 +180,7 @@ export class ApiClient {
         { task_id },
       );
       // A lost claim arrives as 200 + ok:false. It is a normal outcome and must not be an
-      // error here either, or `drydock claim` would exit non-zero on a routine race (B3).
+      // error here either, or `flotilla claim` would exit non-zero on a routine race (B3).
       return r.data.ok
         ? { ok: true }
         : { ok: false, owner: r.data.owner ?? 'unknown', claimed_at: r.data.claimed_at ?? '' };

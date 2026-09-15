@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// drydock — the CLI half of the agentic file contract.
+// flotilla — the CLI half of the agentic file contract.
 //
-//   drydock connect <invite>   write AGENTS.md + .agentic/, store the token
-//   drydock status             what the board thinks is happening
-//   drydock claim <task_id>    atomic claim, then acquire the file scope
-//   drydock report "<msg>"     append one progress line to the outbox
-//   drydock start              the long-running loop: drain outbox, deliver inbox, heartbeat
+//   flotilla connect <invite>   write AGENTS.md + .agentic/, store the token
+//   flotilla status             what the board thinks is happening
+//   flotilla claim <task_id>    atomic claim, then acquire the file scope
+//   flotilla report "<msg>"     append one progress line to the outbox
+//   flotilla start              the long-running loop: drain outbox, deliver inbox, heartbeat
 //
 // The agent runs none of these except by convention. It writes to outbox.jsonl and reads
 // inbox.jsonl; `start` is what moves bytes between those files and the network.
@@ -37,7 +37,7 @@ import { LAYER_OF, type Event, type EventKind } from '../shared/store/types.ts';
 import type { Logger } from '../shared/log.ts';
 
 /**
- * Human-facing logger. Diagnostics go to stderr so stdout stays parseable — `drydock status`
+ * Human-facing logger. Diagnostics go to stderr so stdout stays parseable — `flotilla status`
  * is read by people and by scripts, and interleaving log lines into it would break both.
  *
  * The machine-readable `code` is dropped from the rendered line on purpose: a person reading a
@@ -57,7 +57,7 @@ const fmt = (m: Record<string, unknown>): string =>
 const out = (s: string) => process.stdout.write(`${s}\n`);
 
 /** Token file. Outside .agentic/ so the agent's own tree never contains a credential. */
-const TOKEN_FILE = '.drydock-token';
+const TOKEN_FILE = '.flotilla-token';
 
 interface Config {
   root: string;
@@ -87,7 +87,7 @@ async function readToken(root: string): Promise<string> {
 async function cmdConnect(root: string, invite: string): Promise<number> {
   const cfg = await loadConfig(root);
   if (!cfg.api_base) {
-    log.warn('cli.drydock_api_url_is', 'BUILDER_API_URL is not set; nothing to connect to');
+    log.warn('cli.flotilla_api_url_is', 'BUILDER_API_URL is not set; nothing to connect to');
     return 1;
   }
 
@@ -114,13 +114,13 @@ async function cmdConnect(root: string, invite: string): Promise<number> {
   out(`connected as ${res.agent_id} (${res.role_slug}) to ${project.name}`);
   out(`wrote ${written.length} files: ${LAYOUT.agents_md} and ${LAYOUT.project.split('/')[0]}/`);
   out('');
-  out('Add .agentic/ and .drydock-token to .gitignore if they are not already there.');
+  out('Add .agentic/ and .flotilla-token to .gitignore if they are not already there.');
   return 0;
 }
 
 async function cmdStatus(root: string): Promise<number> {
   if (!(await isConnected(root))) {
-    log.warn('cli.not_connected_run_drydock', 'not connected: run `drydock connect <invite>` first');
+    log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
     return 2;
   }
   const cfg = await loadConfig(root);
@@ -195,7 +195,7 @@ async function countPending(root: string): Promise<{ lines: number; spooled: num
 
 async function cmdClaim(root: string, task_id: string): Promise<number> {
   if (!(await isConnected(root))) {
-    log.warn('cli.not_connected_run_drydock', 'not connected: run `drydock connect <invite>` first');
+    log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
     return 2;
   }
   const cfg = await loadConfig(root);
@@ -242,7 +242,7 @@ async function cmdClaim(root: string, task_id: string): Promise<number> {
 
 async function cmdReport(root: string, message: string): Promise<number> {
   if (!(await isConnected(root))) {
-    log.warn('cli.not_connected_run_drydock', 'not connected: run `drydock connect <invite>` first');
+    log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
     return 2;
   }
   const state = await readState(root, log);
@@ -277,7 +277,7 @@ async function cmdReport(root: string, message: string): Promise<number> {
  */
 async function cmdStart(root: string): Promise<number> {
   if (!(await isConnected(root))) {
-    log.warn('cli.not_connected_run_drydock', 'not connected: run `drydock connect <invite>` first');
+    log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
     return 2;
   }
   const cfg = await loadConfig(root);
@@ -285,7 +285,7 @@ async function cmdStart(root: string): Promise<number> {
   const client = new ApiClient({ base_url: cfg.api_base, token, log });
 
   const me = await client.whoami();
-  out(`drydock start — ${me.agent_id} (${me.role_slug})`);
+  out(`flotilla start — ${me.agent_id} (${me.role_slug})`);
   out(`freshness: ${me.freshness.mode}${me.freshness.mode === 'poll' ? ` ${me.freshness.stale_ms}ms` : ''}`);
 
   let running = true;
@@ -538,23 +538,23 @@ function rolePackFor(me: WhoAmI): RolePack {
 
 // ---- entry ------------------------------------------------------------------------------
 
-const USAGE = `drydock — agentic coordination CLI
+const USAGE = `flotilla — agentic coordination CLI
 
-  drydock init --project <id>  point this install at a Firebase project
-  drydock login                sign in with Google (--anonymous for a disposable identity)
+  flotilla init --project <id>  point this install at a Firebase project
+  flotilla login                sign in with Google (--anonymous for a disposable identity)
 
-  drydock new <name>           create a project here, connect this repo, write .agentic/
-  drydock ls                   projects you are a member of
-  drydock members <project_id> the roster
+  flotilla new <name>           create a project here, connect this repo, write .agentic/
+  flotilla ls                   projects you are a member of
+  flotilla members <project_id> the roster
 
-  drydock connect <invite>     write AGENTS.md + .agentic/, store the agent token
-  drydock status               what the board thinks is happening
-  drydock claim <task_id>      atomic claim, then acquire the declared file scope
-  drydock report "<message>"   queue one progress line in the outbox
-  drydock start                drain the outbox, deliver the inbox, heartbeat
+  flotilla connect <invite>     write AGENTS.md + .agentic/, store the agent token
+  flotilla status               what the board thinks is happening
+  flotilla claim <task_id>      atomic claim, then acquire the declared file scope
+  flotilla report "<message>"   queue one progress line in the outbox
+  flotilla start                drain the outbox, deliver the inbox, heartbeat
 
 Environment:
-  DRYDOCK_UID         your member id; defaults to uid_$USER
+  FLOTILLA_UID         your member id; defaults to uid_$USER
   FB_PROJECT_ID       Firebase project for the coordination substrate
   BUILDER_API_URL     coordination API base url (connect/claim/report/start)
   BUILDER_REPO        owner/repo for the git blackboard
@@ -566,7 +566,7 @@ Environment:
  *
  * `new`, `ls` and `members` need a ProjectDirectory, and constructing one means importing a
  * backend SDK — which this file must not do, for the same reason cli/bridge.ts must not. So the
- * packaged entry point (firebase/drydock-main.ts) supplies them and this file routes to them.
+ * packaged entry point (firebase/flotilla-main.ts) supplies them and this file routes to them.
  *
  * Absent means the binary was built without a backend, and the commands say so rather than
  * crashing on an undefined call.
@@ -599,7 +599,7 @@ export async function main(argv: string[]): Promise<number> {
 
   const needsBackend = (): number => {
     log.warn('cli.no_backend', 'this build has no coordination backend wired in', {});
-    out('This drydock build cannot reach a backend. Reinstall the published package.');
+    out('This flotilla build cannot reach a backend. Reinstall the published package.');
     return 1;
   };
 
@@ -608,7 +608,7 @@ export async function main(argv: string[]): Promise<number> {
       const i = rest.indexOf('--project');
       const project = i > -1 ? rest[i + 1] : rest.find((a) => !a.startsWith('--'));
       if (!project) {
-        log.warn('cli.usage_drydock_init', 'usage: drydock init --project <firebase-project-id>');
+        log.warn('cli.usage_flotilla_init', 'usage: flotilla init --project <firebase-project-id>');
         return 1;
       }
       if (!authCommands) return needsBackend();
@@ -621,7 +621,7 @@ export async function main(argv: string[]): Promise<number> {
     case 'new': {
       const name = rest.filter((a) => !a.startsWith('--')).join(' ').trim();
       if (!name) {
-        log.warn('cli.usage_drydock_new_name', 'usage: drydock new <name> [--repo owner/repo]');
+        log.warn('cli.usage_flotilla_new_name', 'usage: flotilla new <name> [--repo owner/repo]');
         return 1;
       }
       if (!projectCommands) return needsBackend();
@@ -634,7 +634,7 @@ export async function main(argv: string[]): Promise<number> {
     case 'members': {
       const pid = rest[0];
       if (!pid) {
-        log.warn('cli.usage_drydock_members', 'usage: drydock members <project_id>');
+        log.warn('cli.usage_flotilla_members', 'usage: flotilla members <project_id>');
         return 1;
       }
       if (!projectCommands) return needsBackend();
@@ -643,7 +643,7 @@ export async function main(argv: string[]): Promise<number> {
     case 'connect': {
       const invite = rest[0];
       if (!invite) {
-        log.warn('cli.usage_drydock_connect_invite', 'usage: drydock connect <invite>');
+        log.warn('cli.usage_flotilla_connect_invite', 'usage: flotilla connect <invite>');
         return 1;
       }
       return cmdConnect(root, invite);
@@ -653,7 +653,7 @@ export async function main(argv: string[]): Promise<number> {
     case 'claim': {
       const task = rest[0];
       if (!task) {
-        log.warn('cli.usage_drydock_claim_task', 'usage: drydock claim <task_id>');
+        log.warn('cli.usage_flotilla_claim_task', 'usage: flotilla claim <task_id>');
         return 1;
       }
       return cmdClaim(root, task);
@@ -661,7 +661,7 @@ export async function main(argv: string[]): Promise<number> {
     case 'report': {
       const message = rest.join(' ').trim();
       if (!message) {
-        log.warn('cli.usage_drydock_report_message', 'usage: drydock report "<message>"');
+        log.warn('cli.usage_flotilla_report_message', 'usage: flotilla report "<message>"');
         return 1;
       }
       return cmdReport(root, message);
