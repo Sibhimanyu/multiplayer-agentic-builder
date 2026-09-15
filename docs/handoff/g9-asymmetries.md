@@ -164,6 +164,76 @@ Second gotcha, recorded so it is not rediscovered: **`firebase emulators:exec` r
 the CLI's own pkg-bundled Node**, which treats `--test` as a filename. Start the emulator standalone
 and point `FIRESTORE_EMULATOR_HOST` at it instead.
 
+## Entry 74 — multi-user auth is deployed, and the enforcement is where the user cannot reach it
+
+```
+https://us-central1-multiplayer-agents-eec02.cloudfunctions.net/write
+```
+
+**Verified deployed, 9/9** — real URL, real Firebase Auth token, real Firestore. Not "deploy exited
+0": the allowed write's **lock document exists in Firestore**, written by the function's admin
+credentials **while `firestore.rules` still denies every client write** (8 × `allow write: if false`,
+unchanged). Independently re-checked by the coordinator: a no-token POST returns **our** 401 body
+`{"error":"no bearer token"}` rather than an IAM edge, so the request demonstrably reaches our code.
+
+**Verified local only, 34/34** — the loopback login flow, nonce handling and credential store, since
+that flow needs a browser. The split is stated rather than blurred.
+
+| through the same URL and token | |
+|---|---|
+| **ALLOWED** backend locks `functions/items/**` | 200, document exists |
+| **ALLOWED** client suggests | 200 |
+| REFUSED backend locks `client/**` | 403, names the glob |
+| REFUSED `**` | 403 — **containment is not intersection, in production** |
+| REFUSED member with no role policy | 403, **fail closed** |
+| REFUSED **revoked** member, same still-valid token | 403 |
+
+A forged `actor_id` is accepted as a request and written as **the token's** uid.
+
+`.agentic/role.md` now states plainly that out-of-scope locks are **refused by the server, not by that
+file** — and that sentence is asserted in a test, so the role pack cannot quietly start claiming to be
+the boundary.
+
+## Entry 75 — I sent the user to click a link they did not need
+
+I hit `SERVICE_DISABLED` on `cloudfunctions.googleapis.com`, failed to enable it via
+`serviceusage.services.enable`, and concluded the user had to enable five APIs by hand. I gave them
+the link.
+
+**Cloud Functions, Cloud Build and Artifact Registry all enabled fine on the same credential.** The
+real blocker was **Secret Manager**: `githubWebhook` declares `defineSecret` at **module scope**, and
+firebase-tools resolves that while *analysing* the codebase — before, and regardless of,
+`--only functions:write`. **One dead function was blocking a live one.** Order 0043 had already
+replaced that webhook with the bridge's poll, so it simply should not have been exported.
+
+**A blocking error names the operation that failed, not the cause.** I read "this API is disabled" as
+"you must enable this API," when the operative fact was *why the deploy touched it at all*. Third
+instance of the coordinator treating a true signal as an answer to the wrong question — after the
+exit code (entry 29) and the port ping (entry 69).
+
+## Entry 76 — the artifact rule, inverted: editing source while watching compiled output
+
+After the fix, the deploy **still** demanded the secret — because `functions/` deploys the compiled
+`lib/`, and the build had been silently failing on a pre-existing strictness error. **Source was being
+edited; old JavaScript was being deployed.**
+
+Every other instance of the artifact rule in this register says *assert the built thing, not the build
+step*. This is the same rule from the other side: **a source edit is not a deployed change until the
+artifact rebuilds.** Surfaced a real `noUncheckedIndexedAccess` violation in `shared/store/roles.ts`
+that only the stricter `functions/` tsconfig catches.
+
+## Entry 77 — the nonce check was a denial of service
+
+The first implementation rejected the **entire login** on a bad nonce. Any page the user happened to
+visit could then kill a login in progress with a single POST at the loopback listener.
+
+Now: a bad nonce is **refused, logged, and not fatal**, and the nonce is **not burned** — so the
+legitimate response still lands. It burns only on a response that is both authentic and usable.
+
+Worth recording because the check was added *for* security and its first form was itself the
+vulnerability. Hardening that creates a cheaper attack than the one it prevents is a real failure
+mode, and only thinking about the attacker's incentives catches it.
+
 ## Entry 71 — containment is not intersection, and the wrong one fails open
 
 Roles are now permissions, not labels. **Every refusal is paired with an acceptance through the same
