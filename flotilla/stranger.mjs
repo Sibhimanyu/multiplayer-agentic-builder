@@ -306,6 +306,6 @@ try {
 console.log(`\n${failed === 0 ? 'STRANGER PATH PASSED' : `STRANGER PATH FAILED (${failed})`}`);
 console.log(`${results.length - failed}/${results.length} assertions.`);
 console.log('STUBBED IN THIS SUITE: the browser half of `flotilla login` only. Everything else ran.');
-console.log('  That half is covered by firebase/login-browser.mjs -- real Chrome, hosted page,');
-console.log('  real `flotilla login --anonymous`, credential asserted on disk.');
+console.log('  That half is covered by firebase/login-local.mjs -- the CLI-served page driven end to end');
+console.log('  in BOTH Chromium and WebKit, credential asserted on disk.');
 process.exit(failed === 0 ? 0 : 1);

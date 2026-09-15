@@ -70,6 +70,23 @@ export interface LoopbackHandle {
   close: () => void;
 }
 
+export interface LoopbackOptions {
+  timeout_ms?: number;
+  log: Logger;
+  /**
+   * Serve the login page from this listener, at GET /.
+   *
+   * ORDER 0057. When present, the whole flow happens on http://localhost:<port>: the page is
+   * served here, sign-in runs there, and the credential comes back to /callback SAME-ORIGIN. No
+   * https page is involved, so no engine sees mixed content -- which is what stopped this working
+   * in WebKit when the page was hosted.
+   *
+   * Absent means the old shape: a listener only, for the hosted board at /login to POST to. That
+   * path is kept as a fallback and still works in Chrome.
+   */
+  page?: (nonce: string, port: number) => string;
+}
+
 /**
  * Start the loopback listener. Returns immediately with the port and nonce so the caller can
  * build the browser URL; the credential arrives on `result`.
@@ -77,7 +94,7 @@ export interface LoopbackHandle {
  * Binds 127.0.0.1 explicitly rather than 0.0.0.0: a listener on all interfaces is reachable from
  * the local network, which turns a localhost-only handshake into a remote one.
  */
-export function startLoopback(opts: { timeout_ms?: number; log: Logger }): LoopbackHandle {
+export function startLoopback(opts: LoopbackOptions): LoopbackHandle {
   const nonce = newNonce();
   let settle: (r: LoopbackResult) => void;
   let fail: (e: Error) => void;
@@ -97,6 +114,25 @@ export function startLoopback(opts: { timeout_ms?: number; log: Logger }): Loopb
     res.setHeader('access-control-allow-origin', '*');
     res.setHeader('access-control-allow-headers', 'content-type');
     if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }
+
+    // GET / serves the login page, when one was supplied. This is what makes the whole flow
+    // same-origin: the page the browser runs and the endpoint it posts to are the same server.
+    if (req.method === 'GET' && opts.page) {
+      const path = (req.url ?? '/').split('?')[0];
+      if (path === '/' || path === '/index.html') {
+        const body = opts.page(nonce, address());
+        res.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          // The page carries a live nonce. Nothing should keep a copy of it.
+          'cache-control': 'no-store',
+        }).end(body);
+        return;
+      }
+      // Browsers ask for this unprompted; answering 404 keeps it out of the logs as a real miss.
+      if (path === '/favicon.ico') { res.writeHead(204).end(); return; }
+      res.writeHead(404).end('not found');
+      return;
+    }
     if (req.method !== 'POST') { res.writeHead(405).end('POST only'); return; }
 
     let body = '';
@@ -146,8 +182,23 @@ export function startLoopback(opts: { timeout_ms?: number; log: Logger }): Loopb
       // Burned only now, on a response that is both authentic AND usable.
       used = true;
 
-      res.writeHead(200, { 'content-type': 'text/plain' }).end('flotilla: signed in. You can close this tab.');
-      settle({ refresh_token, id_token, uid, email: typeof parsed.email === 'string' ? parsed.email : undefined });
+      // SETTLE ONLY ONCE THE RESPONSE HAS BEEN FLUSHED.
+      //
+      // Settling first is a race the user loses: `flotilla login` awaits this promise, saves the
+      // credential, prints "signed in" and exits -- and the process exiting tears down the socket
+      // before the browser has read its reply. The page's fetch then rejects and it renders
+      // "Login failed" on a login that had, in fact, completely succeeded. Seen in BOTH Chromium
+      // and WebKit; the CLI said yes and the screen said no.
+      //
+      // res.end's callback fires when the response is finished, so the reply is on its way out
+      // before anything downstream can end the process.
+      res.writeHead(200, { 'content-type': 'text/plain' })
+        .end('flotilla: signed in. You can close this tab.', () => {
+          settle({
+            refresh_token, id_token, uid,
+            email: typeof parsed.email === 'string' ? parsed.email : undefined,
+          });
+        });
     });
   });
 
@@ -241,7 +292,21 @@ export async function mintIdToken(
   return { id_token, expires_in: Number(body.expires_in ?? 3600) };
 }
 
-/** The URL the browser is sent to. The nonce and port travel in the query string. */
+/**
+ * The URL of the page the CLI serves itself. Order 0057, and the primary path.
+ *
+ * `localhost`, NOT `127.0.0.1`, even though the socket is bound to 127.0.0.1. Those are the same
+ * machine but different STRINGS to Firebase Auth's authorized-domain check, which compares
+ * hostnames: `localhost` is on the project's list and `127.0.0.1` is refused with
+ * auth/unauthorized-domain. Measured both ways in firebase/localhost-probe.mjs, with the refusal
+ * as the control. The port is not part of that comparison, which is what makes a random port safe.
+ *
+ * No nonce and no port in the query string: the server templates the nonce into the page it
+ * serves, so there is nothing to carry across the redirect to Google and nothing to lose.
+ */
+export const localLoginUrl = (port: number): string => `http://localhost:${port}/`;
+
+/** The hosted board's page. The FALLBACK since order 0057; the nonce and port travel in the URL. */
 export function loginUrl(board_url: string, port: number, nonce: string): string {
   const u = new URL('/login', board_url);
   u.searchParams.set('port', String(port));

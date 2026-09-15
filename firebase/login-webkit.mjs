@@ -1,4 +1,13 @@
-// /login in WEBKIT. Order 0056.
+// The HOSTED /login page in WEBKIT. Orders 0056 and 0057.
+//
+// THIS IS NO LONGER THE PRIMARY PATH. Order 0057 moved the login page into the CLI, served on
+// http://localhost:<port>, because the measurement below showed the hosted page cannot deliver a
+// credential in this engine at all. The primary path lives in firebase/login-local.mjs and is
+// driven in BOTH Chromium and WebKit.
+//
+// What this file now covers is the FALLBACK (`flotilla login --hosted`): that it still renders,
+// that redirect-not-popup still holds, and that the engine still blocks the handoff -- pinned as
+// an assertion so the limitation cannot be forgotten and cannot silently change.
 //
 // READ THIS BEFORE READING THE PASSES. WEBKIT IS NOT SAFARI.
 //
@@ -181,20 +190,30 @@ console.log('\n4. does WebKit let an https page POST to http://127.0.0.1?');
   const text = await page.innerText('body');
   await page.screenshot({ path: path.join(OUT, 'webkit-login-anonymous.png') });
 
+  // THE BLOCK IS NOW THE EXPECTED RESULT, AND IS ASSERTED AS SUCH.
+  //
+  // This was a FAIL when it was discovered, and it stayed a FAIL until the design changed. Order
+  // 0057 changed it: the CLI serves the login page itself on http://localhost:<port>, so the
+  // primary path has no https page and no mixed content, and it completes in WebKit --
+  // firebase/login-local.mjs drives exactly that.
+  //
+  // What remains here is the HOSTED FALLBACK, which is genuinely unusable in this engine. That
+  // is pinned as an assertion rather than deleted, for two reasons: if WebKit ever adopts the
+  // loopback carve-out this fails and tells us, and nobody can quietly reintroduce the hosted
+  // page as the primary path without this going red.
+  check(outcome.kind === 'timeout',
+    'the hosted page STILL cannot deliver in WebKit -- expected, and why the CLI now serves its own');
+  check(logs.some((l) => /insecure content/i.test(l)),
+    'and the engine says why: it blocked the request as insecure content');
   if (outcome.kind === 'delivered') {
-    check(true, `THE POST CROSSED IN WEBKIT. The CLI received uid ${outcome.r.uid}`);
-    check(!!outcome.r.refresh_token, 'with a refresh token');
-    check(s === 'done', `and the page says so (${s})`);
-    check(/close this tab/i.test(text), 'and tells the user the tab is finished with');
-  } else {
-    // Plainly. WebKit refusing this would mean the loopback handoff cannot work in Safari
-    // either, and that is a DESIGN problem -- a different channel, not a patch.
-    check(false, 'THE POST DID NOT CROSS IN WEBKIT. Safari would not work either.');
-    console.log(`    state: ${s}`);
-    console.log(`    text : ${text.replace(/\n+/g, ' | ')}`);
-    for (const l of logs) console.log(`    ${l}`);
+    console.log(`    NOTE: it DID cross this time (uid ${outcome.r.uid}). WebKit may have adopted`);
+    console.log('          the loopback carve-out. Re-check whether the fallback can be primary.');
   }
-  check(s === 'done' || s === 'error', `terminal state, not a spinner (${s})`);
+  // And the user is not left guessing. The message names the browser block first in this engine,
+  // and names the browser that does work.
+  check(s === 'error', `the page reaches a named error, not a spinner (${s})`);
+  check(/blocked the request/i.test(text), 'the page says the browser may have blocked it');
+  check(/Chrome/.test(text), 'and names a browser where this link does work');
   lb.close();
   await ctx.close();
 }

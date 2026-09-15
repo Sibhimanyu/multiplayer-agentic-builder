@@ -208,7 +208,13 @@ console.log('\n4. `flotilla login --anonymous` for real, browser and all');
   // finished settling -- so leaving this detached meant closing Chrome out from under a live
   // navigation. The assertions had already passed; the harness was tearing down mid-flight.
   let driving = Promise.resolve();
-  const login = await run(['login', '--anonymous'], {
+  // --hosted, because THIS suite is about the hosted board page. Since order 0057 the default is
+  // the CLI-served local page, covered by firebase/login-local.mjs in both engines.
+  //
+  // --no-browser, because without it the CLI opens the SYSTEM default browser, which completes
+  // the login first and leaves the browser under test getting a 409 -- a suite passing on a
+  // credential delivered by a browser it does not name.
+  const login = await run(['login', '--anonymous', '--hosted', '--no-browser'], {
     onData: (out) => {
       if (opened) return;
       const m = /https:\/\/\S+\/login\?\S+/.exec(out);

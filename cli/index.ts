@@ -542,6 +542,9 @@ const USAGE = `flotilla — agentic coordination CLI
 
   flotilla init --project <id>  point this install at a Firebase project
   flotilla login                sign in with Google (--anonymous for a disposable identity)
+                                serves the sign-in page locally; --hosted uses the board
+                                --no-browser prints the URL instead of opening one
+  flotilla whoami               the identity this machine is signed in as
 
   flotilla new <name>           create a project here, connect this repo, write .agentic/
   flotilla ls                   projects you are a member of
@@ -585,7 +588,12 @@ export function registerProjectCommands(cmds: ProjectCommands): void {
 /** `init` and `login`. Injected for the same reason: they touch the SDK, this file must not. */
 export interface AuthCommands {
   init: (project_id: string, api_key?: string) => Promise<number>;
-  login: (anonymous: boolean) => Promise<number>;
+  /**
+   * `hosted` opts out of the locally served page and back to the board's /login.
+   * `no_browser` prints the URL without opening anything -- headless machines, and harnesses.
+   */
+  login: (anonymous: boolean, hosted?: boolean, no_browser?: boolean) => Promise<number>;
+  whoami: () => Promise<number>;
 }
 
 let authCommands: AuthCommands | null = null;
@@ -617,7 +625,12 @@ export async function main(argv: string[]): Promise<number> {
     }
     case 'login':
       if (!authCommands) return needsBackend();
-      return authCommands.login(rest.includes('--anonymous'));
+      return authCommands.login(
+        rest.includes('--anonymous'), rest.includes('--hosted'), rest.includes('--no-browser'),
+      );
+    case 'whoami':
+      if (!authCommands) return needsBackend();
+      return authCommands.whoami();
     case 'new': {
       const name = rest.filter((a) => !a.startsWith('--')).join(' ').trim();
       if (!name) {

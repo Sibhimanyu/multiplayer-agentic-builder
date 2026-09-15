@@ -14,7 +14,11 @@ import { spawn } from 'node:child_process';
 import { main, registerAuthCommands, registerProjectCommands } from '../cli/index.ts';
 import { newProject } from '../cli/newproject.ts';
 import { boardUrl, fetchApiKey, loadConfig, saveConfig, writeUrl } from '../cli/config.ts';
-import { loginUrl, loopbackReady, saveCredential, startLoopback } from '../cli/auth.ts';
+import {
+  credentialsPath, loadCredential, localLoginUrl, loginUrl, loopbackReady, saveCredential,
+  startLoopback,
+} from '../cli/auth.ts';
+import { loginPageHtml } from '../cli/loginpage.ts';
 import { WriteClient } from '../cli/writeclient.ts';
 import { RemoteDirectory } from '../cli/remotedirectory.ts';
 import { ReadClient } from '../cli/readclient.ts';
@@ -80,7 +84,19 @@ registerAuthCommands({
    * The nonce handling is unchanged and deliberately so: a bad nonce is refused, logged, and NOT
    * fatal, because aborting would let any page the user visits kill a login in progress.
    */
-  async login(anonymous) {
+  /**
+   * `flotilla whoami` — which identity this machine is signed in as.
+   *
+   * Reads the stored credential and NOTHING ELSE. No network call, no token mint: the question is
+   * "who does this install think I am", and answering it by contacting Firebase would make it fail
+   * offline and turn a lookup into a round trip. The credential file IS the answer.
+   *
+   * Three outcomes, three exit codes, because this is the command people put in scripts:
+   *   configured and signed in  -> the identity, 0
+   *   configured, not signed in -> says so, names `flotilla login`, 1
+   *   not configured            -> the existing NotConfigured message, 1
+   */
+  async whoami() {
     let cfg;
     try {
       cfg = await loadConfig();
@@ -89,18 +105,86 @@ registerAuthCommands({
       return 1;
     }
 
-    const lb = startLoopback({ log: consoleLogger, timeout_ms: 300_000 });
+    const cred = await loadCredential();
+    if (!cred) {
+      console.log('Not signed in.');
+      console.log(`  project     ${cfg.project_id}`);
+      console.log('\nRun:  flotilla login');
+      return 1;
+    }
+
+    console.log(`Signed in as ${cred.email ?? cred.uid}`);
+    console.log(`  uid         ${cred.uid}`);
+    console.log(`  email       ${cred.email ?? '(anonymous — no email)'}`);
+    console.log(`  project     ${cred.project_id}`);
+    console.log(`  credential  ${credentialsPath()}`);
+    // A credential for one project sitting in a config pointing at another is the kind of thing
+    // that surfaces much later as an unexplained permission denial.
+    if (cred.project_id !== cfg.project_id) {
+      console.log(`\n  NOTE: this config points at ${cfg.project_id}, but the credential is for `
+        + `${cred.project_id}.\n  Run \`flotilla login\` to sign in to ${cfg.project_id}.`);
+    }
+    return 0;
+  },
+
+  async login(anonymous, hosted = false, no_browser = false) {
+    let cfg;
+    try {
+      cfg = await loadConfig();
+    } catch (err) {
+      console.error(`\n${err instanceof Error ? err.message : String(err)}`);
+      return 1;
+    }
+
+    // LOCAL-FIRST since order 0057. The CLI serves the page itself, so the browser never has an
+    // https page posting to http -- which WebKit blocks as mixed content, making the hosted page
+    // unusable in Safari. `--hosted` keeps the old path for anyone who needs it.
+    const lb = startLoopback({
+      log: consoleLogger,
+      timeout_ms: 300_000,
+      ...(hosted ? {} : {
+        page: (nonce) => loginPageHtml({
+          api_key: cfg.api_key,
+          // The auth handler still lives on the Firebase domain: the PAGE is local, the OAuth
+          // handler cannot be. That is fine here -- what mattered was the credential POST, and
+          // that is now same-origin.
+          auth_domain: `${cfg.project_id}.firebaseapp.com`,
+          project_id: cfg.project_id,
+          nonce,
+          anonymous,
+        }),
+      }),
+    });
     const port = await loopbackReady(lb);
-    const url = `${loginUrl(boardUrl(cfg), port, lb.nonce)}&provider=${anonymous ? 'anonymous' : 'google'}`;
+    const url = hosted
+      ? `${loginUrl(boardUrl(cfg), port, lb.nonce)}&provider=${anonymous ? 'anonymous' : 'google'}`
+      : localLoginUrl(port);
 
     console.log(`\nOpen this in your browser to sign in${anonymous ? ' (anonymous)' : ' with Google'}:\n`);
     console.log(`  ${url}\n`);
+    if (!hosted) {
+      console.log('  This page is served by this command, on your own machine.');
+      console.log(`  If your browser cannot open it, run: flotilla login --hosted\n`);
+    }
     // Best effort. If it fails the URL is already printed, which is the actual instruction.
-    spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [url], { stdio: 'ignore' })
-      .on('error', () => {});
+    //
+    // `--no-browser` exists for headless machines and for anyone who wants to choose the browser
+    // themselves -- and it is what the browser harness uses. Without it, this spawn opens the
+    // SYSTEM DEFAULT browser, which then completes the login first and leaves the browser under
+    // test receiving a 409. A suite that passed on a credential delivered by a different browser
+    // than the one it names is a true signal about the wrong subject.
+    if (!no_browser) {
+      spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [url], { stdio: 'ignore' })
+        .on('error', () => {});
+    }
 
     try {
       const cred = await lb.result;
+      // The listener settles once its reply is flushed, but the browser still has to receive and
+      // process it. Exiting immediately closes the socket under a page that is mid-fetch, and the
+      // user is shown "Login failed" for a login that worked. A short grace costs nothing here --
+      // the command is already finished from the user's point of view.
+      await new Promise((r) => { setTimeout(r, 400); });
       const file = await saveCredential({
         refresh_token: cred.refresh_token, uid: cred.uid, email: cred.email,
         project_id: cfg.project_id, obtained_at: new Date().toISOString(),
