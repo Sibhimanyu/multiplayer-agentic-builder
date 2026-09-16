@@ -65,7 +65,15 @@
       "measured": "Lead boat nose x per frame: 424, 525, 622, 659, 684 through 0.28-0.60s -- still moving at the stop. Peaks 689 at 0.68. Width 129 then 126 at 0.68-0.76 (squash), 136 at 0.84-0.92 (rebound), 134 from 1.0 (rest). Previously the bbox was byte-identical at 0.70 and 0.76: that plateau is gone, and every frame from 0.28 to 0.84 now differs.",
       "ease_is_timing": "power2.out over 0.60s, NOT expo.out. expo.out covers 95% of the distance in the first 43% of its tween, so the boat glided to a visual stop and squashed ~0.3s later -- the bounce read as a separate, late event, which is exactly what the user reported. power2.out reaches 95% at 78% of the tween, so the motion is still alive when the squash begins.",
       "one_tween": "The scale cycle is a single keyframed tween. Three chained tweens made the rebound and rest phases share the instant at L+0.78, which lint flagged as overlapping tweens on scaleX/scaleY. One tween owning the property makes that structurally impossible rather than nudged away."
-    }
+    },
+    "wordmark_animation": {
+      "what": "A mask wipe whose leading edge is tilted to the mark's own -7 degrees, travelling left to right, so the name unfurls along the exact axis the fleet flew in on. 1.15-1.78s.",
+      "why_not_alternatives": "The wordmark is a SINGLE path, so there are no letters to stagger, and re-typesetting to get them is forbidden. Draw-on is out: stroking a filled path renders outlines. A shimmer sweep is out: it needs a gradient. Non-uniform scale is out: that is stretch/skew. A clip reveal touches the artwork not at all, which is why it is the one legal option that is also better than a fade.",
+      "geometry": "Clip rect x=250, y=-160, w 0->850, h=580, transform rotate(-7 250 129) so the pivot is the rect's own left edge and the leading edge tilts. Wordmark ink occupies x 300-1042.7 in the 1060x260 viewBox, measured via getBBox plus getBoundingClientRect (0.283-0.984 of svg width), not estimated.",
+      "frame_zero": "Width 0 in the markup means frame 0 needs no opacity gate: there is nothing to show."
+    },
+    "frame_zero_fix": "The boats were visible at t=0: 2,924 teal pixels across screen x 0-74. Travel is in the mark group's USER units where 1 unit = 0.518 screen px, so the previous -1180 left the lead boat's nose (resting at x=689) poking into frame. Now -1520/-1780/-1650, plus a 0.3s autoAlpha fade per boat so they do not enter with a hard edge. Verified: 0 ink pixels at t=0, 0.06 and 0.12.",
+    "method_failure": "This defect survived several verification passes because every proof strip was cropped to the lockup band (crop offset x=200), so it structurally could not show a frame-edge artifact. Proof frames are now tiled FULL FRAME."
   },
   "content": {
     "logo": "assets/brand/flotilla-lockup.svg",
@@ -77,8 +85,13 @@
     "timeline": [
       {
         "t": "0.00-0.12",
-        "what": "paper, empty. Boats staged off frame.",
+        "what": "paper, empty. Nothing on screen at all.",
         "primitive": "hold"
+      },
+      {
+        "t": "0.12-0.42",
+        "what": "lead boat fades up while travelling, so it crosses into frame at ~70% opacity rather than with a hard edge",
+        "primitive": "fade_in"
       },
       {
         "t": "0.12-0.72",
@@ -91,11 +104,6 @@
         "primitive": "squash_settle"
       },
       {
-        "t": "0.72-0.96",
-        "what": "lead settles back onto its authored position, starting the instant the squash peaks",
-        "primitive": "settle"
-      },
-      {
         "t": "0.20-1.12",
         "what": "mid boat, same cycle, longer travel",
         "primitive": "converge + squash_settle"
@@ -106,23 +114,23 @@
         "primitive": "converge + squash_settle"
       },
       {
-        "t": "1.20-1.90",
-        "what": "the name resolves: quiet fade, short forward settle, no scale on the art",
-        "primitive": "fade_in"
+        "t": "1.15-1.78",
+        "what": "the name UNFURLS: -7 degree tilted mask wipe, left to right, along the fleet's own travel axis",
+        "primitive": "mask_wipe"
       },
       {
-        "t": "1.90-2.45",
+        "t": "1.85-2.40",
         "what": "hairline teal rule draws left to right",
         "primitive": "underline_sweep"
       },
       {
-        "t": "2.35-2.85",
+        "t": "2.30-2.80",
         "what": "mono tagline fades up",
         "primitive": "fade_in"
       },
       {
-        "t": "2.85-4.30",
-        "what": "true stillness, 1.45s",
+        "t": "2.80-4.30",
+        "what": "true stillness, 1.5s",
         "primitive": "hold"
       }
     ]
@@ -134,16 +142,20 @@
     "An alpha-overlay variant will also be rendered, since the module notes a sting is often dropped onto other footage."
   ],
   "proof_times": [
-    0.1,
+    0,
+    0.06,
+    0.12,
+    0.2,
     0.3,
     0.45,
     0.6,
-    0.72,
-    0.88,
-    1.05,
-    1.3,
-    1.7,
-    2.1,
+    0.75,
+    1,
+    1.2,
+    1.4,
+    1.6,
+    1.9,
+    2.2,
     2.6,
     4.2
   ],
@@ -172,7 +184,8 @@
     "entry_moved": "composition lives at the project root index.html, not compositions/, because the CLI resolves the project entry there - `check .` and `render .` both fail otherwise",
     "swarm_resolves": "Held frame diffed against the authored-lockup reference: 0 of 2,073,600 pixels differ, max channel delta 0. Re-verified after adding squash, so the squash provably resolves to scale 1/1 and x 0.",
     "no_rotation": "The boat tween sets x and nothing else, and the boats sit inside the rotate(-7) group, so local +x IS the rising axis. Rotation cannot creep in.",
-    "bug_caught": "First attempt tweened x on the .fl-word PATH. GSAP writes the transform attribute, silently discarding its authored translate(300 46) scale(1.1) translate(-10.4 -41.3) -- a 288.56-unit x offset, measured as a 273px leftward shift (288.56 x 0.9415 screen scale = 271.7px). Every gate stayed green. Only the pixel diff found it. Fixed by wrapping the path in a g and tweening the wrapper, as the boats already did."
+    "bug_caught": "First attempt tweened x on the .fl-word PATH. GSAP writes the transform attribute, silently discarding its authored translate(300 46) scale(1.1) translate(-10.4 -41.3) -- a 288.56-unit x offset, measured as a 273px leftward shift (288.56 x 0.9415 screen scale = 271.7px). Every gate stayed green. Only the pixel diff found it. Fixed by wrapping the path in a g and tweening the wrapper, as the boats already did.",
+    "logo_pixel_identity": "Held frame diffed against the authored-lockup reference BY BAND: above the logo 0, THE LOGO (mark + wordmark) 0, the teal rule 0, below the tagline 0. Only the mono tagline differs, 2,200 px at max channel delta 99, with an identical bounding box and slightly heavier ink -- glyph hinting differing across two separate project directories, not a shift and nothing to do with the clip."
   },
   "brand_ruling": "The guide says do not separate the boats or change their spacing; the handoff says no independent repositioning. Those govern the mark AS PRESENTED -- they stop a wrong configuration shipping as the logo. A swarm that resolves into the authored lockup and holds there never presents a wrong configuration; the wrong ones are only the approach. The mark's own desc element reads \"Three teal boats moving together in a rising formation\", so motion is in its definition. Held to three constraints: travel along the formation's own axis only, never any rotation or per-boat scale; no wakes, trails, speed lines or blur; and the held frame must be pixel-identical to the authored lockup, asserted rather than assumed."
 }
