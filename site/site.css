@@ -92,23 +92,23 @@ strong{font-weight:600;color:var(--ink)}
 .hero-grid{display:grid;grid-template-columns:1.08fr .92fr;gap:44px;align-items:center}
 .hero-copy h1{font-size:clamp(36px,4.1vw,51px);max-width:17ch}
 
-/* ---- hero illustration ---- */
-.hero-illo svg{width:100%;height:auto;max-width:560px;margin-left:auto}
-/* Above 1200px the page has ~180px of dead margin either side of the 1080px wrap. Letting
-   the illustration bleed into the right one gives it hero scale without widening the text
-   measure, which is already at its comfortable limit. */
+/* ---- hero illustration: the territory field ----
+   Deliberately NOT a diagram. The page already carries four of those below, so a
+   fifth flowchart in the hero gives the page no hierarchy and says nothing
+   specific to this product. This is a texture: one repository, three owners,
+   and the untouched gap between them. */
+.hero-illo svg{width:100%;height:auto;max-width:570px;margin-left:auto}
 @media (min-width:1200px){.hero-illo{margin-right:-86px}}
-.hero-illo .rail{fill:none;stroke:var(--ink);stroke-opacity:.18;stroke-width:2.8;
-      stroke-linecap:round}
-.hero-illo .rail-live{fill:none;stroke:var(--teal);stroke-width:3.2;stroke-linecap:round}
-.hero-illo .origin rect{fill:var(--card);stroke:var(--line2);stroke-width:1.6}
-.hero-illo .glyph{fill:none;stroke:var(--ink);stroke-opacity:.24;stroke-width:2;
-      stroke-linecap:round}
-.hero-illo .commit circle{fill:var(--ink);fill-opacity:.2}
-.hero-illo .agent circle{fill:var(--teal);animation:pulse 2.6s infinite}
-.hero-illo .merge{fill:var(--paper);stroke:var(--teal);stroke-width:3}
-.hero-illo .goal-ring{fill:none;stroke:var(--teal);stroke-opacity:.28;stroke-width:2}
-.hero-illo .goal{fill:var(--teal)}
+.tf-lbl{font-family:var(--mono);font-size:14px;fill:var(--muted)}
+/* The hero cannot scroll the way the framed diagrams do, so its labels scale up
+   as the field shrinks. They are short enough (7-12 chars against 570 units)
+   that they still cannot collide at the largest step. */
+@media (max-width:900px){.tf-lbl{font-size:19px}}
+@media (max-width:640px){.tf-lbl{font-size:24px}}
+/* work landing right now. Reuses the board's own freshness pulse rather than
+   inventing a second idle motion for the page. */
+.tf-live{animation:pulse 2.6s infinite}
+@media (prefers-reduced-motion:reduce){.tf-live{animation:none}}
 
 /* ---- cards ---- */
 .grid{display:grid;gap:16px}
@@ -316,7 +316,7 @@ footer .fine{width:100%;margin-top:30px;padding-top:22px;border-top:1px solid va
 }
 @media (prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
-  .bf-nav .fresh .dot,.hero-illo .agent circle{animation:none}
+  .bf-nav .fresh .dot,.tf-live{animation:none}
 }
 
 /* ---- print ---- */
