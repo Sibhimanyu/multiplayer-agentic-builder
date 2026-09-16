@@ -1,4 +1,18 @@
-// /login in SAFARI. Order 0056.
+// Login in SAFARI.app. Orders 0056, 0057, 0059.
+//
+// THIS IS THE ONLY ENGINE THAT CAN FALSIFY THE AUTH FLOW, AND IT HAS NEVER RUN.
+//
+// Playwright's WebKit does NOT implement Intelligent Tracking Prevention. Every ITP-dependent
+// behaviour in this flow is invisible to it, which is why two orders of green WebKit runs
+// preceded the user reporting that Safari sign-in silently returns to the sign-in screen. Safari
+// also enforces the popup-gesture rule that WebKit only approximates.
+//
+// So when this file exits 2 -- which it does until someone runs `sudo safaridriver --enable` --
+// that exit 2 is the most important line in the auth suite. It does not mean "skipped". It means
+// the only thing that could have proved the fix wrong was never asked.
+//
+// Sections 1-4 cover the HOSTED page (the fallback). Sections 5-6 cover the CLI-SERVED LOCAL page,
+// which is what `flotilla login` actually opens and where ITP and the popup gesture both bite.
 //
 // WHY THIS FILE EXISTS SEPARATELY FROM login-browser.mjs. That one drives Chrome, and Chrome does
 // not have the defect: it allows the sign-in popup, so every assertion passed while the page was
@@ -26,7 +40,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { startLoopback, loopbackReady, loginUrl } from '../cli/auth.ts';
+import { localLoginUrl, loopbackReady, loginUrl, startLoopback } from '../cli/auth.ts';
+import { loginPageHtml } from '../cli/loginpage.ts';
 import { PENDING_KEY } from '../client/src/login-contract.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -224,6 +239,71 @@ try {
     check(/stopped waiting/.test(text), 'which says the CLI stopped waiting');
     check(!/Try again/.test(text), 'and offers NO retry, because a button cannot restart a process');
     check(/flotilla login/.test(text), 'and names the command that can');
+  }
+
+  // ============================================================ 5. THE PRIMARY PATH -- order 0059
+  //
+  // Sections 1-4 are the HOSTED page. This is the CLI-served local page, which is what
+  // `flotilla login` actually opens, and the two questions only Safari can answer:
+  //
+  //   ITP -- Playwright's WebKit does not implement Intelligent Tracking Prevention, so it cannot
+  //          falsify anything about it. Redirect was abandoned here precisely because ITP blocks
+  //          the cross-origin read of the pending state parked on the authDomain origin.
+  //   THE POPUP GESTURE -- Safari refuses popups it cannot attribute to a user gesture. WebKit
+  //          measures window.open landing in the click's own task, which is the right property,
+  //          but only Safari enforces the rule.
+  console.log('\n5. THE LOCAL PAGE -- popup, gesture, and the anonymous path end to end');
+  {
+    const lb = startLoopback({ log: quiet, timeout_ms: 90_000, page: (nonce) => loginPageHtml({
+      api_key: env.VITE_FIREBASE_API_KEY,
+      auth_domain: `${env.VITE_FIREBASE_PROJECT_ID}.firebaseapp.com`,
+      project_id: env.VITE_FIREBASE_PROJECT_ID,
+      nonce, anonymous: true,
+    }) });
+    const port = await loopbackReady(lb);
+    console.log(`  anonymous, on ${localLoginUrl(port)}`);
+    await go(localLoginUrl(port));
+
+    const outcome = await Promise.race([
+      lb.result.then((r) => ({ kind: 'delivered', r })),
+      new Promise((res) => setTimeout(() => res({ kind: 'timeout' }), 45_000)),
+    ]);
+    const s = await settle(['done', 'error'], 10_000);
+    check(outcome.kind === 'delivered',
+      outcome.kind === 'delivered'
+        ? `the credential crossed IN SAFARI (uid ${outcome.r.uid})`
+        : 'THE CREDENTIAL DID NOT CROSS IN SAFARI');
+    check(s === 'done', `and the page ends on success (${s})`);
+    lb.close();
+    lb.result.catch(() => {});
+  }
+
+  console.log('\n6. THE LOCAL PAGE -- the Google popup opens at all');
+  {
+    const lb = startLoopback({ log: quiet, timeout_ms: 30_000, page: (nonce) => loginPageHtml({
+      api_key: env.VITE_FIREBASE_API_KEY,
+      auth_domain: `${env.VITE_FIREBASE_PROJECT_ID}.firebaseapp.com`,
+      project_id: env.VITE_FIREBASE_PROJECT_ID,
+      nonce, anonymous: false,
+    }) });
+    const port = await loopbackReady(lb);
+    await go(localLoginUrl(port));
+    await settle(['ready', 'error'], 20_000);
+    check((await step()) === 'ready', 'the sign-in button renders');
+
+    const before = await wd('GET', `/session/${sid}/window/handles`);
+    await js("document.querySelector('#go').click()");
+    await new Promise((r) => setTimeout(r, 6_000));
+    const after = await wd('GET', `/session/${sid}/window/handles`);
+
+    // THE ASSERTION ONLY SAFARI CAN MAKE. If the gesture were lost, Safari refuses the window and
+    // the handle count does not change -- which is exactly what order 0056 saw and misdiagnosed
+    // as policy. A synthetic .click() is a weaker gesture than a real one, so a PASS here is
+    // strong evidence and a FAIL needs a human to confirm before it is believed.
+    check(after.length > before.length,
+      `Safari OPENED the popup (${before.length} -> ${after.length}) -- the gesture was attributed`);
+    lb.close();
+    lb.result.catch(() => {});
   }
 } finally {
   await wd('DELETE', `/session/${sid}`).catch(() => {});

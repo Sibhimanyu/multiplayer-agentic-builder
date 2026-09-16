@@ -51,6 +51,37 @@ const quiet = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}
 console.log(`LOGIN IN A REAL BROWSER -- ${BASE}\n`);
 check(BASE.startsWith('https://'), 'the board under test is served over https (or the mixed-content question is not being asked)');
 
+// ============================================================ 0. is the page under test CURRENT?
+//
+// This suite spent a whole run asserting things about a page built three orders earlier. The
+// deploy was fine; /login is a REWRITE to /index.html, and the no-cache header rule matched only
+// the literal "/index.html", so the rewritten path was served with max-age=3600 and every edge
+// held an hour-old login page. A suite that tests whatever the CDN feels like returning is not
+// testing this repo.
+//
+// So: compare the DOWNLOADED page against the REPO's build, the same way the project-id check
+// greps the built bundle rather than the source.
+console.log('\n0. the deployed page is the one this repo builds');
+{
+  const local = await fs.readFile(path.join(here, '..', 'client', 'dist', 'index.html'), 'utf8')
+    .catch(() => '');
+  const wantedAsset = /assets\/[A-Za-z0-9._-]+\.js/.exec(local)?.[0] ?? null;
+  check(!!wantedAsset, `client/dist/index.html references ${wantedAsset ?? 'NOTHING -- run the client build'}`);
+
+  const res = await fetch(`${BASE}/login`, { cache: 'no-store' });
+  const served = await res.text();
+  check(res.headers.get('cache-control') === 'no-cache',
+    `/login is served no-cache (${res.headers.get('cache-control')}) -- a rewritten path needs its `
+    + 'own rule; "/index.html" does not match "/login"');
+  check(!!wantedAsset && served.includes(wantedAsset),
+    `and it serves the bundle this repo just built (${wantedAsset})`);
+
+  // The control: this comparison must be able to FAIL. A bundle name that is not there proves the
+  // check looks at the served bytes rather than agreeing with itself.
+  check(!served.includes('assets/index-thisIsNotARealBundle.js'),
+    'and the comparison is against the served bytes, not itself (the control)');
+}
+
 const browser = await puppeteer.launch({
   headless: 'new',
   // No --allow-running-insecure-content and no --disable-web-security. Relaxing the policy under

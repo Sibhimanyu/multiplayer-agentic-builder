@@ -22,10 +22,15 @@
 // random port per run safe.
 //
 // THE NONCE IS NOT IN THE URL. The server templates it into the page it serves, so the URL is
-// just http://localhost:<port>/. It survives the Google round trip for free -- the redirect
-// returns to that same URL and the server templates the same nonce again -- with no
-// sessionStorage and nothing to lose in transit. It is now belt-and-braces rather than the only
-// defence, because same-origin is doing the work the nonce used to do alone.
+// just http://localhost:<port>/. It is belt-and-braces now rather than the only defence, because
+// same-origin is doing the work the nonce used to do alone.
+//
+// POPUP, NOT REDIRECT -- order 0059, and it reverses order 0056 for a measured reason.
+// signInWithRedirect stores its pending state on the authDomain origin and reads it back
+// cross-origin on return; Safari's ITP blocks that read, so getRedirectResult came back with no
+// user and this page quietly returned to its own sign-in screen. A page on localhost with a random
+// port can never be same-origin with authDomain, so redirect cannot be fixed here. See the click
+// handler for the gesture rules popup brings with it.
 
 /** Pinned. A floating version would change the page under a user without the CLI changing. */
 export const SDK_VERSION = '11.0.2';
@@ -113,15 +118,31 @@ export function loginPageHtml(opts: LoginPageOptions): string {
 <script type="module">
 import { initializeApp } from '${SDK_BASE}/firebase-app.js';
 import {
-  getAuth, GoogleAuthProvider, getRedirectResult, signInAnonymously, signInWithRedirect,
+  GoogleAuthProvider, browserPopupRedirectResolver, inMemoryPersistence, initializeAuth,
+  signInAnonymously, signInWithPopup,
 } from '${SDK_BASE}/firebase-auth.js';
 
-// Templated by the CLI that served this page. The nonce never travels in the URL, so there is
-// nothing to lose across the redirect to Google and back.
+// Templated by the CLI that served this page. The nonce never travels in the URL.
 const NONCE = ${js(opts.nonce)};
 const ANONYMOUS = ${opts.anonymous ? 'true' : 'false'};
 const app = initializeApp(${cfg});
-const auth = getAuth(app);
+
+// initializeAuth, NOT getAuth, and the arguments are the point.
+//
+// popupRedirectResolver EAGERLY: getAuth resolves it lazily, on the first signInWithPopup call --
+// which is to say, between the user's click and window.open. Measured: with the lazy resolver,
+// Chromium opened the window in a LATER TASK than the click (duringClick=false). Safari attributes
+// a popup to a gesture only while the click is still being handled, so that gap is the whole
+// defect this order is about. Initialising here moves the work to page load, where nothing is
+// waiting on a gesture.
+//
+// inMemoryPersistence: this page signs in once and hands the credential to the CLI. Persisting
+// would add an IndexedDB round trip to the same critical path, and would leave a signed-in Firebase
+// session in the browser of someone who was only authorising a terminal.
+const auth = initializeAuth(app, {
+  persistence: inMemoryPersistence,
+  popupRedirectResolver: browserPopupRedirectResolver,
+});
 
 const root = document.getElementById('root');
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -198,47 +219,93 @@ function describe(e) {
     return ['This sign-in method is not enabled on the Firebase project.', false];
   }
   if (code === 'auth/network-request-failed') return ['The network request to Firebase failed.', true];
+  if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+    return ['The Google window was closed before sign-in finished.', true];
+  }
+  if (code === 'auth/popup-blocked') {
+    // A retry IS worth offering: the retry click is itself a fresh gesture, and a browser that
+    // refused the first popup often allows one it can attribute to a deliberate second click.
+    // The escape is named too, because "allow popups and try again" alone is the dead end order
+    // 0056 removed -- and --hosted is a path that has actually been verified.
+    return ['Your browser blocked the sign-in window. Try again, or run '
+      + 'flotilla login --hosted, which signs in on the Flotilla board instead.', true];
+  }
   return [code || (e && e.message) || String(e), true];
 }
 
-async function start() {
-  render('signing-in', ANONYMOUS
-    ? '<h2>Signing in anonymously…</h2><p>No account needed.</p>'
-    : '<h2>Taking you to Google…</h2><p>This page will come back on its own.</p>');
+// Built ONCE, at load. Constructing it inside the click handler would be one more statement
+// between the gesture and the popup for no reason.
+const provider = new GoogleAuthProvider();
+
+async function startAnonymous() {
+  render('signing-in', '<h2>Signing in anonymously…</h2><p>No account needed.</p>');
   try {
-    if (ANONYMOUS) {
-      await deliver((await signInAnonymously(auth)).user);
-      return;
-    }
-    // REDIRECT, NOT POPUP. Safari blocks popups by default, which made the previous page a dead
-    // end on first run. A top-level navigation is not blocked anywhere.
-    await signInWithRedirect(auth, new GoogleAuthProvider());
+    await deliver((await signInAnonymously(auth)).user);
   } catch (e) {
     const [detail, retry] = describe(e);
-    fail('sign-in', detail, retry ? start : null);
+    fail('sign-in', detail, retry ? startAnonymous : null);
   }
 }
 
-// The return leg. getRedirectResult is called on EVERY load -- it is what consumes a pending
-// credential, and it resolves to null when there is nothing to consume.
+/**
+ * THE CLICK HANDLER. NOT async, AND signInWithPopup IS THE FIRST STATEMENT.
+ *
+ * Safari does not block popups by policy -- it blocks popups that are not tied to a user gesture.
+ * A click IS a gesture, but the browser only credits it while the click is still being handled, so
+ * ANY await before the call spends it and the popup is refused for having lost its cause.
+ *
+ * That is why this function is not async and never awaits: it starts the popup, and only then
+ * touches the DOM and attaches continuations. Written this way so the property is structural
+ * rather than remembered -- firebase/login-local.mjs asserts both that nothing is awaited before
+ * this call, and, in a real browser, that window.open happens in the click's own task.
+ *
+ * The other half of the same problem is inside the SDK: signInWithPopup waits for the Auth
+ * instance to finish initialising before it opens the window, and if that has not happened yet the
+ * wait lands between the gesture and window.open. So initialisation is forced at page load, below,
+ * BEFORE this button exists to be pressed.
+ */
+function onGoogleClick() {
+  const pending = signInWithPopup(auth, provider); // nothing above this line, deliberately
+  render('signing-in', '<h2>Waiting for Google…</h2>'
+    + '<p>Finish in the window that just opened. This page will take it from there.</p>');
+  pending
+    .then((cred) => deliver(cred.user))
+    .catch((e) => {
+      const [detail, retry] = describe(e);
+      fail('sign-in', detail, retry ? onGoogleClick : null);
+    });
+}
+
+// POPUP HERE, REDIRECT ON THE HOSTED PAGE, and the difference is not a preference.
+//
+// signInWithRedirect parks its pending state on the authDomain origin and must read it back
+// cross-origin on return. Safari's ITP blocks that read, so getRedirectResult resolves with no
+// user and the page returns to its own sign-in screen having apparently done nothing. A page
+// served from localhost on a random port can NEVER be same-origin with authDomain, so redirect
+// cannot be made to work here -- it is the wrong primitive for this page, exactly as popup was
+// the wrong primitive for the hosted one.
+//
+// The hosted board at /login IS same-origin with authDomain, so it keeps redirect.
 try {
-  const cred = await getRedirectResult(auth);
-  if (cred && cred.user) {
-    await deliver(cred.user);
-  } else if (ANONYMOUS) {
-    await start();
+  // Forces the Auth instance to finish initialising while nobody is waiting on a gesture. The
+  // button is rendered only after this resolves, so by the time it can be pressed the SDK has
+  // nothing left to await before opening the window.
+  await auth.authStateReady();
+
+  if (ANONYMOUS) {
+    await startAnonymous();
   } else {
     render('ready',
       '<h2>Sign in to Flotilla</h2>' +
       '<p>This connects the <code>flotilla</code> CLI waiting in your terminal. It is the only ' +
       'thing that will receive your credential.</p>' +
       '<button id="go">Continue with Google</button>' +
-      '<p class="note">You will be sent to Google and brought back here.</p>');
-    document.getElementById('go').onclick = start;
+      '<p class="note">A Google window will open. This page stays open behind it.</p>');
+    document.getElementById('go').onclick = onGoogleClick;
   }
 } catch (e) {
   const [detail, retry] = describe(e);
-  fail('coming back from Google', detail, retry ? start : null);
+  fail('starting sign-in', detail, retry ? onGoogleClick : null);
 }
 </script>
 </body>
