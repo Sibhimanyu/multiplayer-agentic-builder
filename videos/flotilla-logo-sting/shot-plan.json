@@ -1,6 +1,6 @@
 {
   "category": "logo-reveal",
-  "duration_s": 4.2,
+  "duration_s": 4.4,
   "fps": 30,
   "canvas": {
     "w": 1920,
@@ -56,7 +56,14 @@
     },
     "rule_override": "Override .tl-rule-svg line: the component mixes the accent with --fg via color-mix at stroke-opacity .62, which muddies the brand teal. Use a flat #0F766E at full opacity, hairline, matching the website's rail-live idiom.",
     "ink_override": "Override .tl-kicker/.tl-label ink from the component's color-mix to the brand's exact muted token #8A857C.",
-    "rule_width": "52cqw rather than the component's 34cqw, so the rule spans the lockup art's own width instead of starting inboard of the mark."
+    "rule_width": "52cqw rather than the component's 34cqw, so the rule spans the lockup art's own width instead of starting inboard of the mark.",
+    "squash": {
+      "amount": "scaleX 0.93 / scaleY 1.06 at the squash peak, rebounding through 1.025/0.99, resting at exactly 1/1.",
+      "why_restrained": "Squash-and-stretch reads PLAYFUL -- the motion vocabulary maps bounce_in to 'playful' -- and this brand is quiet and editorial under a Fraunces serif wordmark. 7% is the design decision; cartoon animation uses 20-30%. One overshoot, not a multi-bounce. The wordmark never squashes.",
+      "axis": "Local scaleX compresses along the travel axis for free, because the boats sit inside the rotate(-7) group. transformOrigin 100% 50% so the nose holds and the body catches up, which reads as deceleration rather than hitting a wall.",
+      "overshoot": "A fixed 16px past the authored position, then settled back. NOT an eased overshoot: back.out overshoots in proportion to distance, and over 1180px of travel that would throw the boat ~118px past its mark.",
+      "measured": "Lead boat width 134px at rest, 127px at the 0.88s squash peak (-5.2%) and 15px past its mark, 137px at the 1.06s rebound (+2.2%), back to 134px from 1.2s. Teal pixel count holds near 4,300 throughout, so volume is preserved rather than the boat merely shrinking."
+    }
   },
   "content": {
     "logo": "assets/brand/flotilla-lockup.svg",
@@ -68,42 +75,47 @@
     "timeline": [
       {
         "t": "0.00-0.12",
-        "what": "paper, empty. Boats staged off frame to the left.",
+        "what": "paper, empty. Boats staged off frame.",
         "primitive": "hold"
       },
       {
-        "t": "0.12-0.98",
-        "what": "lead boat travels in along the rising axis, expo.out, stops dead on its authored position",
+        "t": "0.12-0.84",
+        "what": "lead boat travels in, expo.out, landing 16px past its mark",
         "primitive": "converge"
       },
       {
-        "t": "0.20-1.06",
-        "what": "mid boat, longer travel",
-        "primitive": "converge"
+        "t": "0.78-1.22",
+        "what": "lead squashes to 0.93/1.06, settles back onto its mark, rebounds through a slight stretch, rests at 1/1",
+        "primitive": "squash_settle"
       },
       {
-        "t": "0.28-1.14",
-        "what": "rear boat. Formation locked at 1.14 and still thereafter.",
-        "primitive": "converge"
+        "t": "0.20-1.30",
+        "what": "mid boat, same cycle, longer travel",
+        "primitive": "converge + squash_settle"
       },
       {
-        "t": "1.05-1.75",
-        "what": "the name resolves: quiet fade with a short forward settle along the same travel direction. No scale on the art.",
+        "t": "0.28-1.38",
+        "what": "rear boat, same cycle. Formation locked and still from 1.38.",
+        "primitive": "converge + squash_settle"
+      },
+      {
+        "t": "1.30-2.00",
+        "what": "the name resolves: quiet fade, short forward settle, no scale on the art",
         "primitive": "fade_in"
       },
       {
-        "t": "1.75-2.30",
+        "t": "2.00-2.55",
         "what": "hairline teal rule draws left to right",
         "primitive": "underline_sweep"
       },
       {
-        "t": "2.20-2.70",
+        "t": "2.45-2.95",
         "what": "mono tagline fades up",
         "primitive": "fade_in"
       },
       {
-        "t": "2.70-4.20",
-        "what": "true stillness, 1.5s",
+        "t": "2.95-4.40",
+        "what": "true stillness, 1.45s",
         "primitive": "hold"
       }
     ]
@@ -116,17 +128,17 @@
   ],
   "proof_times": [
     0.1,
-    0.28,
-    0.42,
-    0.56,
+    0.3,
+    0.5,
     0.7,
-    0.85,
-    1,
-    1.14,
-    1.5,
-    1.95,
+    0.88,
+    1.06,
+    1.38,
+    1.7,
+    2.1,
     2.5,
-    4
+    2.95,
+    4.3
   ],
   "hard_prohibitions": [
     "Do NOT rotate the mark, or add any rotation to it.",
@@ -151,7 +163,7 @@
     "stillness": "wordmark ink bbox identical x744-1442 y402-558 at 1.45s, 1.9s and 3.5s - no drift, no reflow when the tagline fades in",
     "settle": "bbox w698->699 between 0.7s and 1.10s, the tail of scale .96->1",
     "entry_moved": "composition lives at the project root index.html, not compositions/, because the CLI resolves the project entry there - `check .` and `render .` both fail otherwise",
-    "swarm_resolves": "Held frame diffed against the pre-swarm reveal's held frame: 0 of 2,073,600 pixels differ, max channel delta 0. The swarm provably resolves to exactly the authored lockup.",
+    "swarm_resolves": "Held frame diffed against the authored-lockup reference: 0 of 2,073,600 pixels differ, max channel delta 0. Re-verified after adding squash, so the squash provably resolves to scale 1/1 and x 0.",
     "no_rotation": "The boat tween sets x and nothing else, and the boats sit inside the rotate(-7) group, so local +x IS the rising axis. Rotation cannot creep in.",
     "bug_caught": "First attempt tweened x on the .fl-word PATH. GSAP writes the transform attribute, silently discarding its authored translate(300 46) scale(1.1) translate(-10.4 -41.3) -- a 288.56-unit x offset, measured as a 273px leftward shift (288.56 x 0.9415 screen scale = 271.7px). Every gate stayed green. Only the pixel diff found it. Fixed by wrapping the path in a g and tweening the wrapper, as the boats already did."
   },

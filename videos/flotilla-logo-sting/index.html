@@ -164,8 +164,8 @@
     </style>
   </head>
   <body>
-    <div data-hf-id="hf-c94f" id="stage" data-composition-id="flotilla-logo-sting" data-start="0" data-duration="4.2" data-fps="30" data-width="1920" data-height="1080">
-      <div data-hf-id="hf-1tf4" id="sting-clip" class="tl-clip clip" data-start="0" data-duration="4.2" data-track-index="0">
+    <div data-hf-id="hf-c94f" id="stage" data-composition-id="flotilla-logo-sting" data-start="0" data-duration="4.4" data-fps="30" data-width="1920" data-height="1080">
+      <div data-hf-id="hf-1tf4" id="sting-clip" class="tl-clip clip" data-start="0" data-duration="4.4" data-track-index="0">
         <div data-hf-id="hf-ipon" class="tl-lockup">
           <!-- kicker omitted: shot-plan sets it to null, which in the
                component means a hidden node and an unchanged schedule. -->
@@ -245,17 +245,69 @@
         var boats = stage.querySelectorAll(".fl-boat");
         var travel = [-1180, -1460, -1320]; // lead, mid, rear
         var launch = [0.12, 0.2, 0.28];
+
+        // Squash is deliberately restrained: 7% compression, not the 20-30%
+        // of cartoon animation. Squash-and-stretch reads PLAYFUL, and this
+        // brand is quiet and editorial under a Fraunces serif wordmark, so
+        // the amount is the whole design decision. One overshoot, not a
+        // multi-bounce. The wordmark never squashes.
+        var SQUASH_X = 0.93, SQUASH_Y = 1.06; // volume roughly preserved
+        var REBOUND_X = 1.025, REBOUND_Y = 0.99;
+        var OVERSHOOT = 16; // px past the authored position, then settles back
+
         for (var i = 0; i < boats.length; i++) {
+          var L = launch[i];
+
+          // Local scaleX compresses ALONG the travel axis for free: the boats
+          // sit inside <g transform="rotate(-7 260 210)">, so their local x is
+          // the formation's rising axis. Origin at the leading edge, so the
+          // nose holds and the body catches up -- deceleration, not impact.
+          gsap.set(boats[i], { transformOrigin: "100% 50%" });
+
+          // travel in, landing slightly PAST the authored position. A fixed
+          // 16px overshoot, not an eased one: back.out overshoots in
+          // proportion to distance, and at 1180px of travel that would throw
+          // the boat ~118px past its mark.
           tl.fromTo(
             boats[i],
             { x: travel[i] },
-            { x: 0, duration: 0.86, ease: "expo.out", immediateRender: true },
-            launch[i],
+            { x: OVERSHOOT, duration: 0.72, ease: "expo.out", immediateRender: true },
+            L,
+          );
+
+          // squash as it stops -- this is what sells the landing
+          tl.to(
+            boats[i],
+            { scaleX: SQUASH_X, scaleY: SQUASH_Y, duration: 0.1, ease: "power2.out" },
+            L + 0.66,
+          );
+
+          // settle back onto the authored position
+          tl.to(
+            boats[i],
+            { x: 0, duration: 0.3, ease: "power2.inOut" },
+            L + 0.72,
+          );
+
+          // rebound: a slight stretch through rest, the follow-through
+          tl.to(
+            boats[i],
+            { scaleX: REBOUND_X, scaleY: REBOUND_Y, duration: 0.16, ease: "sine.inOut" },
+            L + 0.76,
+          );
+
+          // come to rest at EXACTLY 1,1. The held frame has to be
+          // pixel-identical to the authored lockup, so this lands on 1 and
+          // power2.out cannot carry it past.
+          tl.to(
+            boats[i],
+            { scaleX: 1, scaleY: 1, duration: 0.18, ease: "power2.out" },
+            L + 0.92,
           );
         }
-        // fleet is assembled and dead still from 1.14
+        // last boat (launch 0.28) is fully at rest at 1.38
 
-        // 1.05-1.75  the name resolves once the fleet is in formation. A
+        // 1.30-2.00  the name resolves once the fleet is in formation. A
         //            quiet fade with a short forward settle along the same
         //            direction of travel. No scale on the art, so the
         //            outlined wordmark is never stretched or skewed.
@@ -263,31 +315,31 @@
           word,
           { autoAlpha: 0, x: 26 },
           { autoAlpha: 1, x: 0, duration: 0.7, ease: "power3.out" },
-          1.05,
+          1.3,
         );
 
-        // 1.75-2.30  hairline rule draws left to right.
+        // 2.00-2.55  hairline rule draws left to right.
         tl.fromTo(
           ruleLine,
           { strokeDashoffset: ruleLength },
           { strokeDashoffset: 0, duration: 0.55, ease: "power2.out" },
-          1.75,
+          2.0,
         );
 
-        // 2.20-2.70  mono tagline fades up beneath the rule. 20px rise is
+        // 2.45-2.95  mono tagline fades up beneath the rule. 20px rise is
         //            the component's 1.8cqh on this fixed 1080px canvas,
         //            written in px so GSAP resolves it identically anywhere.
         tl.fromTo(
           label,
           { autoAlpha: 0, y: 20 },
           { autoAlpha: 1, y: 0, duration: 0.5, ease: "power2.out" },
-          2.2,
+          2.45,
         );
 
-        // 2.70-4.20  true stillness. An empty tween on a throwaway proxy
+        // 2.95-4.40  true stillness. An empty tween on a throwaway proxy
         //            carries the hold so the timeline length matches
         //            data-duration; nothing on screen is touched.
-        tl.to({}, { duration: 1.5 }, 2.7);
+        tl.to({}, { duration: 1.45 }, 2.95);
 
         tl.seek(0);
         window.__timelines["flotilla-logo-sting"] = tl;
