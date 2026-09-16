@@ -128,18 +128,58 @@ console.log('\n1. /login is a page, not the projects index');
 }
 
 // ============================================================ 2. the Google link renders
-console.log('\n2. a Google login link renders something to click');
+//
+// ORDER 0061 CHANGED WHAT THIS SECTION MUST ASSERT. The page now checks that the CLI which issued
+// the link is still listening BEFORE it renders anything actionable, because `flotilla login`
+// opens the browser itself -- so anyone arriving at the hosted page is usually arriving from a tab
+// restored long after that CLI exited. This section used to pass a made-up port and expect a
+// button; that same input is now correctly an expired link.
+console.log('\n2. a Google login link renders something to click -- when the CLI is still there');
+{
+  const live = startLoopback({ log: quiet, timeout_ms: 60_000 });
+  const livePort = await loopbackReady(live);
+  const { page } = await newPage();
+  await page.goto(
+    `${loginUrl(BASE, livePort, live.nonce)}&provider=google`,
+    { waitUntil: 'networkidle2', timeout: 60_000 },
+  );
+  await page.waitForFunction(
+    () => ['ready', 'stale', 'refused', 'error'].includes(
+      document.querySelector('[data-login-step]')?.dataset.loginStep),
+    { timeout: 25_000 },
+  ).catch(() => {});
+  const body = await page.evaluate(() => document.body.innerText);
+  check(/Continue with Google/.test(body), 'the button is on the page');
+  // Not clicked: a Google consent screen needs a human. That is the stubbed step, and it is the
+  // only one.
+  await page.screenshot({ path: path.join(OUT, 'login-google.png') });
+  await page.close();
+  live.close();
+  live.result.catch(() => {});
+}
+
+// ============================================================ 2b. and NOT when it is gone
+//
+// The control for the section above: the same page, the same browser, a port nobody holds. If the
+// button rendered here too, section 2 would be asserting nothing about liveness.
+console.log('\n2b. and a link whose CLI has exited renders no button at all');
 {
   const { page } = await newPage();
   await page.goto(
     `${loginUrl(BASE, 51234, 'g'.repeat(43))}&provider=google`,
     { waitUntil: 'networkidle2', timeout: 60_000 },
   );
+  await page.waitForFunction(
+    () => ['ready', 'stale', 'refused', 'error'].includes(
+      document.querySelector('[data-login-step]')?.dataset.loginStep),
+    { timeout: 25_000 },
+  ).catch(() => {});
+  const step = await page.evaluate(
+    () => document.querySelector('[data-login-step]')?.dataset.loginStep ?? null,
+  );
   const body = await page.evaluate(() => document.body.innerText);
-  check(/Continue with Google/.test(body), 'the button is on the page');
-  // Not clicked: a Google consent screen needs a human. That is the stubbed step, and it is the
-  // only one.
-  await page.screenshot({ path: path.join(OUT, 'login-google.png') });
+  check(step === 'stale', `a dead port reads as an expired link (${step})`);
+  check(!/Continue with Google/.test(body), 'and offers no Google round trip that could not land');
   await page.close();
 }
 

@@ -107,7 +107,10 @@ console.log('\n2. a link it cannot read becomes an error, never a guessed port')
   }
   // THE CONTROL. Every rejection above is worthless unless the same function accepts a real link.
   const good = initialLoginState(`?port=51234&nonce=${nonce}&provider=google`);
-  check(good.step === 'ready', 'and a well-formed link is accepted (the control)');
+  // `checking`, not `ready`, since order 0061: a well-formed link is ACCEPTED, and then the page
+  // asks whether the CLI that issued it is still listening before drawing anything actionable.
+  // What this control asserts is unchanged -- that a good link is not rejected like the ten above.
+  check(good.step === 'checking', `and a well-formed link is accepted (the control) — ${good.step}`);
 }
 
 // ============================================================ 3. a real anonymous identity
@@ -327,7 +330,7 @@ console.log('\n8. the port and nonce survive the round trip to Google');
   // --- outbound leg: the CLI's URL ---
   const outbound = new URL(`${loginUrl('https://example.web.app', port, lb.nonce)}&provider=google`).search;
   const before = initialLoginState(outbound, store);
-  check(before.step === 'ready', 'outbound: the CLI\'s link renders the sign-in button');
+  check(before.step === 'checking', 'outbound: the CLI\'s link is accepted and the listener checked');
   stashPendingLogin(store, before.params);
   check(!!store.getItem(PENDING_KEY), 'the port and nonce are stashed BEFORE the navigation');
 

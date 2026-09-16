@@ -5,9 +5,14 @@
 // credential in this engine at all. The primary path lives in firebase/login-local.mjs and is
 // driven in BOTH Chromium and WebKit.
 //
-// What this file now covers is the FALLBACK (`flotilla login --hosted`): that it still renders,
-// that redirect-not-popup still holds, and that the engine still blocks the handoff -- pinned as
-// an assertion so the limitation cannot be forgotten and cannot silently change.
+// Since order 0061 this file covers exactly two things, and no longer drives a sign-in flow that
+// the hosted page deliberately refuses to offer in this engine:
+//
+//   1. the hosted page refuses ON LOAD here, with a live listener, naming both ways out
+//   2. THE ENGINE FACT, PINNED: WebKit still blocks https -> http://127.0.0.1 as mixed content
+//
+// The two-engine proof -- refuses in WebKit, renders the button in Chromium -- lives in
+// firebase/hosted-refusal.mjs, where the Chromium control sits next to it.
 //
 // READ THIS BEFORE READING THE PASSES. WEBKIT IS NOT SAFARI.
 //
@@ -43,7 +48,6 @@ import { fileURLToPath } from 'node:url';
 import { webkit } from 'playwright';
 
 import { startLoopback, loopbackReady, loginUrl } from '../cli/auth.ts';
-import { PENDING_KEY } from '../client/src/login-contract.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.join(here, '..', 'client', 'edge', 'shots');
@@ -87,162 +91,77 @@ const settle = async (page, want, timeout = 30_000) => {
   return step(page);
 };
 
-// ============================================================ 1. it renders at all
-console.log('1. the page renders in WebKit');
+// ============================================================ 1. the page refuses on load
+//
+// ORDER 0061. This file used to drive the hosted page's whole sign-in flow in WebKit. That flow no
+// longer exists here BY DESIGN: the page now refuses up front, because https + WebKit + a loopback
+// handoff cannot complete, and every input to that was knowable before the user clicked anything.
+// The two-engine proof (refuses in WebKit, renders the button in Chromium) lives in
+// firebase/hosted-refusal.mjs, where the Chromium control sits beside it.
+//
+// What remains here is the one thing this file is uniquely for: PINNING THE ENGINE FACT.
+console.log('1. the hosted page refuses, rather than walking the user into Google');
 {
-  const { ctx, page } = await fresh();
-  await page.goto(`${BASE}/login`, { waitUntil: 'networkidle', timeout: 60_000 });
-  check((await step(page)) === 'error', 'a link with no login request is a named error');
-  const text = await page.innerText('body');
-  check(/flotilla login/.test(text), 'which names the command, having nothing to retry with');
-  check(!/Try again/.test(text), 'and offers no retry button it could not honour');
-  await page.screenshot({ path: path.join(OUT, 'webkit-login-no-params.png') });
-  await ctx.close();
-}
-
-// ============================================================ 2. no popup is attempted
-console.log('\n2. the sign-in button navigates -- it does not open a window');
-{
-  const { ctx, page } = await fresh();
-  // Count popups. Playwright's WebKit does NOT block them, which is what makes this meaningful:
-  // if the page still tried to open one, this would see it. Safari would have blocked it, and
-  // the user would be back at the dead end.
-  const popups = [];
-  ctx.on('page', (p) => popups.push(p));
-
-  await page.goto(`${loginUrl(BASE, 51234, 'g'.repeat(43))}&provider=google`,
-    { waitUntil: 'networkidle', timeout: 60_000 });
-  check((await step(page)) === 'ready', 'the Google link renders the sign-in screen');
-  const text = await page.innerText('body');
-  check(!/popup|pop-up/i.test(text), 'and never mentions a popup');
-  await page.screenshot({ path: path.join(OUT, 'webkit-login-google.png') });
-
-  await page.click('.login button.cta');
-  await page.waitForTimeout(5_000);
-
-  check(popups.length === 0,
-    `NO POPUP WAS OPENED (${popups.length}) -- this is the fix, in an engine that would have allowed one`);
-  const url = page.url();
-  check(/accounts\.google\.com|__\/auth\/handler/.test(url),
-    `the tab NAVIGATED to Google instead (${url.slice(0, 70)}…)`);
-
-  // And the nonce was written BEFORE the navigation. If it were not, the return leg would come
-  // back as "malformed nonce" -- the worse bug the order warned against.
-  await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
-  const stash = await page.evaluate((k) => window.sessionStorage.getItem(k), PENDING_KEY);
-  check(!!stash, 'the port and nonce were stashed before leaving the page');
-  check(!!stash && stash.includes('g'.repeat(43)), 'and the stash holds the CLI nonce verbatim');
-  check(!!stash && JSON.parse(stash).port === 51234, 'and the CLI port');
-  await ctx.close();
-}
-
-// ============================================================ 3. the return leg
-console.log('\n3. coming back with GOOGLE\'S query string, not the CLI\'s');
-{
-  const { ctx, page } = await fresh();
-  const lb = startLoopback({ log: quiet, timeout_ms: 60_000 });
+  const lb = startLoopback({ log: quiet, timeout_ms: 30_000 });
   const port = await loopbackReady(lb);
-
-  // Seed the stash the way the outbound leg would have, then arrive on the URL Google sends the
-  // browser to. The CLI's parameters are NOT in this URL.
-  await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
-  await page.evaluate(
-    ([k, v]) => window.sessionStorage.setItem(k, v),
-    [PENDING_KEY, JSON.stringify({ port, nonce: lb.nonce, anonymous: false, popup: false })],
-  );
-  await page.goto(`${BASE}/login?state=AMbdmDl7&code=4%2F0AeanS0abc&authuser=0&prompt=consent`,
+  const { ctx, page } = await fresh();
+  // A LIVE listener, so "refused" cannot be confused with "expired link".
+  await page.goto(`${loginUrl(BASE, port, lb.nonce)}&provider=google`,
     { waitUntil: 'networkidle', timeout: 60_000 });
-
-  const s = await settle(page, ['returning', 'posting', 'done', 'error'], 25_000);
+  const s = await settle(page, ['refused', 'ready', 'stale', 'error'], 25_000);
   const text = await page.innerText('body');
-  check(s !== null, `the return leg renders (${s})`);
-  check(!/login link/i.test(text), 'and does NOT read Google\'s parameters as a malformed link');
-  // getRedirectResult finds nothing, because no real redirect happened -- so the honest outcome
-  // is "Google did not return a sign-in", WITH a retry, since the nonce is still good.
-  check(/did not return a sign-in/i.test(text) || s === 'posting' || s === 'done',
-    'it resolves the redirect rather than blaming the URL');
-  if (/did not return a sign-in/i.test(text)) {
-    check(/Try again/.test(text), 'and offers a RETRY, because the stashed nonce is still usable');
-  }
-  await page.screenshot({ path: path.join(OUT, 'webkit-login-return.png') });
+  check(s === 'refused', `refused on load with a live listener (${s})`);
+  check(!/Continue with Google/.test(text), 'and no sign-in button was offered');
+  check(/flotilla login/.test(text) && /Chrome/.test(text), 'naming both ways out');
+  await page.screenshot({ path: path.join(OUT, 'webkit-login-refused.png') });
   lb.close();
   lb.result.catch(() => {});
   await ctx.close();
 }
 
-// ============================================================ 4. THE ENGINE QUESTION
-console.log('\n4. does WebKit let an https page POST to http://127.0.0.1?');
-{
-  const { ctx, page, logs } = await fresh();
-  const lb = startLoopback({ log: quiet, timeout_ms: 90_000 });
-  const port = await loopbackReady(lb);
-  console.log(`  listener on 127.0.0.1:${port}`);
-
-  await page.goto(`${loginUrl(BASE, port, lb.nonce)}&provider=anonymous`,
-    { waitUntil: 'networkidle', timeout: 60_000 });
-
-  // Assert the ARTIFACT the CLI consumes, not the page's opinion of how it went.
-  const outcome = await Promise.race([
-    lb.result.then((r) => ({ kind: 'delivered', r })),
-    new Promise((res) => setTimeout(() => res({ kind: 'timeout' }), 45_000)),
-  ]);
-  const s = await settle(page, ['done', 'error'], 10_000);
-  const text = await page.innerText('body');
-  await page.screenshot({ path: path.join(OUT, 'webkit-login-anonymous.png') });
-
-  // THE BLOCK IS NOW THE EXPECTED RESULT, AND IS ASSERTED AS SUCH.
-  //
-  // This was a FAIL when it was discovered, and it stayed a FAIL until the design changed. Order
-  // 0057 changed it: the CLI serves the login page itself on http://localhost:<port>, so the
-  // primary path has no https page and no mixed content, and it completes in WebKit --
-  // firebase/login-local.mjs drives exactly that.
-  //
-  // What remains here is the HOSTED FALLBACK, which is genuinely unusable in this engine. That
-  // is pinned as an assertion rather than deleted, for two reasons: if WebKit ever adopts the
-  // loopback carve-out this fails and tells us, and nobody can quietly reintroduce the hosted
-  // page as the primary path without this going red.
-  check(outcome.kind === 'timeout',
-    'the hosted page STILL cannot deliver in WebKit -- expected, and why the CLI now serves its own');
-  check(logs.some((l) => /insecure content/i.test(l)),
-    'and the engine says why: it blocked the request as insecure content');
-  if (outcome.kind === 'delivered') {
-    console.log(`    NOTE: it DID cross this time (uid ${outcome.r.uid}). WebKit may have adopted`);
-    console.log('          the loopback carve-out. Re-check whether the fallback can be primary.');
-  }
-  // And the user is not left guessing. The message names the browser block first in this engine,
-  // and names the browser that does work.
-  check(s === 'error', `the page reaches a named error, not a spinner (${s})`);
-  check(/blocked the request/i.test(text), 'the page says the browser may have blocked it');
-  check(/Chrome/.test(text), 'and names a browser where this link does work');
-  lb.close();
-  await ctx.close();
-}
-
-// ============================================================ 5. the way out
-console.log('\n5. failures offer a way out, or say why they cannot');
-{
-  const { ctx, page } = await fresh();
-  const dead = startLoopback({ log: quiet, timeout_ms: 2_000 });
-  const port = await loopbackReady(dead);
-  dead.close();
-  dead.result.catch(() => {});
-  await new Promise((r) => setTimeout(r, 200));
-
-  await page.goto(`${loginUrl(BASE, port, dead.nonce)}&provider=anonymous`,
-    { waitUntil: 'networkidle', timeout: 60_000 });
-  const s = await settle(page, ['error', 'done'], 40_000);
-  const text = await page.innerText('body');
-  check(s === 'error', `a CLI that stopped waiting ends in a named error (${s})`);
-  check(/stopped waiting/.test(text), 'that says so');
-  check(!/Try again/.test(text), 'and offers NO retry -- a button cannot restart a dead process');
-  check(/flotilla login/.test(text), 'and names the command that can');
-  await page.screenshot({ path: path.join(OUT, 'webkit-login-unrecoverable.png') });
-  await ctx.close();
-}
-
-// ============================================================ 6. a probe, not a test
+// ============================================================ 2. THE ENGINE FACT, PINNED
 //
-// Section 4 found that WebKit BLOCKS the fetch to http://127.0.0.1 as mixed content. That is a
+// WebKit blocks a fetch from an https page to http://127.0.0.1 as mixed content; Chrome permits it
+// because loopback is potentially trustworthy under Secure Contexts. That disagreement is the
+// reason the CLI serves its own page, and it is the reason the gate above exists.
+//
+// Asserted DIRECTLY now rather than through the login page, because the page no longer attempts
+// the request -- so observing it that way would only prove the gate fired. This runs the fetch
+// from a document on the real https origin and reads the outcome.
+//
+// If WebKit ever adopts the carve-out, this fails and tells us the gate can be relaxed.
+console.log('\n2. PINNED: WebKit still blocks https -> http://127.0.0.1 as mixed content');
+{
+  const lb = startLoopback({ log: quiet, timeout_ms: 30_000 });
+  const port = await loopbackReady(lb);
+  const { ctx, page, logs } = await fresh();
+  await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+
+  const outcome = await page.evaluate(async (p) => {
+    try {
+      const r = await fetch(`http://127.0.0.1:${p}/`, { method: 'GET' });
+      return { reached: true, status: r.status };
+    } catch (e) {
+      return { reached: false, error: String(e && e.message ? e.message : e) };
+    }
+  }, port);
+
+  check(outcome.reached === false,
+    `the request did not leave the page (${outcome.reached ? `status ${outcome.status}` : outcome.error})`);
+  check(logs.some((l) => /insecure content|blocked/i.test(l)),
+    'and the engine says why: it was blocked as insecure content');
+  if (outcome.reached) {
+    console.log('    NOTE: WebKit reached loopback this time. If that is stable, the hosted page');
+    console.log('          no longer needs to refuse and the gate can be relaxed.');
+  }
+  lb.close();
+  lb.result.catch(() => {});
+  await ctx.close();
+}
+
+// ============================================================ 3. a probe, not a test
+//
+// Section 2 pins that WebKit BLOCKS the fetch to http://127.0.0.1 as mixed content. That is a
 // design problem, not an implementation one, so it is reported rather than worked around. This
 // section exists so the report carries a MEASUREMENT instead of a suggestion: it asks whether the
 // one obvious alternative channel is actually permitted by the same engine.
@@ -253,7 +172,7 @@ console.log('\n5. failures offer a way out, or say why they cannot');
 //
 // Probed against a PLAIN NODE SERVER, not the CLI's listener: the CLI's contract is POST-only and
 // this is deliberately not changing it. Nothing here asserts shipped behaviour.
-console.log('\n6. PROBE (not a test): would a top-level navigation be allowed instead?');
+console.log('\n3. PROBE (not a test): would a top-level navigation be allowed instead?');
 {
   const { createServer } = await import('node:http');
   let arrived = null;

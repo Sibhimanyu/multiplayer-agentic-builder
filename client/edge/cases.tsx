@@ -13,6 +13,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { BoardView, ProjectsIndex, blockedChain, isLoginPath, projectIdFromPath } from '../src/App';
 import { TriagePanel } from '../src/components';
 import { LoginView } from '../src/Login';
+import { handoffBlocked, initialLoginState } from '../src/login-contract';
 import type { LoginState } from '../src/login-contract';
 import { authDomainFor } from '../src/store/firebase';
 import type {
@@ -304,6 +305,63 @@ const render = (snap: Snapshot, freshness: Freshness = LIVE, selected: string | 
 
   const ready = view({ step: 'ready', params });
   check(ready.includes('Continue with Google'), 'login: the Google link renders a button to click');
+
+  // ---- order 0061: refuse before the button, not after Google ----
+  //
+  // The user signed in with Google and was THEN told the handoff could not work. Every input to
+  // that verdict -- https, WebKit, a loopback target -- was available on load.
+  {
+    const SAFARI = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 '
+      + '(KHTML, like Gecko) Version/18.5 Safari/605.1.15';
+    const CHROME = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
+      + '(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
+    const link = `?port=51234&nonce=${'n'.repeat(43)}&provider=google`;
+
+    check(handoffBlocked({ protocol: 'https:', ua: SAFARI }), 'login: https + WebKit is refused');
+    // THE CONTROLS. "Refuses in Safari" is worthless if it refuses everywhere, or if it refuses
+    // the CLI's own http page -- which is the path that actually works in Safari.
+    check(!handoffBlocked({ protocol: 'https:', ua: CHROME }),
+      'login: https + Chrome is NOT refused (the control)');
+    check(!handoffBlocked({ protocol: 'http:', ua: SAFARI }),
+      'login: http + WebKit is NOT refused -- that is the CLI-served page, which works in Safari');
+
+    const refused = initialLoginState(link, null, { protocol: 'https:', ua: SAFARI });
+    check(refused.step === 'refused', `login: a perfectly good link still refuses in Safari (${refused.step})`);
+    const html = view(refused);
+    check(!html.includes('Continue with Google'),
+      'login: and NO sign-in button is rendered — the refusal comes before Google, not after');
+    check(/flotilla login/.test(html), 'login: the refusal names `flotilla login` as the way out');
+    check(/Chrome/.test(html), 'login: and names opening the link in Chrome as the other');
+    check(/127\.0\.0\.1/.test(html), 'login: and says why, so it does not read as arbitrary');
+
+    // And in Chrome the same link is actionable — via `checking`, not straight to `ready`.
+    const chrome = initialLoginState(link, null, { protocol: 'https:', ua: CHROME });
+    check(chrome.step === 'checking', `login: in Chrome the same link proceeds (${chrome.step})`);
+  }
+
+  // ---- order 0061: the two pages must be distinguishable at a glance ----
+  {
+    const anyState = view({ step: 'ready', params });
+    check(/Hosted sign-in/.test(anyState), 'login: the hosted page says it IS the hosted one');
+    check(/fallback/i.test(anyState), 'login: and that it is the fallback');
+    check(/flotilla login/.test(anyState), 'login: naming the normal path, on a screen with no error');
+    check(/data-fallback="hosted"/.test(anyState), 'login: with a marker a browser test can find');
+  }
+
+  // ---- order 0061: a restored tab pointing at a CLI that has exited ----
+  {
+    const stale = view({ step: 'stale', params });
+    check(/expired/i.test(stale), 'login: a dead listener reads as an expired link, not a crash');
+    check(stale.includes('51234'), 'login: naming the port nobody is holding');
+    check(/restored/i.test(stale), 'login: and the likeliest cause, which is a restored tab');
+    check(/flotilla login/.test(stale), 'login: with the command that issues a fresh one');
+    // An escape, because the probe cannot be certain and stranding a live login is the worse bug.
+    check(/Sign in anyway/.test(stale), 'login: and an escape, since the probe can be wrong');
+
+    const checking = view({ step: 'checking', params });
+    check(!/Continue with Google/.test(checking),
+      'login: nothing actionable renders until the listener has been checked');
+  }
   check(ready.includes('data-login-step="ready"'), 'login: and reports its state for the browser check');
 
   // THE BUG, ASSERTED DIRECTLY: whatever /login renders, it is never the projects board.

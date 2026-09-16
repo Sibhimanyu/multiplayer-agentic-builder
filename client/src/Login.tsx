@@ -27,9 +27,9 @@ import {
 
 import { configFromEnv } from './store/firebase';
 import {
-  clearPendingLogin, initialLoginState, payloadFor, postCredential, signInFailure,
+  clearPendingLogin, initialLoginState, payloadFor, postCredential, probeListener, signInFailure,
   stashPendingLogin,
-  type KeyValueStore, type LoginParams, type LoginState, type SignedInUser,
+  type KeyValueStore, type LoginParams, type LoginState, type PageEnvironment, type SignedInUser,
 } from './login-contract';
 
 /**
@@ -60,6 +60,72 @@ export function LoginView({
       </nav>
       <div className="stage">
         <div className="login" data-login-step={state.step}>
+          {/*
+            THIS PAGE IS THE FALLBACK, AND IT NOW SAYS SO ON ITS FACE.
+
+            Three separate failures were reported from this page by someone who believed they were
+            on the local one. The two pages shared a brand, a heading and a button, and the only
+            thing telling them apart was a line of body copy about redirects -- which nobody reads
+            when they are trying to log in. A restored tab or a bookmark landed here and looked
+            exactly like success.
+          */}
+          <div className="fallback-banner" data-fallback="hosted">
+            <strong>Hosted sign-in</strong> — the fallback. The normal way to sign in is to
+            run <code>flotilla login</code> in your terminal, which opens a page on your own
+            machine.
+          </div>
+
+          {state.step === 'refused' && (
+            <>
+              {/*
+                Refused ON LOAD. Knowable before anything was clicked: https + WebKit + a loopback
+                handoff. The previous behaviour walked the user all the way through Google and
+                only then said it could not work.
+              */}
+              <h2 className="bad">This browser cannot finish a hosted sign-in.</h2>
+              <p>{state.reason}</p>
+              <p>Two ways forward, both of which work:</p>
+              <ul className="ways">
+                <li>
+                  Run <code>flotilla login</code> in your terminal. It serves the sign-in page
+                  from your own machine, which Safari is happy with. This is the normal path.
+                </li>
+                <li>Or open this same link in Chrome.</li>
+              </ul>
+            </>
+          )}
+
+          {state.step === 'checking' && (
+            <>
+              <h2>Checking this link…</h2>
+              <p>Making sure the <code>flotilla</code> CLI that issued it is still waiting.</p>
+            </>
+          )}
+
+          {state.step === 'stale' && (
+            <>
+              {/*
+                The shape of what actually happens now that `flotilla login` opens the browser
+                itself: nobody navigates here deliberately, so arriving here means a restored tab
+                whose CLI exited long ago. Signing in would spend a Google round trip to reach a
+                port that stopped listening.
+              */}
+              <h2 className="bad">This login link has expired.</h2>
+              <p>
+                Nothing is listening on port <code>{state.params.port}</code> any more — the
+                <code>flotilla login</code> that opened this page has already finished or been
+                stopped. This is usually a tab restored from a previous session.
+              </p>
+              <p>
+                Run <code>flotilla login</code> again. It will open a fresh page on your own
+                machine.
+              </p>
+              {/* An escape, because the probe cannot be certain and stranding a live login would
+                  be a worse failure than one extra click. */}
+              <button className="cta" onClick={onSignIn}>Sign in anyway</button>
+            </>
+          )}
+
           {state.step === 'ready' && !state.params.anonymous && (
             <>
               <h2>Sign in to Flotilla</h2>
@@ -150,22 +216,31 @@ export function LoginView({
 export function LoginPage({
   search,
   store,
+  env,
   signIn,
   post = postCredential,
+  probe = probeListener,
   redirectResult,
 }: {
   search: string;
   store?: KeyValueStore | null;
+  /** Protocol and user agent. Injected so both engines' outcomes can be asserted without a browser. */
+  env?: PageEnvironment | null;
   /** Resolves a user, or null when the flow left the page (a redirect is under way). */
   signIn?: (params: LoginParams) => Promise<SignedInUser | null>;
   post?: typeof postCredential;
+  probe?: typeof probeListener;
   /** What Google left behind, if this load is the return leg. */
   redirectResult?: () => Promise<SignedInUser | null>;
 }) {
   const session: KeyValueStore | null | undefined =
     store ?? (typeof window === 'undefined' ? null : window.sessionStorage);
+  const pageEnv: PageEnvironment | null = env ?? (typeof window === 'undefined' ? null : {
+    protocol: window.location.protocol,
+    ua: navigator.userAgent,
+  });
 
-  const [state, setState] = useState<LoginState>(() => initialLoginState(search, session));
+  const [state, setState] = useState<LoginState>(() => initialLoginState(search, session, pageEnv));
   const busy = useRef(false);
 
   /** Everything after a user exists: build the payload, hand it over, say what happened. */
@@ -256,9 +331,23 @@ export function LoginPage({
       })();
       return;
     }
-    // The anonymous path starts itself: no provider UI, so no user gesture is needed, and a
-    // button in front of it would exist only to be clicked.
-    if (state.step === 'ready' && state.params.anonymous) void run(state.params);
+    // Is the CLI that issued this link still there? Asked before anything actionable is drawn,
+    // because `flotilla login` now opens the browser itself -- so anyone arriving at THIS page is
+    // almost always arriving from a tab restored days later, pointing at a port nobody holds.
+    if (state.step === 'checking') {
+      const params = state.params;
+      void (async () => {
+        const alive = await probe(params.port);
+        if (alive === 'alive') {
+          setState({ step: 'ready', params });
+          // The anonymous path starts itself: no provider UI, so no gesture is needed, and a
+          // button in front of it would exist only to be clicked.
+          if (params.anonymous) void run(params);
+        } else {
+          setState({ step: 'stale', params });
+        }
+      })();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -271,7 +360,11 @@ export function LoginPage({
   return (
     <LoginView
       state={state}
-      onSignIn={state.step === 'ready' ? () => void run(state.params) : undefined}
+      // `stale` gets the button too: the probe cannot be certain, and stranding a live login
+      // would be a worse failure than one extra click.
+      onSignIn={state.step === 'ready' || state.step === 'stale'
+        ? () => void run(state.params)
+        : undefined}
       onRetry={retry}
     />
   );

@@ -272,6 +272,14 @@ export function clearPendingLogin(store: KeyValueStore | null | undefined): void
  * through to an empty div, would be the same bug made quieter.
  */
 export type LoginState =
+  /**
+   * The handoff cannot work in this browser, and we knew before the user touched anything.
+   * No params: nothing on this page can proceed, so it must not offer a button that cannot work.
+   */
+  | { step: 'refused'; reason: string }
+  /** The CLI that issued this link is not listening any more — almost always a restored tab. */
+  | { step: 'stale'; params: LoginParams }
+  | { step: 'checking'; params: LoginParams }
   | { step: 'ready'; params: LoginParams }
   | { step: 'signing-in'; params: LoginParams }
   /** Back from Google, resolving the redirect result. The URL now carries Google's parameters. */
@@ -295,9 +303,61 @@ export type LoginState =
  * parameters; on the way back it has Google's, and the CLI's are in sessionStorage. Reading the
  * URL first and the stash second covers both without either knowing about the other.
  */
-export function initialLoginState(search: string, store?: KeyValueStore | null): LoginState {
+/** What the page can see about its own surroundings, injected so it can be asserted. */
+export interface PageEnvironment {
+  /** `window.location.protocol` — "https:" or "http:". */
+  protocol: string;
+  /** `navigator.userAgent`. */
+  ua: string;
+}
+
+/**
+ * Can this page's credential handoff work here AT ALL?
+ *
+ * WebKit treats http://127.0.0.1 from an https page as mixed content and blocks it outright;
+ * Chrome permits it because loopback is potentially trustworthy under Secure Contexts. Measured
+ * in both engines (firebase/login-webkit.mjs, firebase/login-browser.mjs).
+ *
+ * THIS IS KNOWABLE ON LOAD. Nothing about it depends on sign-in succeeding: the page is https, the
+ * engine is WebKit, the handoff is loopback. The user who reported this had already been through
+ * Google before being told it could not work.
+ *
+ * Only for a page served over https. The CLI-served page is http and same-origin, which is the
+ * whole point of it, and must never be refused by this.
+ */
+export function handoffBlocked(env: PageEnvironment): boolean {
+  return env.protocol === 'https:' && looksLikeWebKit(env.ua);
+}
+
+export const REFUSAL_REASON =
+  'Safari will not let this page reach the flotilla CLI. It refuses connections from an https '
+  + 'page to http://127.0.0.1, so signing in here cannot finish — whatever you do next.';
+
+/**
+ * The first frame, computed synchronously from the URL and whatever a redirect left behind.
+ *
+ * Not an effect: a server render could only ever see the placeholder, and a user on a bad link
+ * would watch a spinner before being told the link was unreadable from the start.
+ *
+ * THE BROWSER GATE COMES FIRST, before the URL is even considered. A link that parses perfectly
+ * still cannot complete in this browser, so offering the button would be offering a dead end with
+ * a Google sign-in in the middle of it.
+ *
+ * Then: on the way out the URL has the CLI's parameters; on the way back it has Google's, and the
+ * CLI's are in sessionStorage. Reading the URL first and the stash second covers both.
+ */
+export function initialLoginState(
+  search: string,
+  store?: KeyValueStore | null,
+  env?: PageEnvironment | null,
+): LoginState {
+  if (env && handoffBlocked(env)) return { step: 'refused', reason: REFUSAL_REASON };
+
   const parsed = parseLoginParams(search);
-  if (parsed.ok) return { step: 'ready', params: parsed.params };
+  // `checking` rather than `ready`: a restored tab carries parameters that look perfect and point
+  // at a CLI that exited hours ago. Whether the listener is still there is a question with an
+  // answer, so it is asked before anything actionable is drawn.
+  if (parsed.ok) return { step: 'checking', params: parsed.params };
 
   const pending = readPendingLogin(store);
   if (pending) return { step: 'returning', params: pending };
@@ -305,6 +365,32 @@ export function initialLoginState(search: string, store?: KeyValueStore | null):
   // No usable link and nothing pending. Not recoverable in the page -- there is no port to post
   // to and no nonce to echo -- so no `params`, and the render names the command instead.
   return { step: 'error', at: 'the login link', detail: parsed.error };
+}
+
+/**
+ * Is the CLI that issued this link still listening?
+ *
+ * A plain GET. The loopback listener answers non-POST with 405 and sets
+ * `access-control-allow-origin: *` on every response, so ANY status coming back proves something
+ * is there. A thrown fetch means nothing is.
+ *
+ * Deliberately NOT a POST with a junk nonce: that would prove liveness too, and would write an
+ * `auth.nonce_mismatch` warning into the user's terminal on every page load -- a login-CSRF alarm
+ * raised by our own page.
+ *
+ * This cannot tell "dead" from "blocked by the browser", which is exactly why the WebKit gate runs
+ * first and this never runs there.
+ */
+export async function probeListener(
+  port: number,
+  fetchImpl: typeof fetch = fetch,
+): Promise<'alive' | 'unreachable'> {
+  try {
+    await fetchImpl(`http://127.0.0.1:${port}/`, { method: 'GET' });
+    return 'alive';
+  } catch {
+    return 'unreachable';
+  }
 }
 
 export interface SignInFailure {
