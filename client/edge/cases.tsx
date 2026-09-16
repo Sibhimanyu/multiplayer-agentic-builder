@@ -11,7 +11,9 @@
 
 import { renderToStaticMarkup } from 'react-dom/server';
 import { BoardView, ProjectsIndex, blockedChain, isLoginPath, projectIdFromPath } from '../src/App';
-import { TriagePanel, relativeTime } from '../src/components';
+import { AccountChip, SignInView, TriagePanel, relativeTime } from '../src/components';
+import { loadProjects, type ProjectLister } from '../src/store/projects';
+import type { Session } from '../src/store/session';
 import { LoginView } from '../src/Login';
 import { handoffBlocked, initialLoginState } from '../src/login-contract';
 import type { LoginState } from '../src/login-contract';
@@ -580,6 +582,117 @@ const render = (snap: Snapshot, freshness: Freshness = LIVE, selected: string | 
     const tie = [at('pb', 'T'), at('pa', 'T')].sort(byActivity).map((p) => p.project_id);
     check(JSON.stringify(tie) === JSON.stringify(['pa', 'pb']),
       'order: equal activity falls back to project id, so the list cannot reshuffle');
+  }
+
+  // ---- WHO THE BOARD IS SIGNED IN AS. Order 0064. --------------------------------------------
+  //
+  // THE DEFECT WAS IN THE TEST DESIGN, NOT IN A MISSING CASE. Every index assertion above hands
+  // `ProjectsIndex` a rows array directly, so the uid never entered the picture; and every case
+  // elsewhere seeded its fixture against whatever uid the harness happened to use, which made the
+  // fixture's identity and the browser's identity the same by construction. The mismatch that
+  // actually shipped -- a browser signed in anonymously looking for projects owned by a Google
+  // account -- was unreachable from here.
+  //
+  // So these assertions are driven BY UID, through the real loadProjects, against one directory
+  // that holds one project owned by one specific person. Both halves, or the first half would
+  // pass for a board that showed every project to everybody.
+  {
+    // The user's real project and their real uid, from order 0064's Firestore dump.
+    const OWNER_UID = 'X1syxqJZaoNxxeVclsxZedI4SJK2';
+    const STRANGER_UID = 'anon_7f3a0c11';
+
+    const directory: ProjectLister = {
+      async listProjects(uid: string) {
+        // The membership rule, as the collection-group query enforces it: a project is visible to
+        // a uid that has a non-revoked member document. Nothing here is uid-blind.
+        const members = [{ uid: OWNER_UID, role: 'owner' as const, label: 'sibhi', added_at: '', revoked: false }];
+        if (!members.some((m) => m.uid === uid && !m.revoked)) return [];
+        return [{
+          project_id: 'proj_inventory_tracker',
+          project_name: 'Inventory Tracker',
+          repo_url: 'Sibhimanyu/inventory-tracker',
+          created_at: '2026-09-16T09:00:00.000Z',
+          created_by: OWNER_UID,
+          role: 'owner',
+          members,
+          rollup: { counts: { open: 2 }, blocked: 0, ci_failed: 0, last_activity: '', last_seq: 1 },
+          agents_live: 0,
+        }];
+      },
+    };
+
+    const sess = (uid: string, anonymous: boolean): Session =>
+      ({ uid, email: anonymous ? null : 'sibhi.gv@gmail.com', anonymous });
+
+    const render = (rows: Awaited<ReturnType<typeof loadProjects>>, session: Session) =>
+      text(renderToStaticMarkup(
+        <ProjectsIndex projects={rows} session={session} onOpen={() => {}} onSignOut={() => {}} />,
+      ));
+
+    // HALF ONE: the member sees their project.
+    {
+      const rows = await loadProjects(OWNER_UID, directory);
+      const t = render(rows, sess(OWNER_UID, false));
+      check(rows.length === 1, 'session: a uid that IS a member gets its project from the directory');
+      check(/Inventory Tracker/.test(t),
+        'session: and the board signed in as that uid RENDERS proj_inventory_tracker');
+      check(!/No projects yet/.test(t), 'session: and does not also render the empty state');
+    }
+
+    // HALF TWO: a different uid, same directory, sees nothing. Without this, half one would pass
+    // for a board that ignored the uid entirely -- which is precisely what the board did.
+    {
+      const rows = await loadProjects(STRANGER_UID, directory);
+      const t = render(rows, sess(STRANGER_UID, true));
+      check(rows.length === 0, 'session: a uid that is NOT a member gets nothing from the directory');
+      check(!/Inventory Tracker/.test(t),
+        'session: and the same board as that uid does NOT render the project — the other half');
+    }
+
+    // The empty state has to say WHY. "Run `flotilla new`" told a user to repeat the command they
+    // had just run; it is correct only when the account genuinely has no projects.
+    {
+      const anon = render([], sess(STRANGER_UID, true));
+      const real = render([], sess('someone_new', false));
+      check(/signed in anonymously/.test(anon),
+        'session: an empty board for an ANONYMOUS session explains that it is a member of nothing');
+      check(!/flotilla\s+new/.test(anon),
+        'session: and does not tell them to run a command that cannot help');
+      check(/flotilla\s+new/.test(real),
+        'session: (control) a real account with no projects still gets the `flotilla new` hint');
+    }
+
+    // Order 0064 point 4: a board that cannot tell you whose projects it shows is how this
+    // survived. The chip is in the nav in both states, saying different things.
+    {
+      const named = render([], sess(OWNER_UID, false));
+      check(/sibhi\.gv@gmail\.com/.test(named), 'session: the nav names the signed-in account');
+      check(/Sign out/.test(named), 'session: and offers a way out');
+      const anon = render([], sess(STRANGER_UID, true));
+      check(/Anonymous session/.test(anon), 'session: an anonymous browser is labelled as one');
+      check(/Sign in/.test(anon) && !/Sign out/.test(anon),
+        'session: and its action is "Sign in", because that is the thing that fixes an empty board');
+      // The uid is the title, not the label: anon_7f3a… is not an identity anyone recognises.
+      check(!/anon_7f3a0c11<\/span>/.test(
+        renderToStaticMarkup(<AccountChip session={sess(STRANGER_UID, true)} onSignOut={() => {}} />)),
+        'session: and it does not render a throwaway uid as if it were a name');
+    }
+
+    // ANONYMOUS IS A CHOICE, NOT THE DEFAULT. Both buttons present, neither pre-selected.
+    {
+      const t = text(renderToStaticMarkup(
+        <SignInView onGoogle={() => {}} onAnonymous={() => {}} />,
+      ));
+      check(/Continue with Google/.test(t), 'signin: Google is offered');
+      check(/continue anonymously/.test(t),
+        'signin: anonymous stays available — the denied-state onboarding path depends on it');
+      const err = text(renderToStaticMarkup(
+        <SignInView onGoogle={() => {}} onAnonymous={() => {}}
+          error={{ code: 'auth/operation-not-allowed', detail: 'Google sign-in is disabled.' }} />,
+      ));
+      check(/Google sign-in is disabled/.test(err) && /auth\/operation-not-allowed/.test(err),
+        'signin: a failure names itself and its code, rather than "sign-in failed"');
+    }
   }
 
   // relativeTime: the text a glance actually reads.

@@ -63,5 +63,49 @@ for (const [sel, label, ok] of cssChecks) {
 }
 if (cssFailed > 0) code = 1;
 
+// ---- ONE SOURCE RULE, BECAUSE RENDERING CANNOT SEE IT. Order 0064. ----
+//
+// The bug was not a wrong pixel or a wrong string: it was that two modules called
+// signInAnonymously on their own initiative, so the board became a throwaway identity before any
+// component existed to be rendered. No server-rendered assertion can observe that, and the next
+// module that wants a uid in a hurry will reach for the same four lines.
+//
+// So: signing in lives in store/session.ts, and ONLY there. Everywhere else asks who is signed
+// in. Stated as a rule with a named exception rather than a grep for a bug, so it fails when the
+// rule is broken rather than when this particular bug returns.
+const SIGNIN_OWNER = 'src/store/session.ts';
+const srcFiles = [];
+(function walk(dir) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) walk(p);
+    else if (/\.tsx?$/.test(e.name)) srcFiles.push(p);
+  }
+})(path.join(client, 'src'));
+
+// Comments stripped first. The rule is about CALLS, and firebase.ts's own comment explains what
+// it used to do -- a scan that cannot tell code from prose would forbid writing that down, which
+// is the wrong incentive entirely. Crude (a `//` inside a string literal would be cut) and that
+// is acceptable for a rule whose only job is to find a function call.
+const code_only = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+const callsAnon = (f) => /\bsignInAnonymously\s*\(/.test(code_only(fs.readFileSync(f, 'utf8')));
+
+const offenders = srcFiles.filter((f) => {
+  const rel = path.relative(client, f).split(path.sep).join('/');
+  if (rel === SIGNIN_OWNER) return false;
+  return callsAnon(f);
+});
+console.log('\nsign-in ownership -- a rule rendering cannot check:');
+console.log(
+  `  ${offenders.length === 0 ? 'PASS' : 'FAIL'}  only ${SIGNIN_OWNER} may call signInAnonymously` +
+    `${offenders.length ? ` -- also called by ${offenders.map((f) => path.relative(client, f)).join(', ')}` : ''}`,
+);
+// The control: the rule is only meaningful if the scan can see the call it is looking for.
+const ownerHasIt = callsAnon(path.join(client, SIGNIN_OWNER));
+console.log(
+  `  ${ownerHasIt ? 'PASS' : 'FAIL'}  (control) the scan does find that call in ${SIGNIN_OWNER}`,
+);
+if (offenders.length > 0 || !ownerHasIt) code = 1;
+
 fs.rmSync(out, { force: true });
 process.exit(code);

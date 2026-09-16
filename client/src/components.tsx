@@ -79,7 +79,15 @@ export function FreshnessPill({ freshness, generatedAt }: { freshness: Freshness
   );
 }
 
-export function TopNav({ snap, freshness }: { snap: Snapshot; freshness: Freshness }) {
+export function TopNav({
+  snap, freshness, session, onSignOut,
+}: {
+  snap: Snapshot;
+  freshness: Freshness;
+  /** Absent only where there is no session to show -- fixtures and the edge harness's older cases. */
+  session?: { uid: string; email: string | null; anonymous: boolean };
+  onSignOut?: () => void;
+}) {
   return (
     <nav className="nav">
       {/*
@@ -98,6 +106,7 @@ export function TopNav({ snap, freshness }: { snap: Snapshot; freshness: Freshne
       <span className="grow" />
       <Presence agents={snap.agents} />
       <FreshnessPill freshness={freshness} generatedAt={snap.generated_at} />
+      {session && onSignOut && <AccountChip session={session} onSignOut={onSignOut} />}
       <button className="cta">Invite teammate</button>
     </nav>
   );
@@ -265,11 +274,99 @@ export function relativeTime(iso: string, now: number): string {
  * dialog which then explains it cannot proceed is worse than no button. For a developer tool the
  * command IS the affordance.
  */
-export function ProjectsEmpty() {
+export function ProjectsEmpty({ anonymous }: { anonymous?: boolean } = {}) {
+  // A DIFFERENT SENTENCE WHEN THE BROWSER IS ANONYMOUS, and this is the whole of order 0064's
+  // complaint. The board signed in anonymously, a throwaway uid is a member of nothing, and the
+  // page said "No projects yet — run `flotilla new`" to a user who had just run `flotilla new`.
+  // The state was reported honestly and the reason for it was invisible.
+  if (anonymous) {
+    return (
+      <div className="empty">
+        <b>No projects for this anonymous session</b>
+        You are signed in anonymously, so this browser is a member of nothing. Sign in with the
+        Google account that owns your projects.
+      </div>
+    );
+  }
   return (
     <div className="empty">
       <b>No projects yet</b>
       Run <code>flotilla new &lt;name&gt;</code> in your repo.
+    </div>
+  );
+}
+
+/**
+ * WHOSE BOARD IS THIS. The nav chip, with a way out.
+ *
+ * Order 0064, point 4: "a board that cannot tell you which account it is showing is how this bug
+ * survived." Someone looking at an empty index had no way to discover that the browser was a
+ * throwaway identity -- the page and a genuinely empty account rendered identically.
+ *
+ * Anonymous is labelled as anonymous rather than shown as a uid. `anon_7f3a…` is not an identity
+ * a person recognises, and the actionable fact is not which anonymous session this is, it is THAT
+ * it is one.
+ */
+export function AccountChip({
+  session, onSignOut,
+}: {
+  session: { uid: string; email: string | null; anonymous: boolean };
+  onSignOut: () => void;
+}) {
+  return (
+    <div className="account" data-anonymous={session.anonymous}>
+      <span className="who-label" title={session.uid}>
+        {session.anonymous ? 'Anonymous session' : session.email ?? session.uid}
+      </span>
+      <button className="linkish" onClick={onSignOut}>
+        {session.anonymous ? 'Sign in' : 'Sign out'}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The board's sign-in screen. Order 0064.
+ *
+ * TWO BUTTONS, NEITHER PRE-CLICKED. Anonymous stays available because the denied-state
+ * onboarding path depends on it -- that is the path where you sign in, get refused by the rules,
+ * read your own uid off the screen and get admitted -- and the edge harness asserts it. But it is
+ * a CHOICE now. As a silent default it was the bug.
+ *
+ * Pure: the page renders from props alone, so both states can be asserted without a browser.
+ */
+export function SignInView({
+  onGoogle, onAnonymous, error, busy,
+}: {
+  onGoogle: () => void;
+  onAnonymous: () => void;
+  error?: { code: string; detail: string } | null;
+  busy?: boolean;
+}) {
+  return (
+    <div className="stage">
+      <div className="login" data-signin="board">
+        <h2>Sign in to Flotilla</h2>
+        <p>
+          Your projects are listed by the account that owns them. Sign in with the Google account
+          you used to create them.
+        </p>
+        <button className="cta" onClick={onGoogle} disabled={busy}>
+          {busy ? 'Taking you to Google…' : 'Continue with Google'}
+        </button>
+        <p className="note">
+          Or <button className="linkish" onClick={onAnonymous} disabled={busy}>continue
+          anonymously</button> — a throwaway identity that is a member of nothing until someone
+          admits it. Useful for looking at a board you have been invited to see.
+        </p>
+        {error && (
+          <>
+            <h2 className="bad">Sign-in failed.</h2>
+            <p>{error.detail}</p>
+            <p className="note">({error.code})</p>
+          </>
+        )}
+      </div>
     </div>
   );
 }

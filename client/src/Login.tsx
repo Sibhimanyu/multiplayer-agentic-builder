@@ -19,13 +19,10 @@
 // ./login-contract so the loopback test can drive them under node.
 
 import { useEffect, useRef, useState } from 'react';
-import { initializeApp, getApps, type FirebaseApp } from 'firebase/app';
-import {
-  GoogleAuthProvider, connectAuthEmulator, getAuth, getRedirectResult, signInAnonymously,
-  signInWithPopup, signInWithRedirect, type Auth,
-} from 'firebase/auth';
 
-import { configFromEnv } from './store/firebase';
+import {
+  boardAuth, consumeRedirect, signInAnonymous, signInWithGoogle,
+} from './store/session';
 import {
   clearPendingLogin, initialLoginState, payloadFor, postCredential, probeListener, signInFailure,
   stashPendingLogin,
@@ -370,34 +367,29 @@ export function LoginPage({
   );
 }
 
-function defaultAuth(): Auth {
-  const env = import.meta.env as unknown as Record<string, string | undefined>;
-  const app: FirebaseApp = getApps()[0] ?? initializeApp(configFromEnv(env));
-  const auth = getAuth(app);
-  if (env.VITE_AUTH_EMULATOR) connectAuthEmulator(auth, env.VITE_AUTH_EMULATOR, { disableWarnings: true });
-  return auth;
-}
-
 /**
  * REDIRECT IS THE DEFAULT. `?popup=1` opts back in.
  *
- * Returns null on the redirect path because there is nothing to return to: the browser is
- * leaving. signInWithRedirect resolves only in the sense that the navigation was started.
+ * The provider calls themselves now live in ./store/session, shared with the board. Order 0064:
+ * the board had no sign-in at all and the obvious repair was to write a second one here's twin,
+ * which is how `STALE_AFTER_MS` ended up with two values. The redirect-versus-popup reasoning
+ * moved with the code and is stated there.
+ *
+ * What stays HERE is the part that is only true of this page: the pending-login stash, which the
+ * board has no equivalent of.
  */
 async function defaultSignIn(params: LoginParams): Promise<SignedInUser | null> {
-  const auth = defaultAuth();
-  if (params.anonymous) return (await signInAnonymously(auth)).user;
-  if (params.popup) return (await signInWithPopup(auth, new GoogleAuthProvider())).user;
+  const auth = boardAuth();
+  if (params.anonymous) return signInAnonymous(auth);
 
   // BEFORE the navigation, never after. Once signInWithRedirect is called this document is on
   // its way out, and a nonce not written by now is a login that returns as "malformed nonce" --
-  // a worse bug than the blocked popup, because it reads as the CLI's fault.
-  if (typeof window !== 'undefined') stashPendingLogin(window.sessionStorage, params);
-  await signInWithRedirect(auth, new GoogleAuthProvider());
-  return null;
+  // a worse bug than the blocked popup, because it reads as the CLI's fault. Written before the
+  // call even on the popup path, which costs nothing and removes a branch that could rot.
+  if (typeof window !== 'undefined' && !params.popup) stashPendingLogin(window.sessionStorage, params);
+  return signInWithGoogle(auth, { popup: params.popup });
 }
 
 async function defaultRedirectResult(): Promise<SignedInUser | null> {
-  const cred = await getRedirectResult(defaultAuth());
-  return cred?.user ?? null;
+  return consumeRedirect(boardAuth());
 }

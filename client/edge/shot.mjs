@@ -74,13 +74,47 @@ try {
     if (!r.url().endsWith('/favicon.ico')) consoleErrors.push(`requestfailed ${r.url()}`);
   });
 
-  // ---- 1. the projects index ----
+  // ---- 0. sign in anonymously, BY CLICKING THE BUTTON ----
+  //
+  // Order 0064 stopped the board signing itself in. That was the bug -- a browser that silently
+  // became a throwaway uid could never see a project owned by a person. But this probe's whole
+  // subject is the DENIED-STATE ONBOARDING PATH, which needs exactly such a uid: sign in, get
+  // refused by the rules, read the uid off the screen, get admitted, reload.
+  //
+  // So the anonymous identity it needs is now obtained the way a user obtains it, by clicking the
+  // choice the sign-in screen offers. That the click is here at all is the assertion: if anonymous
+  // ever becomes the silent default again, this button will not exist and this probe fails first.
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle2', timeout: 60_000 });
+  await page.waitForFunction(
+    () => /Sign in to Flotilla|Projects/.test(document.body.innerText),
+    { timeout: 45_000 },
+  ).catch(() => {});
+  console.log('0. sign-in');
+  const needsSignIn = await page.evaluate(() => /Sign in to Flotilla/.test(document.body.innerText));
+  check(needsSignIn, 'the board asks who you are instead of signing itself in');
+  if (needsSignIn) {
+    const clicked = await page.evaluate(() => {
+      const b = [...document.querySelectorAll('button')]
+        .find((x) => /continue anonymously/i.test(x.textContent ?? ''));
+      if (!b) return false;
+      b.click();
+      return true;
+    });
+    check(clicked, 'anonymous is offered as a choice and can be taken');
+    await page.waitForFunction(
+      () => !/Sign in to Flotilla/.test(document.body.innerText),
+      { timeout: 45_000 },
+    ).catch(() => {});
+  }
+
+  // ---- 1. the projects index ----
   await new Promise((r) => setTimeout(r, 3_000));
   await page.screenshot({ path: path.join(OUT, '1-projects-index.png') });
   const indexText = await page.evaluate(() => document.body.innerText);
-  console.log('1. projects index');
+  console.log('\n1. projects index');
   check(/Flotilla/.test(indexText), 'the index renders and is branded Flotilla');
+  // The anonymous session is now VISIBLE rather than silent -- order 0064 point 4.
+  check(/Anonymous session/.test(indexText), 'and the nav says this browser is anonymous');
 
   // ---- 2. the board, denied, naming the uid ----
   await page.goto(`${BASE}/p/${PID}`, { waitUntil: 'networkidle2', timeout: 60_000 });

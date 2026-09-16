@@ -81,6 +81,19 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
        border:1px solid var(--line);border-radius:var(--r-tag);padding:1px 5px}
 .login .cta{margin-top:6px}
 
+/* ---- who is signed in (order 0064) ---- */
+/* A button that reads as a link. The anonymous chip's action is "Sign in", which is the one
+   thing that fixes an empty board, so it must not look like a destructive "Sign out". */
+.linkish{background:none;border:none;padding:0;color:var(--teal);font:inherit;cursor:pointer;
+     text-decoration:underline;text-underline-offset:2px}
+.linkish:disabled{color:var(--muted);cursor:default;text-decoration:none}
+.account{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink2)}
+.account .who-label{font-family:var(--mono);font-size:11.5px;color:var(--muted);
+     max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Amber, not grey: an anonymous session is the state that silently produced an empty board, so
+   it is marked rather than left to look like any other signed-in state. */
+.account[data-anonymous="true"] .who-label{color:var(--amber)}
+
 /* ---- board ---- */
 /* padding-right lets the last column scroll clear of the overlay panel */
 .stage{position:relative;min-height:0;overflow:hidden}

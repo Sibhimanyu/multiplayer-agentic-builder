@@ -6,8 +6,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { COLUMNS, type AgentPresence, type Freshness, type Snapshot, type TaskView } from './store/types';
 import { createFirestoreStore, type StoreStatus } from './store/firebase';
-import { DetailPanel, EmptyColumn, ProjectCard, ProjectsEmpty, TaskCard, TopNav } from './components';
+import {
+  AccountChip, DetailPanel, EmptyColumn, ProjectCard, ProjectsEmpty, SignInView, TaskCard, TopNav,
+} from './components';
 import { LoginPage } from './Login';
+import {
+  boardAuth, consumeRedirect, explainAuthError, persistSession, signInAnonymous, signInWithGoogle,
+  signOutOf, watchSession, type Session,
+} from './store/session';
+import { loadProjects, type ProjectRow } from './store/projects';
 
 /**
  * Which project the URL is asking for. `/p/:project_id`, or null for the index.
@@ -27,7 +34,7 @@ export function projectIdFromPath(pathname: string): string | null {
  * state and the role label are checked rather than eyeballed.
  */
 export function ProjectsIndex({
-  projects, onOpen,
+  projects, onOpen, session, onSignOut,
 }: {
   projects: {
     project_id: string; project_name: string; repo_url: string;
@@ -36,6 +43,9 @@ export function ProjectsIndex({
     agents_live?: number;
   }[];
   onOpen: (project_id: string) => void;
+  /** Who this list belongs to. Rendered in the nav -- order 0064 point 4. */
+  session?: Session;
+  onSignOut?: () => void;
 }) {
   return (
     <>
@@ -43,6 +53,7 @@ export function ProjectsIndex({
         <div className="mark">FL</div>
         <div className="brand">Flotilla</div>
         <span className="grow" />
+        {session && onSignOut && <AccountChip session={session} onSignOut={onSignOut} />}
       </nav>
       <div className="stage">
         <div className="board">
@@ -52,7 +63,10 @@ export function ProjectsIndex({
             </div>
             <div className="col-body">
               {projects.length === 0
-                ? <ProjectsEmpty />
+                // The empty state has to know WHY it is empty. An anonymous browser is a member
+                // of nothing, and telling that person to run `flotilla new` -- which they have
+                // already run -- is the bug order 0064 is about, printed as advice.
+                ? <ProjectsEmpty anonymous={session?.anonymous} />
                 : projects.map((p) => (
                     <ProjectCard key={p.project_id} project={p} onOpen={() => onOpen(p.project_id)} />
                   ))}
@@ -153,11 +167,16 @@ export function BoardView({
   freshness,
   selected,
   onSelect,
+  session,
+  onSignOut,
 }: {
   snap: Snapshot;
   freshness: Freshness;
   selected: string | null;
   onSelect: (id: string | null) => void;
+  /** Optional so the nine frozen edge cases render unchanged; the app always passes it. */
+  session?: Session;
+  onSignOut?: () => void;
 }) {
   const agentById = new Map(snap.agents.map((a) => [a.agent_id, a]));
   const taskById = new Map(snap.tasks.map((t) => [t.task_id, t]));
@@ -166,7 +185,7 @@ export function BoardView({
 
   return (
     <>
-      <TopNav snap={snap} freshness={freshness} />
+      <TopNav snap={snap} freshness={freshness} session={session} onSignOut={onSignOut} />
       <div className="stage">
         <div className="board">
           {COLUMNS.map(({ status, label }) => {
@@ -214,7 +233,13 @@ export function BoardView({
 }
 
 /** The board for one project. Its own component so the subscription is torn down on navigation. */
-function ProjectBoard({ project_id }: { project_id: string }) {
+function ProjectBoard({
+  project_id, session, onSignOut,
+}: {
+  project_id: string;
+  session: Session;
+  onSignOut: () => void;
+}) {
   const store = useMemo(() => createFirestoreStore(), []);
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [status, setStatus] = useState<StoreStatus>({ state: 'signing-in' });
@@ -228,7 +253,10 @@ function ProjectBoard({ project_id }: { project_id: string }) {
   if (!snap) return <Notice status={status} />;
 
   return (
-    <BoardView snap={snap} freshness={store.freshness} selected={selected} onSelect={setSelected} />
+    <BoardView
+      snap={snap} freshness={store.freshness} selected={selected} onSelect={setSelected}
+      session={session} onSignOut={onSignOut}
+    />
   );
 }
 
@@ -242,6 +270,59 @@ function ProjectBoard({ project_id }: { project_id: string }) {
  */
 export function isLoginPath(pathname: string): boolean {
   return /^\/login\/?$/.test(pathname);
+}
+
+/**
+ * WHO IS SIGNED IN, and the one place that decides it. Order 0064.
+ *
+ * `undefined` means "still asking" and `null` means "nobody". They are different states and
+ * collapsing them is a real bug: a restored session arrives asynchronously, so treating
+ * not-yet-known as signed-out flashes the sign-in screen at someone who is already signed in, on
+ * every reload.
+ */
+export function useSession(): {
+  session: Session | null | undefined;
+  error: { code: string; detail: string } | null;
+  busy: boolean;
+  signIn: (how: 'google' | 'anonymous') => void;
+  signOut: () => void;
+} {
+  const [session, setSession] = useState<Session | null | undefined>(undefined);
+  const [error, setError] = useState<{ code: string; detail: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const auth = useMemo(() => boardAuth(), []);
+
+  useEffect(() => {
+    // Persistence first, then consume any redirect Google left behind, then watch. The order
+    // matters: setPersistence only governs sign-ins that happen after it resolves.
+    void persistSession(auth)
+      .then(() => consumeRedirect(auth))
+      .catch((err) => setError(explainAuthError(err)));
+    return watchSession(auth, (s) => setSession(s));
+  }, [auth]);
+
+  const signIn = (how: 'google' | 'anonymous') => {
+    setError(null);
+    setBusy(true);
+    void (async () => {
+      try {
+        // Google resolves to null because the document is navigating away; the flow resumes in
+        // consumeRedirect on the next load. Anonymous resolves here and watchSession fires.
+        if (how === 'google') await signInWithGoogle(auth);
+        else await signInAnonymous(auth);
+      } catch (err) {
+        setError(explainAuthError(err));
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
+
+  const signOut = () => {
+    void signOutOf(auth).catch((err) => setError(explainAuthError(err)));
+  };
+
+  return { session, error, busy, signIn, signOut };
 }
 
 export default function App() {
@@ -261,27 +342,81 @@ export default function App() {
     setPathname(to);
   };
 
+  // BEFORE the session gate, deliberately. /login is where `flotilla login` sends the browser and
+  // it has its own sign-in; putting a second one in front of it would mean signing in to sign in.
   if (isLoginPath(pathname)) {
     return <LoginPage search={typeof window === 'undefined' ? '' : window.location.search} />;
   }
-  const project_id = projectIdFromPath(pathname);
-  if (project_id) return <ProjectBoard project_id={project_id} />;
-  return <ProjectsIndexRoute onOpen={(id) => navigate(`/p/${id}`)} />;
+  return <SignedIn pathname={pathname} navigate={navigate} />;
 }
 
-/** Wires the browser directory to the pure index view. */
-function ProjectsIndexRoute({ onOpen }: { onOpen: (project_id: string) => void }) {
-  const [projects, setProjects] = useState<
-    { project_id: string; project_name: string; repo_url: string; role: string; members: AgentPresence[] }[]
-  >([]);
+/**
+ * The session gate. Nothing below it renders without a uid.
+ *
+ * This is the shape the bug had no room for: previously every route reached the data layer, and
+ * the data layer signed itself in anonymously on the way past. Now the identity is established
+ * once, above the routes, and both of them are handed a uid they did not choose.
+ */
+function SignedIn({ pathname, navigate }: { pathname: string; navigate: (to: string) => void }) {
+  const { session, error, busy, signIn, signOut } = useSession();
+
+  // Still asking. NOT the sign-in screen -- see useSession.
+  if (session === undefined) {
+    return <div style={{ padding: 28, color: 'var(--muted)' }}>Connecting…</div>;
+  }
+  if (session === null) {
+    return (
+      <>
+        <nav className="nav">
+          <div className="mark">FL</div>
+          <div className="brand">Flotilla</div>
+          <span className="grow" />
+        </nav>
+        <SignInView
+          onGoogle={() => signIn('google')}
+          onAnonymous={() => signIn('anonymous')}
+          error={error}
+          busy={busy}
+        />
+      </>
+    );
+  }
+
+  const project_id = projectIdFromPath(pathname);
+  if (project_id) {
+    return <ProjectBoard project_id={project_id} session={session} onSignOut={signOut} />;
+  }
+  return (
+    <ProjectsIndexRoute
+      session={session} onSignOut={signOut} onOpen={(id) => navigate(`/p/${id}`)}
+    />
+  );
+}
+
+/**
+ * Wires the browser directory to the pure index view, FOR A GIVEN UID.
+ *
+ * `load` is injectable so client/edge/cases.tsx can drive this with a fake directory keyed by
+ * uid. That is what makes order 0064's test expressible: a member sees the project, and a
+ * different uid looking at the same directory sees the empty state. Both halves.
+ */
+export function ProjectsIndexRoute({
+  session, onOpen, onSignOut, load = loadProjects,
+}: {
+  session: Session;
+  onOpen: (project_id: string) => void;
+  onSignOut: () => void;
+  load?: (uid: string) => Promise<ProjectRow[]>;
+}) {
+  const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     let live = true;
+    setReady(false);
     void (async () => {
       try {
-        const { loadProjects } = await import('./store/projects');
-        const rows = await loadProjects();
+        const rows = await load(session.uid);
         if (live) setProjects(rows);
       } catch (err) {
         // An index that cannot load must not render as "no projects yet" — that would teach the
@@ -292,8 +427,15 @@ function ProjectsIndexRoute({ onOpen }: { onOpen: (project_id: string) => void }
       }
     })();
     return () => { live = false; };
-  }, []);
+    // Keyed on the uid: signing out and back in as someone else must re-ask, not reuse the
+    // previous account's list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.uid]);
 
   if (!ready) return <div style={{ padding: 28, color: 'var(--muted)' }}>Connecting…</div>;
-  return <ProjectsIndex projects={projects} onOpen={onOpen} />;
+  return (
+    <ProjectsIndex
+      projects={projects} onOpen={onOpen} session={session} onSignOut={onSignOut}
+    />
+  );
 }
