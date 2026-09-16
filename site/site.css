@@ -316,3 +316,71 @@ footer .fine{width:100%;margin-top:30px;padding-top:22px;border-top:1px solid va
   body{background:#fff}
   section{padding:24px 0;break-inside:avoid}
 }
+
+
+/* ============================================================ brand splash
+   Ported from the HyperFrames logo sting. The boats fly in along the
+   formation's own -7deg axis (they sit inside the rotated group, so local
+   translateX IS that axis), squash as they land, and the name is uncovered by
+   a paper-coloured pane sliding off the same axis.
+
+   Budget: 1.5s total. The sting itself is 4.3s, which is fine for a video and
+   far too long to sit in front of a page on every visit.
+
+   The overlay's DEFAULT state is hidden; the animation is what reveals it.
+   That way a browser that never runs the keyframes shows no splash at all
+   rather than a permanent white cover. */
+.splash{
+  position:fixed;inset:0;z-index:200;
+  background:var(--paper);
+  display:grid;place-items:center;
+  overflow:hidden;                      /* the overlay is the frame: nothing paints outside it */
+  opacity:0;visibility:hidden;          /* fail-safe resting state */
+  animation:sp-life 1.5s linear forwards;
+}
+.splash-art{width:min(560px,62vw);height:auto;overflow:visible}
+
+/* visible for the first ~77%, then fades out and stays gone */
+@keyframes sp-life{
+  0%,77%{opacity:1;visibility:visible}
+  100%{opacity:0;visibility:hidden}
+}
+
+.sp-boat{
+  fill:var(--teal);
+  transform-box:fill-box;               /* origin resolves against the boat itself */
+  transform-origin:100% 50%;            /* nose holds, body catches up */
+  animation:sp-fly .62s cubic-bezier(.22,.61,.36,1) backwards;
+}
+/* travel -> squash at the landing -> rebound -> rest at exactly 0 and 1,1.
+   Note translateX here is in SVG USER units, so its pixel distance scales with
+   the art's rendered size -- at a wide viewport the start position is still
+   inside the frame. The opacity ramp is therefore the entry mechanism, not an
+   off-screen start: the boats materialise while already moving, which behaves
+   identically at every viewport width. */
+@keyframes sp-fly{
+  /* 0-12% is a guaranteed beat of nothing. Without it the fade starts at
+     t=0 and the very first painted frame can carry a ~2% ghost near the
+     left edge -- imperceptible, but "the first frame is empty" should be a
+     property, not a coincidence of paint timing. */
+  0%,12% {transform:translateX(-1520px) scale(1,1);opacity:0}
+  55%  {opacity:1}
+  62%  {transform:translateX(16px) scale(.93,1.06);opacity:1}
+  78%  {transform:translateX(4px) scale(1.025,.99)}
+  100% {transform:translateX(0) scale(1,1);opacity:1}
+}
+
+.sp-word{fill:var(--ink)}
+.sp-cover{
+  fill:var(--paper);
+  animation:sp-wipe .5s cubic-bezier(.33,1,.68,1) .42s both;
+}
+@keyframes sp-wipe{
+  from{transform:translateX(0)}
+  to{transform:translateX(860px)}
+}
+
+/* Reduced motion: no splash at all. Not a faster splash -- none. */
+@media (prefers-reduced-motion:reduce){
+  .splash{display:none}
+}
