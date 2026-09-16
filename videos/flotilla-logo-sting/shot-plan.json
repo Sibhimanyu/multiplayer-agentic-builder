@@ -1,13 +1,13 @@
 {
   "category": "logo-reveal",
-  "duration_s": 3.6,
+  "duration_s": 4.2,
   "fps": 30,
   "canvas": {
     "w": 1920,
     "h": 1080,
     "aspect": "16:9"
   },
-  "style": "Flat, quiet, editorial. Light mode, warm paper ground, single teal accent, low density. One restrained move, then true stillness. No glow, no slam, no assembly, no outlines, no gradients, no waves or wakes. The energy is 'the fleet is already in formation', not 'the fleet arrives with force'.",
+  "style": "Flat, quiet, editorial, but the motion is now the concept rather than a reveal: three vessels converge into formation. No glow, no slam, no outlines, no gradients, and explicitly NO wakes or motion trails -- the brand forbids wakes and they are the standard swarm cliche.",
   "palette": [
     "#0F766E",
     "#1A1917",
@@ -64,31 +64,46 @@
     "url": null
   },
   "motion": {
-    "dominant_motif": "a single left-to-right uncovering: the lockup is swept into view, the hairline teal rule draws along the same axis, and everything then holds perfectly still.",
+    "dominant_motif": "The fleet converges. Three boats fly in from off frame along the formation's own -7 degree rising axis, staggered, and stop dead on their authored positions; the name then resolves, the rule draws, the tagline lands, and everything holds still.",
     "timeline": [
       {
-        "t": "0.00-0.25",
-        "what": "paper ground, empty. kicker is hidden, so this is the component's beat of quiet.",
+        "t": "0.00-0.12",
+        "what": "paper, empty. Boats staged off frame to the left.",
         "primitive": "hold"
       },
       {
-        "t": "0.25-1.10",
-        "what": "THE one move: the lockup settles dead-centre, scale .96 -> 1 with autoAlpha, power3.out, entrance half only, no bounce or overshoot. Mark and wordmark move as one indivisible unit.",
-        "primitive": "scale_grow (restrained)"
+        "t": "0.12-0.98",
+        "what": "lead boat travels in along the rising axis, expo.out, stops dead on its authored position",
+        "primitive": "converge"
       },
       {
-        "t": "0.90-1.45",
-        "what": "hairline teal rule draws left to right beneath the lockup via measured-length dash. This is the single pattern interrupt.",
-        "primitive": "underline_sweep"
+        "t": "0.20-1.06",
+        "what": "mid boat, longer travel",
+        "primitive": "converge"
       },
       {
-        "t": "1.30-1.80",
-        "what": "mono tagline fades up beneath the rule, uppercase, wide tracking",
+        "t": "0.28-1.14",
+        "what": "rear boat. Formation locked at 1.14 and still thereafter.",
+        "primitive": "converge"
+      },
+      {
+        "t": "1.05-1.75",
+        "what": "the name resolves: quiet fade with a short forward settle along the same travel direction. No scale on the art.",
         "primitive": "fade_in"
       },
       {
-        "t": "1.80-3.60",
-        "what": "true stillness for 1.8s. No drift, no breath, no pulse. The stillness is the confidence.",
+        "t": "1.75-2.30",
+        "what": "hairline teal rule draws left to right",
+        "primitive": "underline_sweep"
+      },
+      {
+        "t": "2.20-2.70",
+        "what": "mono tagline fades up",
+        "primitive": "fade_in"
+      },
+      {
+        "t": "2.70-4.20",
+        "what": "true stillness, 1.5s",
         "primitive": "hold"
       }
     ]
@@ -101,10 +116,17 @@
   ],
   "proof_times": [
     0.1,
+    0.28,
+    0.42,
+    0.56,
     0.7,
-    1.45,
-    1.9,
-    3.5
+    0.85,
+    1,
+    1.14,
+    1.5,
+    1.95,
+    2.5,
+    4
   ],
   "hard_prohibitions": [
     "Do NOT rotate the mark, or add any rotation to it.",
@@ -128,6 +150,10 @@
     "rule_colour": "pixel-sampled #0f766e at 100% coverage on rows y=648-649 - brand exact",
     "stillness": "wordmark ink bbox identical x744-1442 y402-558 at 1.45s, 1.9s and 3.5s - no drift, no reflow when the tagline fades in",
     "settle": "bbox w698->699 between 0.7s and 1.10s, the tail of scale .96->1",
-    "entry_moved": "composition lives at the project root index.html, not compositions/, because the CLI resolves the project entry there - `check .` and `render .` both fail otherwise"
-  }
+    "entry_moved": "composition lives at the project root index.html, not compositions/, because the CLI resolves the project entry there - `check .` and `render .` both fail otherwise",
+    "swarm_resolves": "Held frame diffed against the pre-swarm reveal's held frame: 0 of 2,073,600 pixels differ, max channel delta 0. The swarm provably resolves to exactly the authored lockup.",
+    "no_rotation": "The boat tween sets x and nothing else, and the boats sit inside the rotate(-7) group, so local +x IS the rising axis. Rotation cannot creep in.",
+    "bug_caught": "First attempt tweened x on the .fl-word PATH. GSAP writes the transform attribute, silently discarding its authored translate(300 46) scale(1.1) translate(-10.4 -41.3) -- a 288.56-unit x offset, measured as a 273px leftward shift (288.56 x 0.9415 screen scale = 271.7px). Every gate stayed green. Only the pixel diff found it. Fixed by wrapping the path in a g and tweening the wrapper, as the boats already did."
+  },
+  "brand_ruling": "The guide says do not separate the boats or change their spacing; the handoff says no independent repositioning. Those govern the mark AS PRESENTED -- they stop a wrong configuration shipping as the logo. A swarm that resolves into the authored lockup and holds there never presents a wrong configuration; the wrong ones are only the approach. The mark's own desc element reads \"Three teal boats moving together in a rising formation\", so motion is in its definition. Held to three constraints: travel along the formation's own axis only, never any rotation or per-boat scale; no wakes, trails, speed lines or blur; and the held frame must be pixel-identical to the authored lockup, asserted rather than assumed."
 }

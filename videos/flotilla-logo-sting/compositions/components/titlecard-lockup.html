@@ -1,4 +1,4 @@
-<!doctype html>
+<!DOCTYPE html>
 <!--
   titlecard-lockup: HyperFrames video primitive (intros and reveals / breather)
 
@@ -32,26 +32,21 @@
   data-height, and registers one paused timeline under the literal
   titlecard-lockup key.
 -->
-<html
-  lang="en"
-  data-composition-id="titlecard-lockup"
-  data-composition-duration="4"
-  data-composition-variables='[
-    { "id": "wordmark", "type": "string", "role": "content", "label": "Wordmark", "description": "Display wordmark that settles dead-center.", "default": "HYPERFRAMES" },
-    { "id": "label", "type": "string", "role": "content", "label": "Label", "description": "Mono caption under the rule. Empty hides it.", "default": "WRITE HTML. RENDER VIDEO." },
-    { "id": "kicker", "type": "string", "role": "content", "label": "Kicker", "description": "Small mono label above the wordmark. Empty hides it.", "default": "INTRODUCING" },
-    { "id": "rule", "type": "enum", "role": "style", "label": "Rule", "description": "Hairline rule drawn left to right under the wordmark.", "default": "show", "options": [{ "value": "show", "label": "Show" }, { "value": "hide", "label": "Hide" }] },
-    { "id": "accent", "type": "enum", "role": "style", "label": "Accent", "description": "Contract color carried by the hairline rule.", "default": "green", "options": [{ "value": "green", "label": "Green" }, { "value": "blue", "label": "Blue" }, { "value": "violet", "label": "Violet" }] },
-    { "id": "exit", "type": "enum", "role": "style", "label": "Exit", "description": "Optional departure. Frame roots own transitions, so none is the default.", "default": "none", "options": [{ "value": "none", "label": "None" }, { "value": "fade", "label": "Fade" }, { "value": "up", "label": "Up" }] }
-  ]'
->
+<html lang="en" data-composition-id="titlecard-lockup" data-composition-duration="4" data-composition-variables="[
+    { &quot;id&quot;: &quot;wordmark&quot;, &quot;type&quot;: &quot;string&quot;, &quot;role&quot;: &quot;content&quot;, &quot;label&quot;: &quot;Wordmark&quot;, &quot;description&quot;: &quot;Display wordmark that settles dead-center.&quot;, &quot;default&quot;: &quot;HYPERFRAMES&quot; },
+    { &quot;id&quot;: &quot;label&quot;, &quot;type&quot;: &quot;string&quot;, &quot;role&quot;: &quot;content&quot;, &quot;label&quot;: &quot;Label&quot;, &quot;description&quot;: &quot;Mono caption under the rule. Empty hides it.&quot;, &quot;default&quot;: &quot;WRITE HTML. RENDER VIDEO.&quot; },
+    { &quot;id&quot;: &quot;kicker&quot;, &quot;type&quot;: &quot;string&quot;, &quot;role&quot;: &quot;content&quot;, &quot;label&quot;: &quot;Kicker&quot;, &quot;description&quot;: &quot;Small mono label above the wordmark. Empty hides it.&quot;, &quot;default&quot;: &quot;INTRODUCING&quot; },
+    { &quot;id&quot;: &quot;rule&quot;, &quot;type&quot;: &quot;enum&quot;, &quot;role&quot;: &quot;style&quot;, &quot;label&quot;: &quot;Rule&quot;, &quot;description&quot;: &quot;Hairline rule drawn left to right under the wordmark.&quot;, &quot;default&quot;: &quot;show&quot;, &quot;options&quot;: [{ &quot;value&quot;: &quot;show&quot;, &quot;label&quot;: &quot;Show&quot; }, { &quot;value&quot;: &quot;hide&quot;, &quot;label&quot;: &quot;Hide&quot; }] },
+    { &quot;id&quot;: &quot;accent&quot;, &quot;type&quot;: &quot;enum&quot;, &quot;role&quot;: &quot;style&quot;, &quot;label&quot;: &quot;Accent&quot;, &quot;description&quot;: &quot;Contract color carried by the hairline rule.&quot;, &quot;default&quot;: &quot;green&quot;, &quot;options&quot;: [{ &quot;value&quot;: &quot;green&quot;, &quot;label&quot;: &quot;Green&quot; }, { &quot;value&quot;: &quot;blue&quot;, &quot;label&quot;: &quot;Blue&quot; }, { &quot;value&quot;: &quot;violet&quot;, &quot;label&quot;: &quot;Violet&quot; }] },
+    { &quot;id&quot;: &quot;exit&quot;, &quot;type&quot;: &quot;enum&quot;, &quot;role&quot;: &quot;style&quot;, &quot;label&quot;: &quot;Exit&quot;, &quot;description&quot;: &quot;Optional departure. Frame roots own transitions, so none is the default.&quot;, &quot;default&quot;: &quot;none&quot;, &quot;options&quot;: [{ &quot;value&quot;: &quot;none&quot;, &quot;label&quot;: &quot;None&quot; }, { &quot;value&quot;: &quot;fade&quot;, &quot;label&quot;: &quot;Fade&quot; }, { &quot;value&quot;: &quot;up&quot;, &quot;label&quot;: &quot;Up&quot; }] }
+  ]">
   <head>
-    <meta charset="UTF-8" />
+    <meta charset="UTF-8">
     <title>Titlecard Lockup</title>
   </head>
   <body>
     <template>
-      <div id="root" data-composition-id="titlecard-lockup" data-duration="4" data-fps="30">
+      <div data-hf-id="hf-ggcw" id="root" data-composition-id="titlecard-lockup" data-duration="4" data-fps="30">
         <style>
           *,
           *::before,
@@ -156,26 +151,14 @@
           }
         </style>
 
-        <div
-          id="titlecard-lockup-clip"
-          class="tl-clip clip"
-          data-start="0"
-          data-duration="4"
-          data-track-index="0"
-        >
-          <div class="tl-lockup">
-            <span class="tl-kicker"></span>
-            <span class="tl-wordmark"></span>
-            <svg
-              class="tl-rule-svg"
-              viewBox="0 0 560 2"
-              preserveAspectRatio="none"
-              xmlns="http://www.w3.org/2000/svg"
-              aria-hidden="true"
-            >
-              <line class="tl-rule" x1="0" y1="1" x2="560" y2="1" />
+        <div data-hf-id="hf-kyi1" id="titlecard-lockup-clip" class="tl-clip clip" data-start="0" data-duration="4" data-track-index="0">
+          <div data-hf-id="hf-ipon" class="tl-lockup">
+            <span data-hf-id="hf-a9tp" class="tl-kicker"></span>
+            <span data-hf-id="hf-ibux" class="tl-wordmark"></span>
+            <svg data-hf-id="hf-364c" class="tl-rule-svg" viewBox="0 0 560 2" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <line data-hf-id="hf-aq51" class="tl-rule" x1="0" y1="1" x2="560" y2="1" />
             </svg>
-            <span class="tl-label"></span>
+            <span data-hf-id="hf-aa44" class="tl-label"></span>
           </div>
         </div>
 
