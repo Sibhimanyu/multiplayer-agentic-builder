@@ -502,5 +502,113 @@ export function registerConformanceSuite(factory: HarnessFactory): void {
         assert.ok(Array.isArray(page.events));
       } finally { await h.dispose(); }
     });
+
+    // ---- A16-A18: createTask (Order 0063) --------------------------------------------
+    //
+    // These three exist because the operation they cover did not. `claimTask` was pinned by A2
+    // and A3 while taking an id that nothing in the product could produce -- the suite proved a
+    // race was safe on a task only a fixture could create. A16 proves creation works, A17 proves
+    // repeating it is a value rather than a second card, and A18 closes the loop by claiming
+    // what A16 made, which is the sentence the whole board rests on.
+
+    it('A16 createTask puts an open task on the board and appends one coordination event', async () => {
+      const h = await setup();
+      try {
+        const before = await h.ledgerSize();
+        const created = await h.store.createTask(
+          h.project_id,
+          {
+            title: 'Items list page',
+            kind: 'frontend',
+            description: 'render the list',
+            file_scope: ['client/src/routes/items/**'],
+            depends_on: ['task_items_api'],
+          },
+          { actor_type: 'owner', actor_id: 'uid_owner' },
+        );
+
+        assert.ok(created.ok, 'createTask must succeed on a fresh id');
+        assert.ok(created.ok && created.task_id === 'task_items_list_page',
+          `id must be derived from the title, got ${created.ok ? created.task_id : '(none)'}`);
+        assert.equal(await h.ledgerSize(), before + 1, 'exactly one event per created task');
+
+        const snap = await h.store.readSnapshot(h.project_id);
+        assert.ok(snap);
+        const t = snap.snapshot.tasks.find((x) => x.task_id === 'task_items_list_page');
+        assert.ok(t, 'the created task must appear on the board');
+        assert.equal(t.status, 'open');
+        assert.equal(t.title, 'Items list page');
+        assert.equal(t.kind, 'frontend');
+        assert.equal(t.claimed_by, null);
+        assert.deepEqual(t.file_scope, ['client/src/routes/items/**']);
+        assert.deepEqual(t.depends_on, ['task_items_api']);
+
+        // The event is on the COORDINATION layer, so an agent's inbox receives it. A human-layer
+        // creation would put a card on the board that no agent is ever told about.
+        const { events } = await h.store.readEvents(h.project_id, 0);
+        const ev = events.filter((e) => e.kind === 'task_created');
+        assert.equal(ev.length, 1);
+        assert.equal(ev[0].layer, 'coordination');
+        assert.equal(ev[0].body.task_id, 'task_items_list_page');
+      } finally { await h.dispose(); }
+    });
+
+    it('A17 createTask on an existing id returns the existing task, never a second card', async () => {
+      const h = await setup();
+      try {
+        const first = await h.store.createTask(
+          h.project_id, { title: 'Wire the webhook', kind: 'backend' },
+          { actor_type: 'owner', actor_id: 'uid_owner' },
+        );
+        assert.ok(first.ok);
+
+        const size = await h.ledgerSize();
+        // The retry a CLI performs after a timeout it could not distinguish from a failure.
+        const again = await h.store.createTask(
+          h.project_id, { title: 'Wire the webhook', kind: 'backend' },
+          { actor_type: 'owner', actor_id: 'uid_owner' },
+        );
+
+        assert.equal(again.ok, false, 'a repeat must not report a fresh creation');
+        assert.ok(!again.ok && again.task_id === (first.ok ? first.task_id : ''));
+        assert.ok(!again.ok && again.existing.status === 'open',
+          'the loser is handed the task that is actually there');
+        assert.equal(await h.ledgerSize(), size, 'a repeat appends nothing');
+
+        const snap = await h.store.readSnapshot(h.project_id);
+        assert.ok(snap);
+        const matching = snap.snapshot.tasks.filter((t) => t.title === 'Wire the webhook');
+        assert.equal(matching.length, 1, 'exactly one card, however many times it was created');
+
+        // And it was not logged as an error. An existing task is a normal outcome.
+        assert.equal(h.log.lines.filter((l) => l.level === 'error').length, 0);
+      } finally { await h.dispose(); }
+    });
+
+    it('A18 a task created through the port is immediately claimable', async () => {
+      const h = await setup();
+      try {
+        const created = await h.store.createTask(
+          h.project_id, { title: 'Seed the board', kind: 'devops' },
+          { actor_type: 'owner', actor_id: 'uid_owner' },
+        );
+        assert.ok(created.ok);
+        const task_id = created.ok ? created.task_id : '';
+
+        // THE SENTENCE THE PRODUCT RESTS ON: `flotilla task` then `flotilla claim`. Before
+        // Order 0063 the second half took an id the first half could not produce.
+        assert.deepEqual(await h.store.claimTask(h.project_id, task_id, 'agent_be01'), { ok: true });
+        const lost = await h.store.claimTask(h.project_id, task_id, 'agent_fe01');
+        assert.equal(lost.ok, false, 'a created task races exactly like a seeded one');
+
+        const snap = await h.store.readSnapshot(h.project_id);
+        assert.ok(snap);
+        const t = snap.snapshot.tasks.find((x) => x.task_id === task_id);
+        assert.ok(t);
+        assert.equal(t.claimed_by, 'agent_be01');
+        assert.equal(t.status, 'claimed');
+      } finally { await h.dispose(); }
+    });
+
   });
 }

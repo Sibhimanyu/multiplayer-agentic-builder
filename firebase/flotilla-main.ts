@@ -9,6 +9,9 @@
 // shipped artifact is a bundle -- shared/** and cli/** are compiled in, and firebase-admin stays
 // external because it is a real dependency with native pieces.
 
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
 import { main, registerAuthCommands, registerProjectCommands } from '../cli/index.ts';
 import { newProject } from '../cli/newproject.ts';
 import { boardUrl, fetchApiKey, loadConfig, saveConfig, writeUrl } from '../cli/config.ts';
@@ -251,6 +254,62 @@ registerProjectCommands({
     } finally {
       await close();
     }
+  },
+
+  /**
+   * `flotilla task "<title>" --kind <kind>` — Order 0063.
+   *
+   * THE COMMAND THAT DID NOT EXIST. `flotilla claim <task_id>` took an id that nothing in the
+   * product could produce: every task the board had shown came from a seeder or a fixture, so
+   * someone who ran `flotilla new` on a real repo got six empty columns and no way to fill them.
+   *
+   * Through the write function with the user's own token, like `new`: creating work is a triage
+   * act, the function checks the `triage` capability against the project's role policy, and that
+   * check has to live somewhere the person being checked cannot edit.
+   *
+   * The project comes from `.agentic/project.json`, so the command works where the user already
+   * is -- in the repo -- rather than needing a project id pasted from the board.
+   */
+  async task(root, title, kind, task_id) {
+    const cfg = await loadConfig();
+    const raw = await readFile(join(root, '.agentic/project.json'), 'utf8').catch(() => '');
+    if (!raw) {
+      console.error('\nno .agentic/project.json here. Run `flotilla new <name>` in your repo first.');
+      return 1;
+    }
+    const project_id = (JSON.parse(raw) as { project_id?: string }).project_id ?? '';
+    if (!project_id) {
+      console.error('\n.agentic/project.json names no project_id.');
+      return 1;
+    }
+
+    const client = new WriteClient({
+      api_url: writeUrl(cfg), api_key: cfg.api_key, log: consoleLogger,
+    });
+    const res = await client.write(project_id, 'create_task', {
+      title, kind, ...(task_id ? { task_id } : {}),
+    });
+    if (!res.ok) {
+      console.error(`\n${String(res.body.error ?? `write refused (HTTP ${res.status})`)}`);
+      return 1;
+    }
+
+    const created = res.body.ok === true;
+    const id = String(res.body.task_id ?? '');
+    if (!created) {
+      // Not an error and not exit 1. A repeat is the normal outcome of a retry, and the useful
+      // thing to print is the task that is actually there -- the same call the user wanted.
+      const existing = (res.body.existing ?? {}) as { status?: string; title?: string };
+      console.log(`${id} already exists — ${existing.title ?? title} (${existing.status ?? 'unknown'})`);
+      console.log('Pass --id to create a second task with the same title.');
+      return 0;
+    }
+
+    console.log(`created ${id}`);
+    console.log(`  title  ${title}`);
+    console.log(`  kind   ${kind}`);
+    console.log(`\nAn agent can take it now:  flotilla claim ${id}`);
+    return 0;
   },
 
   // AS THE SIGNED-IN USER, through the security rules -- not the Admin SDK.

@@ -55,6 +55,7 @@ import { toPresence as derivePresence, type PresenceBackend } from './presence.t
 import { assertScopeAllowed } from '../shared/store/roles.ts';
 import { applyEvent, emptyProjection, toSnapshot, type FoldOutcome, type Projection } from './fold.ts';
 import { isEmptyDelta, rollupDelta } from '../shared/store/rollup.ts';
+import { deriveTaskId, taskCreatedBody, type NewTask } from '../shared/store/tasks.ts';
 import { StoreAuthError, StoreBusyError, StoreError, StoreOfflineError } from '../shared/store/errors.ts';
 import { sanitizeBody, sanitizeText, VARCHAR_MAX } from '../shared/sanitize.ts';
 import { consoleLogger, type Logger } from '../shared/log.ts';
@@ -69,6 +70,7 @@ import {
   type AgentStatus,
   type ContractPointer,
   type CoordinationStore,
+  type CreateTaskResult,
   type Event,
   type EventInput,
   type Freshness,
@@ -76,6 +78,7 @@ import {
   type ScopeLock,
   type Seq,
   type Snapshot,
+  type TaskActor,
   type TaskId,
   type TaskView,
 } from '../shared/store/types.ts';
@@ -775,13 +778,17 @@ export class FirestoreStore implements CoordinationStore {
     outcome: FoldOutcome,
     p: Projection,
   ): void {
-    const patch: DocumentData = {
-      'rollup.last_activity': createdAt,
-      'rollup.last_seq': seq,
-    };
+    // Accumulated as plain numbers and turned into increments once, at the end. A FieldValue is
+    // opaque -- you cannot read one back to add to it -- so summing first is the only shape that
+    // stays correct if an event ever touches two tasks.
+    const totals: Record<string, number> = {};
+    let blocked = 0;
+    let ci_failed = 0;
 
     // At most one task per event, which is what makes this O(1). `touched_tasks` is a list only
-    // because the fold's shape allows it; if that ever changes, the loop still holds.
+    // because the fold's shape allows it; if that ever changes, the totals below still hold --
+    // they are ACCUMULATED and written once, rather than assigned per task, so a second touched
+    // task cannot overwrite the first one's increment.
     for (const tid of outcome.touched_tasks) {
       const after = p.tasks.get(tid) ?? null;
       // `before` belongs to the task the plan loaded. For any other id we have no prior state, so
@@ -793,15 +800,49 @@ export class FirestoreStore implements CoordinationStore {
       if (isEmptyDelta(d)) continue;
 
       for (const [status, n] of Object.entries(d.counts)) {
-        if (n) patch[`rollup.counts.${status}`] = FieldValue.increment(n);
+        if (n) totals[status] = (totals[status] ?? 0) + n;
       }
-      if (d.blocked) patch['rollup.blocked'] = FieldValue.increment(d.blocked);
-      if (d.ci_failed) patch['rollup.ci_failed'] = FieldValue.increment(d.ci_failed);
+      blocked += d.blocked;
+      ci_failed += d.ci_failed;
     }
 
-    // `update` would throw on a project document that does not exist yet; a set/merge with dotted
-    // keys creates the nested shape and leaves every sibling field alone.
-    tx.set(this.proj(pid), patch, { merge: true });
+    const counts: DocumentData = {};
+    for (const [status, n] of Object.entries(totals)) {
+      // A zero would be a no-op increment, but writing it still costs a field. Skipping it also
+      // keeps the "absent means never counted" property the index reads.
+      if (n) counts[status] = FieldValue.increment(n);
+    }
+
+    const rollup: DocumentData = { last_activity: createdAt, last_seq: seq };
+    if (Object.keys(counts).length > 0) rollup.counts = counts;
+    if (blocked) rollup.blocked = FieldValue.increment(blocked);
+    if (ci_failed) rollup.ci_failed = FieldValue.increment(ci_failed);
+
+    // A NESTED OBJECT, NOT DOTTED KEYS. This line used to read
+    //
+    //     tx.set(this.proj(pid), { 'rollup.counts.open': FieldValue.increment(1), ... }, { merge: true })
+    //
+    // with a comment claiming that a set/merge with dotted keys "creates the nested shape". IT
+    // DOES NOT. In the Node admin SDK only `update()` interprets a dotted key as a field PATH;
+    // `set()` treats it as a literal field NAME. So every rollup write since Order 0062 produced
+    // a document with top-level fields called "rollup.counts.open" and nothing named `rollup` at
+    // all -- and the index, which reads `rollup`, saw an unwritten project forever.
+    //
+    // Verified against real Firestore, not reasoned about:
+    //   set({'rollup.last_seq': 7}, {merge:true})  ->  {"rollup.last_seq": 7},  get('rollup') === undefined
+    //   set({rollup: {last_seq: 7}}, {merge:true}) ->  {"rollup": {"last_seq": 7}}
+    //
+    // Nothing caught it because the probe that would have caught it had never run: it failed on
+    // its first append against an event kind that did not exist. That is the whole argument for
+    // the artifact rule in one defect -- `rollup.test.ts` was green the entire time, because the
+    // arithmetic was never what was broken.
+    //
+    // The nested form keeps both properties the dotted form was chosen for. `merge: true`
+    // deep-merges map fields, so writing `rollup.counts.open` leaves `rollup.counts.claimed`
+    // alone and leaves `project_name` alone; and it creates the project document when it does not
+    // exist, which is why `update()` is still not an option. FieldValue.increment composes inside
+    // it -- five concurrent transactions incrementing one counter all landed. Also measured.
+    tx.set(this.proj(pid), { rollup }, { merge: true });
   }
 
   async appendEvent(
@@ -855,6 +896,57 @@ export class FirestoreStore implements CoordinationStore {
         has_more: all.length > events.length,
       };
     });
+  }
+
+  // ---- tasks -------------------------------------------------------------------------
+
+  /**
+   * Create a task. Order 0063: the operation `claimTask` always assumed and nothing provided.
+   *
+   * One transaction, and it rides the SAME append machinery as everything else -- planAppend,
+   * commitAppend, commitRollup. That is not tidiness, it is the constraint the order names: the
+   * rollup must move by DELTA on a create, and commitRollup already does exactly that because
+   * `taskBefore` is null for a task that does not exist yet, so `rollupDelta(null, after)`
+   * increments `open` by one and touches nothing else. There is no recount here and no second
+   * write path that could grow one later.
+   *
+   * Cost: 3 reads (the task doc, the dedupe doc, the counter) and 4 writes (event, counter, task,
+   * project rollup). Independent of how many tasks the project already has.
+   */
+  async createTask(pid: ProjectId, task: NewTask, actor: TaskActor): Promise<CreateTaskResult> {
+    await this.assertNotRevoked(pid, actor.actor_type === 'agent' ? actor.actor_id : undefined);
+    // Outside the transaction: an underivable id is a caller error, and raising it inside would
+    // burn a transaction attempt and read as contention.
+    const task_id = task.task_id ?? deriveTaskId(task.title);
+
+    return guard('createTask', async () =>
+      this.tx('createTask', async (tx) => {
+        const ref = this.tasksRef(pid).doc(task_id);
+        const held = await tx.get(ref);
+        if (held.exists) {
+          // A value, not an error -- the same shape as a lost claim. A CLI retrying after a
+          // timeout must not be told it failed when the task it wanted is already there.
+          this.log.info('store.task.exists', 'createTask found the id already taken; nothing appended', {
+            project_id: pid, task_id, status: held.get('status'),
+          });
+          return { ok: false as const, task_id, existing: held.data() as TaskView };
+        }
+        const plan = await this.planAppend(
+          tx,
+          pid,
+          {
+            layer: 'coordination',
+            kind: 'task_created',
+            actor_type: actor.actor_type,
+            actor_id: actor.actor_id,
+            body: taskCreatedBody(task_id, task),
+          },
+          `create:${pid}:${task_id}`,
+        );
+        this.commitAppend(tx, pid, plan);
+        return { ok: true as const, task_id, seq: plan.seq };
+      }),
+    );
   }
 
   // ---- claims ------------------------------------------------------------------------

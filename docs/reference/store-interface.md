@@ -28,7 +28,7 @@ type EventKind =
   | 'schema_published' | 'contract_published' | 'contract_superseded'
   | 'decision_recorded' | 'scope_locked' | 'scope_released' | 'task_unblocked'
   // coordination layer — agents subscribe
-  | 'task_claimed' | 'task_completed' | 'task_blocked'
+  | 'task_created' | 'task_claimed' | 'task_completed' | 'task_blocked'
   | 'branch_pushed' | 'pr_opened' | 'ci_passed' | 'ci_failed' | 'merged'
   // human layer — dashboard ONLY, never delivered to an agent
   | 'agent_heartbeat' | 'task_progress';
@@ -96,7 +96,11 @@ interface Freshness {
 }
 ```
 
-## The ten operations
+## The eleven operations
+
+> Ten until Order 0063, which found that `claimTask` had always taken a `task_id` that nothing in
+> the CLI, the port or the write function could produce. Every task the board had ever shown came
+> from a seeder or a fixture. `createTask` is the missing half.
 
 ```ts
 interface CoordinationStore {
@@ -120,6 +124,24 @@ interface CoordinationStore {
     since_seq: Seq,
     limit?: number,
   ): Promise<{ events: Event[]; next_cursor: Seq; has_more: boolean }>;
+
+  // ---- tasks -----------------------------------------------------------
+  /**
+   * Bring a task into existence. Appends exactly one `task_created` event on the
+   * COORDINATION layer — it creates work an agent must see.
+   *
+   * MUST be idempotent on the task id. The id is derived from the title when the
+   * caller supplies none, so a retried create finds the card already there and
+   * returns it; creating an existing task is a VALUE, not an error, exactly as a
+   * lost claim is.
+   *
+   * MUST move the project rollup by DELTA (`rollupDelta(null, task)`), never by
+   * recounting the tasks collection. See docs/reference/store-interface.md's cost
+   * rules and shared/store/rollup.ts.
+   */
+  createTask(project_id: ProjectId, task: NewTask, actor: TaskActor)
+    : Promise<{ ok: true; task_id: TaskId; seq: Seq }
+            | { ok: false; task_id: TaskId; existing: TaskView }>;
 
   // ---- claims (atomic) -------------------------------------------------
   /**
@@ -438,6 +460,7 @@ provoke on demand against a real service.
 | idempotency | `request_dedupe` table, `is_unique` key column | doc id = idempotency key |
 | `readEvents` | ZCQL `ORDER BY seq LIMIT o,300` | `orderBy('seq').limit(300)` |
 | `seq` source | dedicated `seq bigint is_unique` column, globally allocated. **Not `ROWID`** — see below | counter doc inside `runTransaction` |
+| `createTask` | INSERT into `tasks` guarded by the derived id, in the append function | `runTransaction`: read the task doc, then the normal append + rollup delta |
 | `claimTask` | INSERT into `task_claims`, unique on composite `project_id:task_id` | `runTransaction` |
 | `acquireScope` | INSERT + glob check in the function, composite-keyed per project | `runTransaction` |
 | `heartbeat` | Cache PUT, TTL 1h — **not** a Data Store UPDATE | field write on agent doc |

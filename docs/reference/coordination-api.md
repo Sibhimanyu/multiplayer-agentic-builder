@@ -229,6 +229,38 @@ Response:
 }
 ```
 
+### Create Task
+
+The `create_task` op on the write function. Requires the **`triage`** capability — creating work
+is a triage act, so owner and architect may do it and the client seat may not. See
+`docs/decisions/0005-work-appears-by-triage.md`.
+
+```http
+POST <write function>
+{ "project_id": "...", "op": "create_task",
+  "body": { "title": "Items list page", "kind": "frontend",
+            "task_id": "task_items_list_page",   // optional; derived from the title when absent
+            "description": "...", "depends_on": [], "file_scope": [] } }
+```
+
+Rules:
+
+- `title` is required; `kind` must be one of `frontend|backend|qa|docs|devops` and is **refused**
+  rather than defaulted — a task quietly filed under the wrong kind is a card in the wrong
+  swimlane that nobody can explain a week later.
+- The creator is the **verified uid** from the token. A body-supplied actor is ignored.
+- Idempotent on the task id. Creating a task that already exists is `200` with `ok:false` and the
+  existing task attached — **not** a `409`. It is the normal outcome of a retry, the same
+  reasoning that makes a lost claim a 200.
+- Appends exactly one `task_created` event on the coordination layer and moves the project
+  rollup by delta.
+
+```json
+{ "ok": true, "task_id": "task_items_list_page", "seq": 41 }
+```
+
+CLI: `flotilla task "<title>" --kind <kind> [--id <task_id>]`.
+
 ### Claim Task
 
 ```http

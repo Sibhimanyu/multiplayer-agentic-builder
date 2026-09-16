@@ -15,6 +15,13 @@ export type Seq = number; // monotonic, ascending, gaps permitted
 
 export const PROTOCOL_VERSION = '0.2';
 
+// Re-exported from the one place a new task is defined, so a caller of the port never has to
+// know that `NewTask` and the id derivation live next door. The edge is one-way at runtime:
+// tasks.ts imports only TYPES from this file, so there is no import cycle to trip over.
+import type { NewTask } from './tasks.ts';
+export type { NewTask } from './tasks.ts';
+export { TASK_KINDS, deriveTaskId, isTaskKind } from './tasks.ts';
+
 export type Layer = 'contract' | 'coordination' | 'human';
 
 export type ContractEventKind =
@@ -22,7 +29,7 @@ export type ContractEventKind =
   | 'decision_recorded' | 'scope_locked' | 'scope_released' | 'task_unblocked';
 
 export type CoordinationEventKind =
-  | 'task_claimed' | 'task_completed' | 'task_blocked'
+  | 'task_created' | 'task_claimed' | 'task_completed' | 'task_blocked'
   | 'branch_pushed' | 'pr_opened' | 'ci_passed' | 'ci_failed' | 'merged';
 
 /** Dashboard only. Delivering these to an agent is a protocol violation. */
@@ -30,11 +37,22 @@ export type HumanEventKind = 'agent_heartbeat' | 'task_progress';
 
 export type EventKind = ContractEventKind | CoordinationEventKind | HumanEventKind;
 
-/** The layer of a kind is a fact about the kind, not a caller-supplied field. */
+/**
+ * The layer of a kind is a fact about the kind, not a caller-supplied field.
+ *
+ * `task_created` is COORDINATION, and the reasoning is the one already applied to the client
+ * seat: an accepted suggestion becomes a contract-layer fact because it binds work, a declined
+ * one stays human-layer because it binds nothing. Creating a task creates work an agent must
+ * see -- it is the thing `flotilla claim` reaches for -- so it belongs on the layer agents are
+ * delivered. Putting it on `human` would leave the board showing a card no inbox ever mentions;
+ * putting it on `contract` would claim it is a published artifact pinned to a commit, which it
+ * is not.
+ */
 export const LAYER_OF: Record<EventKind, Layer> = {
   schema_published: 'contract', contract_published: 'contract',
   contract_superseded: 'contract', decision_recorded: 'contract',
   scope_locked: 'contract', scope_released: 'contract', task_unblocked: 'contract',
+  task_created: 'coordination',
   task_claimed: 'coordination', task_completed: 'coordination', task_blocked: 'coordination',
   branch_pushed: 'coordination', pr_opened: 'coordination',
   ci_passed: 'coordination', ci_failed: 'coordination', merged: 'coordination',
@@ -126,6 +144,19 @@ export interface AppendResult { event_id: string; seq: Seq; duplicate: boolean }
 export type ClaimResult =
   | { ok: true }
   | { ok: false; owner: AgentId; claimed_at: string };
+
+/**
+ * Creating a task that already exists is a VALUE, not an error -- the same shape as a lost claim.
+ *
+ * A retry after a timeout, or an outbox drained twice, must not be a failure the caller has to
+ * distinguish from a real one. So the loser gets the task that is already there and can say so.
+ */
+export type CreateTaskResult =
+  | { ok: true; task_id: TaskId; seq: Seq }
+  | { ok: false; task_id: TaskId; existing: TaskView };
+
+/** Who is creating a task. Not always an agent: the first task on a board is made by a human. */
+export interface TaskActor { actor_type: ActorType; actor_id: string }
 export type ScopeResult = { ok: true } | { ok: false; conflicts: ScopeLock[] };
 export interface SnapshotRead { snapshot: Snapshot; etag: string }
 
@@ -175,6 +206,23 @@ export interface CoordinationStore {
     since_seq: Seq,
     limit?: number,
   ): Promise<{ events: Event[]; next_cursor: Seq; has_more: boolean }>;
+
+  // ---- tasks -----------------------------------------------------------
+  /**
+   * Bring a task into existence. Order 0063.
+   *
+   * THE OPERATION THAT WAS MISSING. `claimTask` took a task_id that nothing in the CLI, the port
+   * or the write function could produce: every task the board had ever shown came from a seeder
+   * or a fixture, so a user who created a real project got six empty columns and no way to fill
+   * them. This is the other half of `claim`.
+   *
+   * Idempotent on the task id (derived from the title when the caller supplies none), so a retry
+   * returns the existing task rather than adding a second identical card.
+   *
+   * Appends exactly one `task_created` event and moves the project rollup by DELTA -- never a
+   * recount. See shared/store/rollup.ts for why that constraint is not negotiable.
+   */
+  createTask(project_id: ProjectId, task: NewTask, actor: TaskActor): Promise<CreateTaskResult>;
 
   // ---- claims (atomic) -------------------------------------------------
   /** Atomic. Exactly one concurrent caller wins. A loss is not an error. */

@@ -3,6 +3,7 @@
 //
 //   flotilla connect <invite>   write AGENTS.md + .agentic/, store the token
 //   flotilla status             what the board thinks is happening
+//   flotilla task <title>       create a task, so there is something to claim
 //   flotilla claim <task_id>    atomic claim, then acquire the file scope
 //   flotilla report "<msg>"     append one progress line to the outbox
 //   flotilla start              the long-running loop: drain outbox, deliver inbox, heartbeat
@@ -33,7 +34,7 @@ import { appendOutbox, drain, isConnected, readCursor, type OutboxRecord } from 
 import { ApiClient, connectWithInvite, type WhoAmI } from './client.ts';
 import { materialise, publishToBlackboard } from './blackboard.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
-import { LAYER_OF, type Event, type EventKind } from '../shared/store/types.ts';
+import { LAYER_OF, TASK_KINDS, type Event, type EventKind, type TaskKind } from '../shared/store/types.ts';
 import type { Logger } from '../shared/log.ts';
 
 /**
@@ -552,6 +553,8 @@ const USAGE = `flotilla — agentic coordination CLI
 
   flotilla connect <invite>     write AGENTS.md + .agentic/, store the agent token
   flotilla status               what the board thinks is happening
+  flotilla task <title> --kind <${TASK_KINDS.join('|')}>
+                                create a task on the board; --id overrides the derived id
   flotilla claim <task_id>      atomic claim, then acquire the declared file scope
   flotilla report "<message>"   queue one progress line in the outbox
   flotilla start                drain the outbox, deliver the inbox, heartbeat
@@ -578,6 +581,12 @@ export interface ProjectCommands {
   new: (root: string, name: string, repo?: string) => Promise<number>;
   ls: () => Promise<number>;
   members: (project_id: string) => Promise<number>;
+  /**
+   * `flotilla task`. Injected like the rest, and for the same reason -- it writes through the
+   * deployed function with the USER's token, not an agent token, because creating work is a
+   * triage act and triage is a member capability. See docs/decisions/0005-work-appears-by-triage.md.
+   */
+  task: (root: string, title: string, kind: TaskKind, task_id?: string) => Promise<number>;
 }
 
 let projectCommands: ProjectCommands | null = null;
@@ -660,6 +669,34 @@ export async function main(argv: string[]): Promise<number> {
         return 1;
       }
       return cmdConnect(root, invite);
+    }
+    case 'task': {
+      // Flags are stripped from the title, so `flotilla task Wire the webhook --kind backend`
+      // works without quoting. The title is what is left over.
+      const flag = (name: string): string | undefined => {
+        const i = rest.indexOf(name);
+        return i > -1 ? rest[i + 1] : undefined;
+      };
+      const flagged = new Set<number>();
+      for (const name of ['--kind', '--id']) {
+        const i = rest.indexOf(name);
+        if (i > -1) { flagged.add(i); flagged.add(i + 1); }
+      }
+      const title = rest.filter((a, i) => !flagged.has(i) && !a.startsWith('--')).join(' ').trim();
+      const kind = flag('--kind');
+
+      if (!title || !kind) {
+        log.warn('cli.usage_flotilla_task', `usage: flotilla task "<title>" --kind <${TASK_KINDS.join('|')}> [--id <task_id>]`);
+        return 1;
+      }
+      if (!(TASK_KINDS as readonly string[]).includes(kind)) {
+        // Refused, not defaulted. A task quietly filed under the wrong kind is a card in the
+        // wrong swimlane that nobody can explain later.
+        log.warn('cli.bad_task_kind', `--kind must be one of: ${TASK_KINDS.join(', ')} (got "${kind}")`);
+        return 1;
+      }
+      if (!projectCommands) return needsBackend();
+      return projectCommands.task(root, title, kind as TaskKind, flag('--id'));
     }
     case 'status':
       return cmdStatus(root);

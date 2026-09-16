@@ -21,10 +21,11 @@
 
 import type {
   AgentId, AgentPresence, AgentStatus, AppendResult, ClaimResult, ContractPointer,
-  CoordinationStore, Event, EventInput, Freshness, ProjectId, ScopeLock, ScopeResult,
-  Seq, Snapshot, SnapshotRead, TaskId, TaskKind, TaskView,
+  CoordinationStore, CreateTaskResult, Event, EventInput, Freshness, ProjectId, ScopeLock,
+  ScopeResult, Seq, Snapshot, SnapshotRead, TaskActor, TaskId, TaskKind, TaskView,
 } from './types.ts';
 import { LAYER_OF, LIMITS, STALE_AFTER_MS } from './types.ts';
+import { deriveTaskId, newTaskView, taskCreatedBody, type NewTask } from './tasks.ts';
 import type { Clock } from '../clock.ts';
 import { systemClock } from '../clock.ts';
 import type { Logger } from '../log.ts';
@@ -323,6 +324,49 @@ export class MemoryStore implements CoordinationStore {
     return { events, next_cursor, has_more };
   }
 
+  // ---- tasks -----------------------------------------------------------
+
+  /**
+   * Create a task by appending one `task_created` event and letting the fold build the card.
+   *
+   * DELIBERATELY NOT `addTask`. The seeder above writes the map directly, which is right for a
+   * fixture and wrong for the product: it leaves no ledger entry, so nothing downstream -- an
+   * inbox, a rollup, an audit -- ever learns the task exists. Order 0063 found that this was the
+   * ONLY way a task had ever been created. The event is the creation; the card is a projection
+   * of it.
+   */
+  async createTask(project_id: ProjectId, task: NewTask, actor: TaskActor): Promise<CreateTaskResult> {
+    const p = this.#project(project_id);
+    await this.#gate(p, actor.actor_type === 'agent' ? actor.actor_id : undefined);
+
+    const task_id = task.task_id ?? deriveTaskId(task.title);
+
+    // Read the CURRENT fold, not the raw map: a task created by an event still sitting behind a
+    // frozen snapshot is nonetheless already taken, and reporting it free would let two callers
+    // both believe they created it.
+    this.#fold(p);
+    const existing = p.tasks.get(task_id);
+    if (existing) {
+      this.#log.info('store.task.exists', 'createTask found the id already taken; nothing appended', {
+        project_id, task_id, status: existing.status,
+      });
+      return { ok: false, task_id, existing: { ...existing } };
+    }
+
+    const r = await this.appendEvent(
+      project_id,
+      {
+        layer: 'coordination',
+        kind: 'task_created',
+        actor_type: actor.actor_type,
+        actor_id: actor.actor_id,
+        body: taskCreatedBody(task_id, task),
+      },
+      `create:${project_id}:${task_id}`,
+    );
+    return { ok: true, task_id, seq: r.seq };
+  }
+
   // ---- claims ----------------------------------------------------------
 
   async claimTask(project_id: ProjectId, task_id: TaskId, agent_id: AgentId): Promise<ClaimResult> {
@@ -553,6 +597,27 @@ export class MemoryStore implements CoordinationStore {
     };
 
     switch (e.kind) {
+      case 'task_created': {
+        // Same rule as the Firestore fold: an existing task is never overwritten by a replay.
+        // Both folds call newTaskView so a task born here and a task born there are the same
+        // shape -- two folds with two definitions is how the bake-off starts comparing
+        // interpretations instead of platforms.
+        if (task) {
+          this.#log.warn('store.fold.duplicate_task', 'task_created for a task that already exists; ignored', {
+            project_id: p.project_id, task_id: task.task_id, seq: e.seq,
+          });
+          break;
+        }
+        const built = newTaskView(body, e.created_at);
+        if (!built.ok) {
+          this.#log.warn('store.fold.unusable_task', 'task_created was not usable and created nothing', {
+            project_id: p.project_id, seq: e.seq, reason: built.reason,
+          });
+          break;
+        }
+        p.tasks.set(built.task.task_id, built.task);
+        break;
+      }
       case 'contract_published':
       case 'schema_published': {
         const name = String(body.name ?? '');

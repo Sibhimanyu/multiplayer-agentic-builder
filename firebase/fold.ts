@@ -20,6 +20,7 @@
 
 import type { ContractPointer, Event, ScopeLock, Snapshot, TaskStatus, TaskView } from '../shared/store/types.ts';
 import { LAYER_OF } from '../shared/store/types.ts';
+import { newTaskView } from '../shared/store/tasks.ts';
 
 /** The mutable projection an adapter persists. Everything here is derivable from the ledger. */
 export interface Projection {
@@ -98,6 +99,18 @@ export function applyEvent(p: Projection, e: Event): FoldOutcome {
   };
 
   switch (e.kind) {
+    case 'task_created': {
+      // Re-creating an existing task is IGNORED, never an overwrite. The ledger is replayed --
+      // by a snapshot rebuild, by a reconcile, by an at-least-once drain -- and an overwrite
+      // here would reset a merged task back to `open` every time the log was folded again.
+      if (task) { ignore(`task_created for ${taskId} which already exists`); break; }
+      const built = newTaskView(b, e.created_at);
+      if (!built.ok) { ignore(built.reason); break; }
+      p.tasks.set(built.task.task_id, built.task);
+      touched.push(built.task.task_id);
+      break;
+    }
+
     case 'task_claimed': {
       if (!task) { ignore(`unknown task_id ${taskId}`); break; }
       const agent = str(b.agent_id);

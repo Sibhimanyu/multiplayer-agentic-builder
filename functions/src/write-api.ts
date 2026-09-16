@@ -29,13 +29,16 @@ import {
   type Capability,
 } from '../../shared/store/directory.ts';
 import { assertDeployAllowed, assertScopeAllowed } from '../../shared/store/roles.ts';
+import { TASK_KINDS, isTaskKind } from '../../shared/store/tasks.ts';
+import type { NewTask } from '../../shared/store/tasks.ts';
+import type { CreateTaskResult, TaskActor } from '../../shared/store/types.ts';
 import type { Logger } from '../../shared/log.ts';
 
 export interface WriteRequest {
   project_id: string;
   op:
     | 'claim' | 'release' | 'acquire_scope' | 'release_scope' | 'append_event' | 'heartbeat'
-    | 'deploy' | 'create_project';
+    | 'deploy' | 'create_project' | 'create_task';
   /** Operation payload. Shape depends on `op`. */
   body: Record<string, unknown>;
 }
@@ -57,6 +60,7 @@ export interface WriteDeps {
     releaseScope(pid: string, agent_id: string): Promise<void>;
     appendEvent(pid: string, event: Record<string, unknown>, key: string): Promise<unknown>;
     heartbeat(pid: string, agent_id: string, status: string, task?: string | null, branch?: string | null): Promise<void>;
+    createTask(pid: string, task: NewTask, actor: TaskActor): Promise<CreateTaskResult>;
   };
   /** The directory's createProject. Separate port, so the write path does not grow a second one. */
   createProject: (input: {
@@ -67,6 +71,11 @@ export interface WriteDeps {
 
 /** Which capability each operation requires. Explicit, so adding an op forces the decision. */
 const REQUIRES: Partial<Record<WriteRequest["op"], Capability>> = {
+  // `triage` is already defined as "turn a suggestion into a task, or decline it" -- so creating
+  // a task IS the triage act, and the capability that gates one gates the other. Owner and
+  // architect hold it; the client seat does not, which is the whole point of that seat. See
+  // docs/decisions/0005-work-appears-by-triage.md.
+  create_task: 'triage',
   claim: 'claim',
   release: 'claim',
   acquire_scope: 'acquire_scope',
@@ -229,6 +238,40 @@ export async function handleWrite(
         // No deployer exists yet. The GATE lands first deliberately: a gate with no caller is a
         // gate, a caller with no gate is a hole.
         return { status: 501, body: { ok: false, error: 'deploy is authorized but not implemented', targets } };
+      }
+      case 'create_task': {
+        const title = typeof req.body.title === 'string' ? req.body.title.trim() : '';
+        if (!title) return { status: 400, body: { error: 'create_task needs a title' } };
+        if (!isTaskKind(req.body.kind)) {
+          // Named rather than defaulted. A task quietly filed as 'backend' because the kind was
+          // misspelled is a card in the wrong swimlane that nobody can explain a week later.
+          return {
+            status: 400,
+            body: { error: `kind must be one of ${TASK_KINDS.join(', ')}`, kinds: [...TASK_KINDS] },
+          };
+        }
+        const strings = (v: unknown): string[] =>
+          Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+        const task: NewTask = {
+          title,
+          kind: req.body.kind,
+          ...(typeof req.body.task_id === 'string' && req.body.task_id ? { task_id: req.body.task_id } : {}),
+          ...(typeof req.body.description === 'string' ? { description: req.body.description } : {}),
+          depends_on: strings(req.body.depends_on),
+          file_scope: strings(req.body.file_scope),
+        };
+        // The creator is the VERIFIED uid, exactly as append_event does it. A body-supplied
+        // actor is ignored, so the ledger cannot be made to say someone else filed this work.
+        const r = await deps.store.createTask(req.project_id, task, {
+          actor_type: 'member', actor_id: caller.uid,
+        });
+        deps.log.info('api.task_created', 'task created through the write path', {
+          project_id: req.project_id, uid: caller.uid, role: grant.role,
+          task_id: r.task_id, created: r.ok,
+        });
+        // An existing task is 200 with ok:false, NOT 409 -- same reasoning as a lost claim. It
+        // is the normal outcome of a retry and a 4xx would make every HTTP client log it red.
+        return { status: 200, body: { ...r } as Record<string, unknown> };
       }
       case 'claim': {
         const r = await deps.store.claimTask(req.project_id, String(req.body.task_id ?? ''), agent_id);
