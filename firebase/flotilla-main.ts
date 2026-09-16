@@ -9,8 +9,6 @@
 // shipped artifact is a bundle -- shared/** and cli/** are compiled in, and firebase-admin stays
 // external because it is a real dependency with native pieces.
 
-import { spawn } from 'node:child_process';
-
 import { main, registerAuthCommands, registerProjectCommands } from '../cli/index.ts';
 import { newProject } from '../cli/newproject.ts';
 import { boardUrl, fetchApiKey, loadConfig, saveConfig, writeUrl } from '../cli/config.ts';
@@ -19,6 +17,7 @@ import {
   startLoopback,
 } from '../cli/auth.ts';
 import { loginPageHtml } from '../cli/loginpage.ts';
+import { openBrowser } from '../cli/browser.ts';
 import { WriteClient } from '../cli/writeclient.ts';
 import { RemoteDirectory } from '../cli/remotedirectory.ts';
 import { ReadClient } from '../cli/readclient.ts';
@@ -160,22 +159,35 @@ registerAuthCommands({
       ? `${loginUrl(boardUrl(cfg), port, lb.nonce)}&provider=${anonymous ? 'anonymous' : 'google'}`
       : localLoginUrl(port);
 
+    // THE URL IS PRINTED FIRST, AND ALWAYS.
+    //
+    // A launcher can report success and still put nothing on screen -- wrong default browser, a
+    // window on another desktop, a launcher that silently no-ops. The printed URL is what makes
+    // that recoverable, so it is never conditional on the launch.
     console.log(`\nOpen this in your browser to sign in${anonymous ? ' (anonymous)' : ' with Google'}:\n`);
     console.log(`  ${url}\n`);
     if (!hosted) {
       console.log('  This page is served by this command, on your own machine.');
       console.log(`  If your browser cannot open it, run: flotilla login --hosted\n`);
     }
-    // Best effort. If it fails the URL is already printed, which is the actual instruction.
+
+    // WHICH URL IS HANDED OVER IS THE WHOLE POINT. The user who reported this ended up signing in
+    // on the HOSTED board -- a tab they already had open -- which uses redirect and is the flow
+    // Safari's ITP breaks. Three orders of work went into the local page they never reached. So
+    // the launcher gets `url`, the one this server is bound to, and firebase/login-launch.mjs
+    // asserts the exact string a real launcher receives from the real binary.
     //
-    // `--no-browser` exists for headless machines and for anyone who wants to choose the browser
-    // themselves -- and it is what the browser harness uses. Without it, this spawn opens the
-    // SYSTEM DEFAULT browser, which then completes the login first and leaves the browser under
-    // test receiving a 409. A suite that passed on a credential delivered by a different browser
-    // than the one it names is a true signal about the wrong subject.
+    // `--no-browser` suppresses the launch and keeps the print: genuinely useful on a headless
+    // box, and it is what the browser harnesses use so the system browser cannot race them to
+    // the credential.
     if (!no_browser) {
-      spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [url], { stdio: 'ignore' })
-        .on('error', () => {});
+      const launch = await openBrowser(url);
+      if (!launch.ok) {
+        // Not swallowed. A user whose launcher is missing otherwise watches a terminal that looks
+        // like it is waiting on them.
+        console.log(`  Could not open your browser automatically (${launch.command}: ${launch.error}).`);
+        console.log('  Open the URL above yourself — the login is waiting either way.\n');
+      }
     }
 
     try {
