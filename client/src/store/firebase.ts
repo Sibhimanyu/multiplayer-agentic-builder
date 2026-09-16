@@ -39,6 +39,7 @@ import {
   type Firestore,
 } from 'firebase/firestore';
 
+import { STALE_AFTER_MS } from './types';
 import type {
   AgentPresence,
   ContractPointer,
@@ -52,7 +53,9 @@ import type {
 } from './types';
 
 /** Derived at read time, never stored. Must match shared/store/types.ts. */
-const STALE_TIMEOUT_MS = 90_000;
+// Was a local 90_000. Now imported so the board and the projects index cannot disagree about
+// which agents are live -- see the note on STALE_AFTER_MS.
+const STALE_TIMEOUT_MS = STALE_AFTER_MS;
 const PRESENCE_CAP = 100;
 const LOCKS_CAP = 200;
 /** meta, counter, tasks, agents, locks, contracts. */

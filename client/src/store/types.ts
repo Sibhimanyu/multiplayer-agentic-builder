@@ -38,6 +38,15 @@ export interface TaskView {
   updated_at: string;
 }
 
+/**
+ * How long an agent may go without a heartbeat before it reads as stale.
+ *
+ * Exported so the board and the projects index share ONE definition of "live". They used to hold
+ * separate copies of 90_000, which is the shape of drift where two screens disagree about who is
+ * working and neither is obviously wrong.
+ */
+export const STALE_AFTER_MS = 90_000;
+
 export interface AgentPresence {
   agent_id: AgentId; role_slug: string; member_label: string; initials: string;
   harness: 'claude-code' | 'codex' | 'manual';

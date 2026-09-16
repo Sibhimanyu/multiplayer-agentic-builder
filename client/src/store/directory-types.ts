@@ -22,3 +22,19 @@ export interface MemberRecord {
   revoked: boolean;
   added_at: string;
 }
+
+/**
+ * The counters the index reads off the project document, maintained by the append transaction
+ * (shared/store/rollup.ts). Mirrored here for the same reason the rest of this file is.
+ *
+ * Every field is optional because a project created before the rollup existed has none of them,
+ * and an index that renders "0 open" for a project it simply has not counted is worse than one
+ * that renders nothing. Absent means unknown; zero means counted and empty.
+ */
+export interface ProjectRollup {
+  counts?: Partial<Record<string, number>>;
+  blocked?: number;
+  ci_failed?: number;
+  last_activity?: string;
+  last_seq?: number;
+}

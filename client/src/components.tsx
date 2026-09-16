@@ -2,6 +2,9 @@
 // If a backend SDK appears in this file, the store seam has leaked.
 
 import { useEffect, useState } from 'react';
+// COLUMNS, not a local list: the index must not invent a second definition of the board's
+// columns. If the board gains a column, this gains it too, or the two screens disagree.
+import { COLUMNS } from './store/types';
 import type {
   AgentPresence, ContractPointer, Freshness, Snapshot, TaskView,
 } from './store/types';
@@ -165,26 +168,93 @@ export function EmptyColumn({ label }: { label: string }) {
  * near-identical component is how two drifting implementations of one idea start.
  */
 export function ProjectCard({
-  project, onOpen,
+  project, onOpen, now,
 }: {
   project: {
     project_id: string; project_name: string; repo_url: string;
     role: string; members: AgentPresence[];
+    rollup?: { counts?: Record<string, number | undefined>; blocked?: number; ci_failed?: number; last_activity?: string };
+    agents_live?: number;
   };
   onOpen: () => void;
+  /** Injected so a render is deterministic and a server-rendered test can assert the text. */
+  now?: number;
 }) {
+  const r = project.rollup ?? {};
+  const counts = r.counts ?? {};
+  // Only non-empty columns. Six pills where four read "0" is noise, and the eye has to work to
+  // find the one number that matters.
+  const shown = COLUMNS
+    .map((c) => ({ label: c.label, n: counts[c.status] ?? 0 }))
+    .filter((c) => c.n > 0);
+  const counted = Object.keys(counts).length > 0;
+  const live = project.agents_live ?? 0;
+
   return (
     <button className="card" onClick={onOpen} data-project={project.project_id}>
       <div className="title">{project.project_name}</div>
+
       <div className="row">
         <span className="kind" data-k="docs">{project.role}</span>
+        {/* The two signals that should pull the eye, in the badge idiom the board already uses. */}
+        {(r.blocked ?? 0) > 0 && (
+          <span className="badge" data-t="blocked">{r.blocked} blocked</span>
+        )}
+        {(r.ci_failed ?? 0) > 0 && (
+          <span className="badge" data-t="ci-failed">CI failed</span>
+        )}
         {project.members.length > 0 && (
           <div className="who"><Presence agents={project.members} /></div>
         )}
       </div>
+
+      {/* Absent counts mean "not counted yet", which is why this renders nothing rather than a
+          row of zeroes for a project created before the rollup existed. */}
+      {counted && (
+        <div className="row" data-counts="true">
+          {shown.length === 0
+            ? <span className="count">no tasks</span>
+            : shown.map((c) => (
+                <span className="count" key={c.label}>{c.n} {c.label.toLowerCase()}</span>
+              ))}
+        </div>
+      )}
+
+      <div className="row">
+        {live > 0 && (
+          <span className="fresh" data-mode="live">
+            <span className="dot" />
+            {live} working
+          </span>
+        )}
+        {r.last_activity && (
+          <span className="branch">{relativeTime(r.last_activity, now ?? Date.now())}</span>
+        )}
+      </div>
+
       {project.repo_url && <div className="branch">{truncPath(project.repo_url)}</div>}
     </button>
   );
+}
+
+/**
+ * "3 minutes ago". Answers "is this alive" in a way a timestamp does not.
+ *
+ * Coarse on purpose: the index is a glance, not a log. Anything older than a week reads as a
+ * date, because "23 days ago" is arithmetic the reader has to do twice.
+ */
+export function relativeTime(iso: string, now: number): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '';
+  const s = Math.max(0, Math.round((now - t) / 1000));
+  if (s < 45) return 'just now';
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} minute${m === 1 ? '' : 's'} ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} hour${h === 1 ? '' : 's'} ago`;
+  const d = Math.round(h / 24);
+  if (d <= 7) return `${d} day${d === 1 ? '' : 's'} ago`;
+  return new Date(t).toISOString().slice(0, 10);
 }
 
 /**

@@ -91,6 +91,12 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .col-head h3{font-family:var(--serif);font-size:14.5px;font-weight:600;letter-spacing:-.01em}
 .count{font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--card);
        border:1px solid var(--line);border-radius:20px;padding:1px 8px}
+/* Projects index counts strip. Reuses .count and .fresh unchanged; the only additions are
+   tighter spacing and a lighter weight, because a row of pills at card weight out-shouts the
+   project name it sits under. */
+.card .row[data-counts="true"]{gap:5px;margin-top:1px}
+.card .row[data-counts="true"] .count{font-weight:400}
+.card .fresh{font-size:11.5px}
 .col-body{display:flex;flex-direction:column;gap:10px;overflow-y:auto;padding:2px 4px 20px;min-height:0}
 
 /* ---- card ---- */

@@ -11,11 +11,12 @@
 
 import { renderToStaticMarkup } from 'react-dom/server';
 import { BoardView, ProjectsIndex, blockedChain, isLoginPath, projectIdFromPath } from '../src/App';
-import { TriagePanel } from '../src/components';
+import { TriagePanel, relativeTime } from '../src/components';
 import { LoginView } from '../src/Login';
 import { handoffBlocked, initialLoginState } from '../src/login-contract';
 import type { LoginState } from '../src/login-contract';
 import { authDomainFor } from '../src/store/firebase';
+import { byActivity } from '../src/store/project-order';
 import type {
   AgentPresence, ContractPointer, Freshness, Snapshot, TaskStatus, TaskView,
 } from '../src/store/types';
@@ -478,6 +479,119 @@ const render = (snap: Snapshot, freshness: Freshness = LIVE, selected: string | 
   }
   // And the two routes stay disjoint -- /login must not read as a project id.
   check(projectIdFromPath('/login') === null, 'login: /login is not mistaken for a project');
+}
+
+// ---- the projects index: does it answer "where does my attention need to go?" ----------------
+{
+  const NOW = Date.parse('2026-09-16T12:00:00.000Z');
+  // Local copy: the login block's `text` is scoped to that block. Strips tags and collapses
+  // whitespace so an assertion reads what a person reads, not the markup around it.
+  const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const proj = (o: Partial<Parameters<typeof ProjectsIndex>[0]['projects'][number]> & { project_id: string }) => ({
+    project_name: o.project_id, repo_url: 'o/r', role: 'owner', members: [],
+    rollup: {}, agents_live: 0, ...o,
+  });
+  const idx = (projects: ReturnType<typeof proj>[]) =>
+    renderToStaticMarkup(<ProjectsIndex projects={projects} onOpen={() => {}} />);
+
+  // 0 projects: the empty state still teaches the command, and no card renders.
+  {
+    const html = idx([]);
+    check(/flotilla\s+new/.test(text(html)), 'index(0): the empty state teaches `flotilla new`');
+    check(!/data-project=/.test(html), 'index(0): and renders no project card');
+  }
+
+  // 1 project: counts come from the rollup, and only non-empty columns appear.
+  {
+    const html = idx([proj({
+      project_id: 'p1',
+      rollup: { counts: { open: 3, in_progress: 1, merged: 0 }, last_activity: '2026-09-16T11:58:00.000Z' },
+    })]);
+    const t = text(html);
+    check(/3 open/.test(t), 'index(1): renders the open count from the rollup');
+    check(/1 in progress/.test(t), 'index(1): and the in-progress count');
+    check(!/0 merged/.test(t), 'index(1): a zero column is omitted, not rendered as "0 merged"');
+  }
+
+  // A project with no rollup at all must not render zeroes: absent means "not counted".
+  {
+    const t = text(idx([proj({ project_id: 'p_old' })]));
+    check(!/\bno tasks\b/.test(t) && !/0 open/.test(t),
+      'index: a project with no rollup renders no counts, rather than a row of zeroes');
+    // The control: a project that HAS been counted and is genuinely empty does say so.
+    check(/no tasks/.test(text(idx([proj({ project_id: 'p_empty', rollup: { counts: {} , last_activity: 'x'} })]))) === false,
+      'index: (control) an empty counts object is still "not counted" -- keys decide, not values');
+  }
+
+  // The badge, both halves. "renders a badge" would pass for a card that always renders one.
+  {
+    const withBlocked = text(idx([proj({ project_id: 'pb', rollup: { counts: { open: 1 }, blocked: 2 } })]));
+    const without = text(idx([proj({ project_id: 'pn', rollup: { counts: { open: 1 }, blocked: 0 } })]));
+    check(/2 blocked/.test(withBlocked), 'index: a project with a blocked task renders the badge');
+    check(!/blocked/.test(without), 'index: and one without renders no badge — the other half');
+
+    const ciBad = text(idx([proj({ project_id: 'pc', rollup: { counts: { open: 1 }, ci_failed: 1 } })]));
+    const ciOk = text(idx([proj({ project_id: 'pd', rollup: { counts: { open: 1 }, ci_failed: 0 } })]));
+    check(/CI failed/.test(ciBad), 'index: CI failure renders the badge');
+    check(!/CI failed/.test(ciOk), 'index: and a passing project does not');
+  }
+
+  // Live agents: who is WORKING, not who is on the roster.
+  {
+    const t = text(idx([proj({ project_id: 'pl', agents_live: 3, rollup: { counts: { open: 1 } } })]));
+    check(/3 working/.test(t), 'index: renders the live agent count');
+    check(!/0 working/.test(text(idx([proj({ project_id: 'pz', agents_live: 0 })]))),
+      'index: and says nothing when nobody is working');
+  }
+
+  // 12 projects render, and the index renders them in the order it is handed.
+  {
+    const projects = Array.from({ length: 12 }, (_, i) => proj({ project_id: `p${String(i).padStart(2, '0')}` }));
+    const order = [...idx(projects).matchAll(/data-project="(p\d\d)"/g)].map((m) => m[1]);
+    check(order.length === 12, 'index(12): every project renders a card');
+    check(order[0] === 'p00' && order[11] === 'p11',
+      'index(12): the view preserves the order it is given — sorting is the store\'s job, not the view\'s');
+  }
+
+  // The ordering RULE, asserted where it lives. A pure comparator, so no backend is needed.
+  {
+    const at = (id: string, activity?: string, created?: string) =>
+      ({ project_id: id, created_at: created, rollup: activity ? { last_activity: activity } : {} });
+
+    // Built ASCENDING on purpose: a comparator that did nothing would leave this order untouched
+    // and the assertion would catch it.
+    const twelve = Array.from({ length: 12 }, (_, i) =>
+      at(`p${String(i).padStart(2, '0')}`, new Date(NOW - (12 - i) * 60_000).toISOString()));
+    const sorted = [...twelve].sort(byActivity).map((p) => p.project_id);
+    check(sorted[0] === 'p11' && sorted[11] === 'p00',
+      'order(12): most recently active first — not creation order');
+    check(JSON.stringify(sorted) === JSON.stringify([...sorted].sort().reverse()),
+      'order(12): and the whole list is ordered, not just its ends');
+
+    // A brand-new project with no events sorts by created_at, so it lands among the live ones
+    // rather than beneath everything abandoned.
+    const mixed = [
+      at('pold', '2026-09-01T00:00:00.000Z'),
+      at('pnew', undefined, '2026-09-16T00:00:00.000Z'),
+    ].sort(byActivity).map((p) => p.project_id);
+    check(mixed[0] === 'pnew', 'order: a new project with no activity still outranks a stale one');
+
+    // Equal keys must not reshuffle between renders — locked pattern 7.
+    const tie = [at('pb', 'T'), at('pa', 'T')].sort(byActivity).map((p) => p.project_id);
+    check(JSON.stringify(tie) === JSON.stringify(['pa', 'pb']),
+      'order: equal activity falls back to project id, so the list cannot reshuffle');
+  }
+
+  // relativeTime: the text a glance actually reads.
+  {
+    check(relativeTime(new Date(NOW - 10_000).toISOString(), NOW) === 'just now', 'time: <45s is "just now"');
+    check(relativeTime(new Date(NOW - 180_000).toISOString(), NOW) === '3 minutes ago', 'time: 3 minutes ago');
+    check(relativeTime(new Date(NOW - 3_600_000).toISOString(), NOW) === '1 hour ago', 'time: singular hour');
+    check(relativeTime(new Date(NOW - 86_400_000 * 3).toISOString(), NOW) === '3 days ago', 'time: 3 days ago');
+    check(/^\d{4}-\d{2}-\d{2}$/.test(relativeTime(new Date(NOW - 86_400_000 * 40).toISOString(), NOW)),
+      'time: beyond a week it is a date, not arithmetic the reader has to do');
+    check(relativeTime('not-a-date', NOW) === '', 'time: an unparseable value renders nothing, not "NaN ago"');
+  }
 }
 
 console.log(results.join('\n'));

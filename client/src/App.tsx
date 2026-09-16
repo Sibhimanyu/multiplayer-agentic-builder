@@ -32,6 +32,8 @@ export function ProjectsIndex({
   projects: {
     project_id: string; project_name: string; repo_url: string;
     role: string; members: AgentPresence[];
+    rollup?: { counts?: Record<string, number | undefined>; blocked?: number; ci_failed?: number; last_activity?: string };
+    agents_live?: number;
   }[];
   onOpen: (project_id: string) => void;
 }) {

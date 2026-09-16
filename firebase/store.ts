@@ -45,11 +45,16 @@ import type {
   Firestore,
   Transaction,
 } from 'firebase-admin/firestore';
+// Value import, not type-only: FieldValue.increment is what makes the rollup counters safe under
+// concurrent appends. Two transactions touching different tasks both move the same counter, and
+// an increment composes where a read-modify-write would lose one of them.
+import { FieldValue } from 'firebase-admin/firestore';
 
 import { findGlobConflicts, globsIntersect, normalizeGlob } from '../shared/globs.ts';
 import { toPresence as derivePresence, type PresenceBackend } from './presence.ts';
 import { assertScopeAllowed } from '../shared/store/roles.ts';
 import { applyEvent, emptyProjection, toSnapshot, type FoldOutcome, type Projection } from './fold.ts';
+import { isEmptyDelta, rollupDelta } from '../shared/store/rollup.ts';
 import { StoreAuthError, StoreBusyError, StoreError, StoreOfflineError } from '../shared/store/errors.ts';
 import { sanitizeBody, sanitizeText, VARCHAR_MAX } from '../shared/sanitize.ts';
 import { consoleLogger, type Logger } from '../shared/log.ts';
@@ -415,6 +420,13 @@ type AppendPlan =
       outcome: FoldOutcome;
       eventRef: DocumentReference;
       idempotency_key: string;
+      /**
+       * The touched task as it stood BEFORE this event, or null if it is new.
+       *
+       * Carried through the plan because the rollup moves by difference, and the write phase
+       * performs no reads -- so the only chance to see the prior state is here, in the read phase.
+       */
+      taskBefore: TaskView | null;
     };
 
 interface LiveCache {
@@ -714,13 +726,17 @@ export class FirestoreStore implements CoordinationStore {
     const outcome = applyEvent(p, event);
     for (const ig of outcome.ignored) this.log.warn('store.fold.ignored', 'event changed no state and was recorded as ignored', { ...ig, project_id: pid });
 
-    return { duplicate: false, event_id: event.event_id, seq, event, projection: p, outcome, eventRef, idempotency_key };
+    return {
+      duplicate: false, event_id: event.event_id, seq, event, projection: p, outcome, eventRef,
+      idempotency_key,
+      taskBefore: taskSnap?.exists ? (taskSnap.data() as TaskView) : null,
+    };
   }
 
   /** WRITE phase. Pure buffering onto the transaction; performs no reads. */
   private commitAppend(tx: Transaction, pid: ProjectId, plan: AppendPlan): void {
     if (plan.duplicate) return; // a repeat appends nothing, by definition
-    const { event, projection: p, outcome, eventRef, idempotency_key } = plan;
+    const { event, projection: p, outcome, eventRef, idempotency_key, taskBefore } = plan;
 
     tx.set(eventRef, { ...event, idempotency_key });
     tx.set(this.counterRef(pid), { seq: plan.seq }, { merge: true });
@@ -728,6 +744,7 @@ export class FirestoreStore implements CoordinationStore {
       const view = p.tasks.get(tid);
       if (view) tx.set(this.tasksRef(pid).doc(tid), view, { merge: true });
     }
+    this.commitRollup(tx, pid, plan.seq, event.created_at, taskBefore, outcome, p);
     for (const [agent_id, lock] of p.locks) tx.set(this.locksRef(pid).doc(agent_id), lock);
     // scope_released empties p.locks, so a delete has to be driven off the event, not the map.
     if (event.kind === 'scope_released' && typeof event.body.agent_id === 'string') {
@@ -736,6 +753,55 @@ export class FirestoreStore implements CoordinationStore {
     for (const c of p.contracts) {
       tx.set(this.contractsRef(pid).doc(`${c.name}.v${c.version}`), c);
     }
+  }
+
+  /**
+   * Move the project's rollup counters by the difference this event made.
+   *
+   * Rides the append transaction on purpose. A rollup written afterwards could be lost to a crash
+   * between the two writes, and a counter that is silently one short never recovers on its own.
+   * Inside the transaction it is all-or-nothing with the event that caused it.
+   *
+   * `last_activity` and `last_seq` are set unconditionally, even when no task moved: a contract
+   * publication or a heartbeat-driven release is still activity, and "is this project alive" is
+   * the question the field exists to answer.
+   */
+  private commitRollup(
+    tx: Transaction,
+    pid: ProjectId,
+    seq: Seq,
+    createdAt: string,
+    before: TaskView | null,
+    outcome: FoldOutcome,
+    p: Projection,
+  ): void {
+    const patch: DocumentData = {
+      'rollup.last_activity': createdAt,
+      'rollup.last_seq': seq,
+    };
+
+    // At most one task per event, which is what makes this O(1). `touched_tasks` is a list only
+    // because the fold's shape allows it; if that ever changes, the loop still holds.
+    for (const tid of outcome.touched_tasks) {
+      const after = p.tasks.get(tid) ?? null;
+      // `before` belongs to the task the plan loaded. For any other id we have no prior state, so
+      // treating it as new would double-count -- skip rather than guess.
+      const prior = before && before.task_id === tid ? before : null;
+      if (!prior && !after) continue;
+
+      const d = rollupDelta(prior, after);
+      if (isEmptyDelta(d)) continue;
+
+      for (const [status, n] of Object.entries(d.counts)) {
+        if (n) patch[`rollup.counts.${status}`] = FieldValue.increment(n);
+      }
+      if (d.blocked) patch['rollup.blocked'] = FieldValue.increment(d.blocked);
+      if (d.ci_failed) patch['rollup.ci_failed'] = FieldValue.increment(d.ci_failed);
+    }
+
+    // `update` would throw on a project document that does not exist yet; a set/merge with dotted
+    // keys creates the nested shape and leaves every sibling field alone.
+    tx.set(this.proj(pid), patch, { merge: true });
   }
 
   async appendEvent(
