@@ -65,8 +65,10 @@ async function openSignedOut({ w, h }, { breakMark = false } = {}) {
   });
 
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle2', timeout: 60_000 });
+  // The card, not its heading. Order 0066 shortened that heading to "Sign in"; synchronising on
+  // a selector rather than on copy means the next wording change does not break four probes.
   await page.waitForFunction(
-    () => /Sign in to Flotilla/.test(document.body.innerText),
+    () => document.querySelector('.login[data-signin="board"]') !== null,
     { timeout: 45_000 },
   );
   // One frame for the onError swap to commit.
@@ -215,7 +217,8 @@ try {
     const page = await browser.newPage();
     await page.setViewport({ width: 1440, height: 900 });
     await page.goto(`${BASE}/`, { waitUntil: 'networkidle2', timeout: 60_000 });
-    await page.waitForFunction(() => /Sign in to Flotilla/.test(document.body.innerText), { timeout: 45_000 });
+    await page.waitForFunction(
+      () => document.querySelector('.login[data-signin="board"]') !== null, { timeout: 45_000 });
     await page.evaluate(() => {
       const b = [...document.querySelectorAll('button')]
         .find((x) => /continue anonymously/i.test(x.textContent ?? ''));

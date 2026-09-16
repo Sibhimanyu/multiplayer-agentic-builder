@@ -19,9 +19,48 @@
   --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
   --r-card:12px; --r-ctl:8px; --r-tag:5px;
   --shadow:0 1px 2px rgba(26,25,23,.04),0 1px 1px rgba(26,25,23,.02);
+
+  /* ---- order 0066. Additive: nothing above this line changed. ----
+     The palette, the type pairing, the radii and the density are the Kanban Calm direction
+     chosen in docs/designs/dashboard.md after comparing three. These are the things that
+     direction specified in spirit and never got. */
+
+  /* The keyboard focus ring. --teal at an offset, so it reads on both --paper and --card
+     without needing a second colour for each surface. */
+  --focus-ring:2px solid var(--teal);
+  --focus-offset:2px;
+  /* The hover lift. The EXISTING shadow token, doubled in offset -- not a new shadow with a new
+     colour, which is how a system grows a second elevation scale nobody decided on. */
+  --shadow-lift:0 3px 8px rgba(26,25,23,.07),0 1px 2px rgba(26,25,23,.04);
+  --lift:-1px;
+  --press:.985;
+  /* 150-200ms per the order. One duration, so two interactive states cannot drift apart. */
+  --motion-fast:160ms;
+  --ease:cubic-bezier(.2,0,.2,1);
+  /* Skeleton fill, from the existing warm greys rather than a new grey. */
+  --sk-base:#EFECE6;
+  --sk-sheen:#F7F5F1;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body,#root{height:100%}
+
+/* ---- focus, order 0066 point 1 ---- */
+/* AN ACCESSIBILITY FAILURE, NOT POLISH. There was no :focus-visible in this file at all, so a
+   keyboard user got the browser default or -- on the .card buttons, which set their own
+   background and border -- effectively nothing.
+   :focus-visible AND NOT :focus. The board's cards are <button>s, and :focus would leave a ring
+   behind after every mouse click, which is the reason authors delete focus styles in the first
+   place. The browser already knows the difference; this just has to ask for it.
+   One rule over a :where() list rather than a ring per component: :where() contributes ZERO
+   specificity, so any component that needs a different ring can override it with a plain class
+   selector, and nothing here has to be repeated when a new control is added. */
+:where(a,button,input,select,textarea,summary,[tabindex],.col-body,.board,.p-body):focus-visible{
+  outline:var(--focus-ring);
+  outline-offset:var(--focus-offset);
+}
+/* The scrollers are keyboard-focusable in Chrome because they scroll, and they are the one place
+   an offset ring would be clipped by their own overflow. Inset instead, same token. */
+:where(.col-body,.board,.p-body):focus-visible{outline-offset:calc(var(--focus-offset) * -1)}
 body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:14px;
      line-height:1.5;-webkit-font-smoothing:antialiased}
 #root{display:grid;grid-template-rows:auto 1fr;overflow:hidden}
@@ -163,10 +202,20 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 /* ---- card ---- */
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);
       padding:13px 14px;display:grid;gap:9px;box-shadow:var(--shadow);cursor:pointer;
-      text-align:left;font:inherit;color:inherit}
+      text-align:left;font:inherit;color:inherit;
+      /* order 0066 point 4. transform and box-shadow ONLY -- never width, height or top, which
+         would make every hover a layout pass and reflow the column under the pointer. */
+      transition:transform var(--motion-fast) var(--ease),
+                 box-shadow var(--motion-fast) var(--ease)}
+/* The most clickable element in the product, which did not respond to being touched. */
+.card:hover{box-shadow:var(--shadow-lift);transform:translateY(var(--lift))}
+.card:active{transform:scale(var(--press))}
 .card[data-sel="true"]{border-color:var(--teal);box-shadow:0 0 0 3px var(--teal-soft)}
 .card[data-merged="true"]{opacity:.66}
-.card .title{font-size:13.5px;font-weight:500;line-height:1.4;overflow-wrap:break-word}
+/* order 0066 point 5. dashboard.md's edge table has a 47-character title wrapping to two lines,
+   which is exactly the length that drops a single orphaned word onto the second. */
+.card .title{font-size:13.5px;font-weight:500;line-height:1.4;overflow-wrap:break-word;
+      text-wrap:balance}
 .row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .kind{font-size:10.5px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;
       border-radius:var(--r-tag);padding:2px 7px}
@@ -214,7 +263,10 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .sect{display:grid;gap:7px;align-content:start}
 .sect .lbl{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.09em;
        color:var(--muted)}
-.sect p{font-size:13px;color:var(--ink2);line-height:1.6}
+/* `pretty` rather than `balance` for body copy: balance optimises for even line lengths across a
+   short block, which is right for a title and wrong for a paragraph. pretty only prevents the
+   orphan. */
+.sect p{font-size:13px;color:var(--ink2);line-height:1.6;text-wrap:pretty}
 .dep{display:flex;align-items:center;gap:9px;padding:9px 11px;background:var(--paper);
      border:1px solid var(--line);border-radius:9px;font-size:12.5px}
 .dep .d{width:7px;height:7px;border-radius:50%;flex:none;background:#3E9E4F}
@@ -224,3 +276,56 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .dep .st{margin-left:auto;font-size:11px;color:var(--muted);flex:none}
 pre{background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:12px 13px;
     overflow-x:auto;font-family:var(--mono);font-size:11px;line-height:1.65;color:var(--ink2)}
+
+/* ---- tabular numbers, order 0066 point 2 ---- */
+/* Counts, durations and seq numbers sat in proportional Inter, so the digits have different
+   advance widths and a number JITTERS as it changes on a live board: "11 open" is narrower than
+   "18 open", and every pill to the right of it moves.
+   A rule list rather than a utility class, because the constraint was named tokens in this file
+   and no inline styles -- adding a className at twelve call sites is the same thing wearing a
+   different hat, and it is the form that gets forgotten at the thirteenth.
+   The already-mono selectors are included deliberately: --mono falls back through four families,
+   and "the fallback happens to be monospaced" is luck rather than a guarantee. */
+.count,.fresh,.badge,.verpill,.branch,.dep .st,.p-head .id,.av,.avs .more,
+.empty,.account .who-label,.login p.uid{
+  font-variant-numeric:tabular-nums;
+  font-feature-settings:'tnum' 1;
+}
+
+/* ---- loading skeleton, order 0066 point 3 ---- */
+/* A cold load showed "Connecting…" as bare text for up to fifteen seconds. The user read that as
+   a broken app twice and was being reasonable: bare text on an empty page is what a crashed SPA
+   looks like.
+   THE SHAPE HAS TO MATCH, not just exist. Locked pattern 7 in dashboard.md says a refresh must
+   not shift layout, and a skeleton that resizes when real data replaces it breaks that rule in a
+   new place -- so the skeleton renders the real .nav, the real .stage, the real .board and six
+   real .col elements, and only the leaf content is a grey block. The columns are sized by the
+   grid, not by their contents, so the board's height is identical before and after. */
+.sk{background:var(--sk-base);border-radius:var(--r-tag);
+    background-image:linear-gradient(90deg,var(--sk-base) 0%,var(--sk-sheen) 50%,var(--sk-base) 100%);
+    background-size:200% 100%;animation:sheen 1.4s linear infinite}
+@keyframes sheen{0%{background-position:200% 0}100%{background-position:-200% 0}}
+/* Card-height blocks, at the real card's radius and the real card's border so the swap is a
+   content change rather than a box change. */
+.sk-card{height:74px;border-radius:var(--r-card);border:1px solid var(--line)}
+.sk-card.tall{height:96px}
+.sk-count{width:34px;height:17px;border-radius:20px}
+.sk-proj{width:148px;height:19px}
+.sk-repo{width:186px;height:25px;border-radius:6px}
+.sk-line{width:96px;height:13px}
+/* Announced, not just drawn. A screen reader gets a word; a sighted user gets the shape. */
+.sk-board[aria-busy="true"]{pointer-events:none}
+
+/* ---- motion preference, order 0066 constraint ---- */
+/* "A motion preference that only covers page transitions is not honoured." So this suppresses
+   the hover lift, the press transform AND the skeleton sheen -- a looping shimmer is exactly the
+   kind of animation someone sets this preference to stop.
+   The hover still RESPONDS: the shadow change stays, because reduced motion is a request about
+   movement, not a request to remove feedback. */
+@media (prefers-reduced-motion: reduce){
+  .card{transition:none}
+  .card:hover{transform:none}
+  .card:active{transform:none}
+  .sk{animation:none;background-image:none}
+  .fresh[data-mode="poll"] .dot{animation:none}
+}

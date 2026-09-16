@@ -7,8 +7,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { COLUMNS, type AgentPresence, type Freshness, type Snapshot, type TaskView } from './store/types';
 import { createFirestoreStore, type StoreStatus } from './store/firebase';
 import {
-  AccountChip, BrandLockup, DetailPanel, EmptyColumn, ProjectCard, ProjectsEmpty, SignInView,
-  TaskCard, TopNav,
+  AccountChip, BoardSkeleton, BrandLockup, DetailPanel, EmptyColumn, ProjectCard, ProjectsEmpty,
+  ProjectsSkeleton, SignInView, TaskCard, TopNav,
 } from './components';
 import { LoginPage } from './Login';
 import {
@@ -89,13 +89,16 @@ export function ProjectsIndex({
 function Notice({ status }: { status: StoreStatus }) {
   const base = { padding: 28, color: 'var(--muted)', maxWidth: 620, lineHeight: 1.6 } as const;
 
-  if (status.state === 'signing-in') return <div style={base}>Connecting…</div>;
-
-  if (status.state === 'live') {
-    // Signed in and allowed, but no snapshot yet. Distinct from signing-in on purpose: it tells
-    // you the rules are not the problem.
-    return <div style={base}>Loading the board…</div>;
-  }
+  // BOTH LOADING STATES ARE NOW THE SKELETON. Order 0066 point 3: these two rendered bare text
+  // on an empty page for up to fifteen seconds, which the user twice read as a broken app.
+  //
+  // The two states are no longer distinguished on screen, and that is a deliberate loss. The
+  // distinction ("the rules are not the problem") was written for whoever is debugging the
+  // board, not for whoever is using it, and it cost every user the one thing that actually
+  // tells them the app is alive. The state is still on `status` for anyone who needs it, and
+  // every state that a user can DO something about — denied, auth-unavailable, error — still
+  // says exactly what it is, below.
+  if (status.state === 'signing-in' || status.state === 'live') return <BoardSkeleton />;
 
   if (status.state === 'auth-unavailable') {
     return (
@@ -435,9 +438,9 @@ export function ProjectsIndexRoute({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.uid]);
 
-  // Also centred: this route renders no nav until the rows arrive, so a top-left placeholder is
-  // the same "nothing is centered" defect one screen along.
-  if (!ready) return <div className="centered"><p className="muted-note">Connecting…</p></div>;
+  // The index's own skeleton. Same argument as the board's: this route rendered a line of grey
+  // text and nothing else while a collection-group query ran.
+  if (!ready) return <ProjectsSkeleton />;
   return (
     <ProjectsIndex
       projects={projects} onOpen={onOpen} session={session} onSignOut={onSignOut}

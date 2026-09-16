@@ -148,6 +148,90 @@ export function TaskCard({
   );
 }
 
+/**
+ * The board, before it has any data. Order 0066 point 3.
+ *
+ * A cold load showed "Connecting…" as bare text on an empty page for up to fifteen seconds. The
+ * user read that as a broken app twice, and they were right to — bare text on white is what a
+ * crashed SPA looks like.
+ *
+ * THIS RENDERS THE REAL CHROME, not a picture of it. The same `.nav`, the same `.stage`, the same
+ * `.board`, and six real `.col` elements carrying the real column labels. Only the leaf content is
+ * a grey block. That is what makes the swap to real data a CONTENT change rather than a BOX
+ * change, which is locked pattern 7 in dashboard.md: a refresh must not shift layout, and a
+ * skeleton that resizes on arrival would break that rule in a new place.
+ *
+ * The labels are real rather than blanked because they are known before any data arrives — a
+ * skeleton should withhold what it does not know yet, not what it does.
+ */
+export function BoardSkeleton() {
+  // Uneven on purpose. Three identical blocks per column reads as a loading bar; an uneven set
+  // reads as cards, which is what is about to be there.
+  const blocks: Record<string, ('' | 'tall')[]> = {
+    Open: ['', 'tall', ''],
+    Claimed: ['tall', ''],
+    'In progress': ['', ''],
+    'Needs review': [''],
+    'PR open': ['tall'],
+    Merged: [''],
+  };
+  return (
+    <>
+      <nav className="nav">
+        <BrandLockup />
+        <div className="sep" />
+        <span className="sk sk-proj" />
+        <span className="sk sk-repo" />
+        <span className="grow" />
+        <span className="sk sk-line" />
+      </nav>
+      <div className="stage">
+        <div className="board sk-board" aria-busy="true" aria-label="Loading the board">
+          {COLUMNS.map(({ status, label }) => (
+            <section className="col" key={status}>
+              <div className="col-head">
+                <h3>{label}</h3><span className="sk sk-count" />
+              </div>
+              <div className="col-body">
+                {(blocks[label] ?? ['']).map((tall, i) => (
+                  <div className={`sk sk-card ${tall}`.trim()} key={i} />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** The projects index, before its rows arrive. Same argument, one column instead of six. */
+export function ProjectsSkeleton() {
+  return (
+    <>
+      <nav className="nav">
+        <BrandLockup />
+        <span className="grow" />
+        <span className="sk sk-line" />
+      </nav>
+      <div className="stage">
+        <div className="board sk-board" aria-busy="true" aria-label="Loading your projects">
+          <section className="col">
+            <div className="col-head">
+              <h3>Projects</h3><span className="sk sk-count" />
+            </div>
+            <div className="col-body">
+              {['tall', 'tall', ''].map((tall, i) => (
+                <div className={`sk sk-card ${tall}`.trim()} key={i} />
+              ))}
+            </div>
+          </section>
+        </div>
+      </div>
+    </>
+  );
+}
+
 export function EmptyColumn({ label }: { label: string }) {
   const copy: Record<string, [string, string]> = {
     Open:            ['Nothing open', 'Every task has been picked up.'],
@@ -386,7 +470,14 @@ export function SignInView({
           was pushing the one thing this screen exists for off-centre.
         */}
         <BrandLockup size="lg" />
-        <h2>Sign in to Flotilla</h2>
+        {/*
+          "Sign in", not "Sign in to Flotilla". The lockup directly above it already says
+          Flotilla, so the longer heading read the word twice in adjacent lines. The probes that
+          used to wait on this string now wait on `.login[data-signin="board"]` instead -- a
+          synchronisation point that is a structure rather than a sentence cannot be broken by
+          rewording the sentence.
+        */}
+        <h2>Sign in</h2>
         <p>Your projects are listed by the account that owns them.</p>
         <button className="cta" onClick={onGoogle} disabled={busy}>
           {busy ? 'Taking you to Google…' : 'Continue with Google'}
