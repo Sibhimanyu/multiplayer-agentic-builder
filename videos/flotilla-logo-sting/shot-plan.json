@@ -1,6 +1,6 @@
 {
   "category": "logo-reveal",
-  "duration_s": 4.4,
+  "duration_s": 4.3,
   "fps": 30,
   "canvas": {
     "w": 1920,
@@ -62,7 +62,9 @@
       "why_restrained": "Squash-and-stretch reads PLAYFUL -- the motion vocabulary maps bounce_in to 'playful' -- and this brand is quiet and editorial under a Fraunces serif wordmark. 7% is the design decision; cartoon animation uses 20-30%. One overshoot, not a multi-bounce. The wordmark never squashes.",
       "axis": "Local scaleX compresses along the travel axis for free, because the boats sit inside the rotate(-7) group. transformOrigin 100% 50% so the nose holds and the body catches up, which reads as deceleration rather than hitting a wall.",
       "overshoot": "A fixed 16px past the authored position, then settled back. NOT an eased overshoot: back.out overshoots in proportion to distance, and over 1180px of travel that would throw the boat ~118px past its mark.",
-      "measured": "Lead boat width 134px at rest, 127px at the 0.88s squash peak (-5.2%) and 15px past its mark, 137px at the 1.06s rebound (+2.2%), back to 134px from 1.2s. Teal pixel count holds near 4,300 throughout, so volume is preserved rather than the boat merely shrinking."
+      "measured": "Lead boat nose x per frame: 424, 525, 622, 659, 684 through 0.28-0.60s -- still moving at the stop. Peaks 689 at 0.68. Width 129 then 126 at 0.68-0.76 (squash), 136 at 0.84-0.92 (rebound), 134 from 1.0 (rest). Previously the bbox was byte-identical at 0.70 and 0.76: that plateau is gone, and every frame from 0.28 to 0.84 now differs.",
+      "ease_is_timing": "power2.out over 0.60s, NOT expo.out. expo.out covers 95% of the distance in the first 43% of its tween, so the boat glided to a visual stop and squashed ~0.3s later -- the bounce read as a separate, late event, which is exactly what the user reported. power2.out reaches 95% at 78% of the tween, so the motion is still alive when the squash begins.",
+      "one_tween": "The scale cycle is a single keyframed tween. Three chained tweens made the rebound and rest phases share the instant at L+0.78, which lint flagged as overlapping tweens on scaleX/scaleY. One tween owning the property makes that structurally impossible rather than nudged away."
     }
   },
   "content": {
@@ -79,42 +81,47 @@
         "primitive": "hold"
       },
       {
-        "t": "0.12-0.84",
-        "what": "lead boat travels in, expo.out, landing 16px past its mark",
+        "t": "0.12-0.72",
+        "what": "lead boat travels in, power2.out, still moving at the stop, landing 16px past its mark",
         "primitive": "converge"
       },
       {
-        "t": "0.78-1.22",
-        "what": "lead squashes to 0.93/1.06, settles back onto its mark, rebounds through a slight stretch, rests at 1/1",
+        "t": "0.62-1.04",
+        "what": "lead squash cycle: compress to 0.93/1.06 peaking exactly as x reaches its furthest point, rebound through 1.025/0.99, rest at 1/1",
         "primitive": "squash_settle"
       },
       {
-        "t": "0.20-1.30",
+        "t": "0.72-0.96",
+        "what": "lead settles back onto its authored position, starting the instant the squash peaks",
+        "primitive": "settle"
+      },
+      {
+        "t": "0.20-1.12",
         "what": "mid boat, same cycle, longer travel",
         "primitive": "converge + squash_settle"
       },
       {
-        "t": "0.28-1.38",
-        "what": "rear boat, same cycle. Formation locked and still from 1.38.",
+        "t": "0.28-1.22",
+        "what": "rear boat, same cycle. Formation locked and still from 1.22.",
         "primitive": "converge + squash_settle"
       },
       {
-        "t": "1.30-2.00",
+        "t": "1.20-1.90",
         "what": "the name resolves: quiet fade, short forward settle, no scale on the art",
         "primitive": "fade_in"
       },
       {
-        "t": "2.00-2.55",
+        "t": "1.90-2.45",
         "what": "hairline teal rule draws left to right",
         "primitive": "underline_sweep"
       },
       {
-        "t": "2.45-2.95",
+        "t": "2.35-2.85",
         "what": "mono tagline fades up",
         "primitive": "fade_in"
       },
       {
-        "t": "2.95-4.40",
+        "t": "2.85-4.30",
         "what": "true stillness, 1.45s",
         "primitive": "hold"
       }
@@ -129,16 +136,16 @@
   "proof_times": [
     0.1,
     0.3,
-    0.5,
-    0.7,
+    0.45,
+    0.6,
+    0.72,
     0.88,
-    1.06,
-    1.38,
+    1.05,
+    1.3,
     1.7,
     2.1,
-    2.5,
-    2.95,
-    4.3
+    2.6,
+    4.2
   ],
   "hard_prohibitions": [
     "Do NOT rotate the mark, or add any rotation to it.",
