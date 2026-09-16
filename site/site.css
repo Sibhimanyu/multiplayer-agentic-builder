@@ -39,7 +39,7 @@ section + section{border-top:1px solid var(--line)}
 .nav .wrap{height:62px;display:flex;align-items:center;gap:22px}
 .nav .lockup{height:26px;width:auto;flex:none}
 .nav .links{margin-left:auto;display:flex;align-items:center;gap:22px}
-.nav .links a{color:var(--ink2);font-size:13.5px;font-weight:500}
+.nav .links a{color:var(--ink2);font-size:13.5px;font-weight:500;white-space:nowrap}
 .nav .links a:hover{color:var(--ink);text-decoration:none}
 .nav .tag{font-family:var(--mono);font-size:11px;color:var(--teal);background:var(--teal-soft);
      border-radius:var(--r-tag);padding:3px 8px;flex:none}
@@ -73,12 +73,33 @@ h4{font-family:var(--sans);font-weight:600;font-size:14.5px;letter-spacing:-.005
 strong{font-weight:600;color:var(--ink)}
 
 /* ---- hero ---- */
-.hero{padding:96px 0 84px}
-.hero h1{max-width:19ch}
+.hero{padding:88px 0 80px}
 .hero .lead{margin-top:22px}
 .hero .btn-row{margin-top:32px}
 .hero .fine{margin-top:18px;font-size:13px;color:var(--muted)}
 .hero .fine code{background:var(--card);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+/* Two columns: the copy carries the claim, the illustration states it. The one-column hero
+   left the right third of the page empty at desktop width. */
+.hero-grid{display:grid;grid-template-columns:1.08fr .92fr;gap:44px;align-items:center}
+.hero-copy h1{font-size:clamp(36px,4.1vw,51px);max-width:16ch}
+
+/* ---- hero illustration ---- */
+.hero-illo svg{width:100%;height:auto;max-width:560px;margin-left:auto}
+/* Above 1200px the page has ~180px of dead margin either side of the 1080px wrap. Letting
+   the illustration bleed into the right one gives it hero scale without widening the text
+   measure, which is already at its comfortable limit. */
+@media (min-width:1200px){.hero-illo{margin-right:-86px}}
+.hero-illo .rail{fill:none;stroke:var(--ink);stroke-opacity:.18;stroke-width:2.8;
+      stroke-linecap:round}
+.hero-illo .rail-live{fill:none;stroke:var(--teal);stroke-width:3.2;stroke-linecap:round}
+.hero-illo .origin rect{fill:var(--card);stroke:var(--line2);stroke-width:1.6}
+.hero-illo .glyph{fill:none;stroke:var(--ink);stroke-opacity:.24;stroke-width:2;
+      stroke-linecap:round}
+.hero-illo .commit circle{fill:var(--ink);fill-opacity:.2}
+.hero-illo .agent circle{fill:var(--teal);animation:pulse 2.6s infinite}
+.hero-illo .merge{fill:var(--paper);stroke:var(--teal);stroke-width:3}
+.hero-illo .goal-ring{fill:none;stroke:var(--teal);stroke-opacity:.28;stroke-width:2}
+.hero-illo .goal{fill:var(--teal)}
 
 /* ---- cards ---- */
 .grid{display:grid;gap:16px}
@@ -223,6 +244,10 @@ figcaption{font-size:12.5px;color:var(--muted);margin-top:10px}
 
 /* ---- two-column prose + aside ---- */
 .split{display:grid;grid-template-columns:1.35fr 1fr;gap:42px;align-items:start}
+/* Grid items default to min-width:auto, so a white-space:pre block sets the track floor from
+   its longest line and the whole PAGE gains a horizontal scrollbar on narrow screens. The pre
+   already scrolls itself; the track just has to be allowed to shrink. */
+.split > *,.hero-grid > *{min-width:0}
 
 /* ---- reference page: sticky table of contents ---- */
 .doc{display:grid;grid-template-columns:216px 1fr;gap:52px;align-items:start}
@@ -260,6 +285,8 @@ footer .fine{width:100%;margin-top:30px;padding-top:22px;border-top:1px solid va
   .g4{grid-template-columns:repeat(2,1fr)}
   .g3{grid-template-columns:1fr 1fr}
   .split{grid-template-columns:1fr;gap:28px}
+  .hero-grid{grid-template-columns:1fr;gap:44px}
+  .hero-illo svg{margin:0 auto;max-width:440px}
   .doc{grid-template-columns:1fr;gap:26px}
   .toc{position:static;border:1px solid var(--line);background:var(--card);
        border-radius:var(--r-card);padding:16px 18px}
@@ -269,7 +296,9 @@ footer .fine{width:100%;margin-top:30px;padding-top:22px;border-top:1px solid va
 @media (max-width:640px){
   body{font-size:15px}
   section{padding:56px 0}
-  .hero{padding:64px 0 56px}
+  .hero{padding:60px 0 56px}
+  .hero-grid{gap:36px}
+  .hero-illo svg{max-width:340px}
   .g2,.g3,.g4{grid-template-columns:1fr}
   .wrap{padding:0 20px}
   .nav .links{gap:15px}
@@ -278,7 +307,7 @@ footer .fine{width:100%;margin-top:30px;padding-top:22px;border-top:1px solid va
 }
 @media (prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
-  .bf-nav .fresh .dot{animation:none}
+  .bf-nav .fresh .dot,.hero-illo .agent circle{animation:none}
 }
 
 /* ---- print ---- */

@@ -32,8 +32,8 @@
     </a>
     <span class="tag">pre-release</span>
     <div class="links">
-      <a href="#how">How it works</a>
-      <a href="#board">The board</a>
+      <a href="#how" class="hide-sm">How it works</a>
+      <a href="#board" class="hide-sm">The board</a>
       <a href="#roles" class="hide-sm">Roles</a>
       <a href="#start">Get started</a>
     </div>
@@ -42,21 +42,81 @@
 
 <!-- ============================================================ hero -->
 <header class="hero">
-  <div class="wrap">
-    <h1>Many agents. One objective. No mothership.</h1>
-    <p class="lead">
-      Flotilla coordinates parallel coding agents that run on your own team&rsquo;s laptops, on
-      your own subscriptions. One shared board shows who owns what. File scope is locked before
-      work starts, not discovered at merge. GitHub stays the source of truth.
-    </p>
-    <div class="btn-row">
-      <a class="btn btn-p" href="#start">Get started</a>
-      <a class="btn btn-s" href="https://github.com/Sibhimanyu/multiplayer-agentic-builder">View the source</a>
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <h1>Many agents. One objective. No mothership.</h1>
+      <p class="lead">
+        Flotilla coordinates parallel coding agents that run on your own team&rsquo;s laptops, on
+        your own subscriptions. One shared board shows who owns what. File scope is locked before
+        work starts, not discovered at merge. GitHub stays the source of truth.
+      </p>
+      <div class="btn-row">
+        <a class="btn btn-p" href="#start">Get started</a>
+        <a class="btn btn-s" href="https://github.com/Sibhimanyu/multiplayer-agentic-builder">View the source</a>
+      </div>
+      <p class="fine">
+        Open source &middot; no hosted agent sandboxes &middot; runs on a free-tier backend
+      </p>
     </div>
-    <p class="fine">
-      Open source &middot; MIT-style licence pending &middot; no hosted agent sandboxes &middot;
-      runs against a free-tier backend
-    </p>
+
+    <!-- The headline, drawn. Three lanes from three separate origins, each at its own pace,
+         joining one line that ends in one finished objective. Nothing sits in the middle
+         routing the work -- that is the "no mothership" claim, and it is the shape of the
+         whole product. Deliberately NOT a variation on the mark: the brand rules forbid
+         rotating it further, separating its boats or recolouring them. -->
+    <div class="hero-illo">
+      <svg viewBox="24 32 518 288" role="img" aria-labelledby="illo-t illo-d">
+        <title id="illo-t">Three agents working in parallel toward one objective</title>
+        <desc id="illo-d">Three separate lanes of work, each starting from its own machine and
+          advancing at its own pace, converging into a single shared line that ends in one
+          finished objective. Nothing sits in the middle routing the work.</desc>
+
+        <!-- lanes: faint before the merge, teal after it -->
+        <g class="rail">
+          <path d="M84 56H252c50 0 60 120 114 120" />
+          <path d="M84 176h282" />
+          <path d="M84 296H252c50 0 60-120 114-120" />
+        </g>
+        <path class="rail-live" d="M366 176h134" />
+
+        <!-- three origins: three machines, three .agentic trees, no shared starting point -->
+        <g class="origin">
+          <g transform="translate(34 41.5)">
+            <rect width="42" height="29" rx="7" />
+            <path class="glyph" d="M11 11h20M11 18.5h13" />
+          </g>
+          <g transform="translate(34 161.5)">
+            <rect width="42" height="29" rx="7" />
+            <path class="glyph" d="M11 11h20M11 18.5h13" />
+          </g>
+          <g transform="translate(34 281.5)">
+            <rect width="42" height="29" rx="7" />
+            <path class="glyph" d="M11 11h20M11 18.5h13" />
+          </g>
+        </g>
+
+        <!-- work already landed on each lane -->
+        <g class="commit">
+          <circle cx="122" cy="56" r="5" /><circle cx="166" cy="56" r="5" />
+          <circle cx="122" cy="176" r="5" /><circle cx="166" cy="176" r="5" />
+          <circle cx="210" cy="176" r="5" />
+          <circle cx="122" cy="296" r="5" />
+        </g>
+
+        <!-- where each agent is now. Staggered on purpose: independent pace, not lockstep.
+             Reuses the board's freshness-dot pulse rather than inventing a new motion. -->
+        <g class="agent">
+          <circle cx="212" cy="56" r="9.5" />
+          <circle cx="262" cy="176" r="9.5" style="animation-delay:.9s" />
+          <circle cx="168" cy="296" r="9.5" style="animation-delay:1.8s" />
+        </g>
+
+        <!-- the join, then the objective: a disc inside a ring, so arriving reads as arriving -->
+        <circle class="merge" cx="366" cy="176" r="11" />
+        <circle class="goal-ring" cx="512" cy="176" r="17" />
+        <circle class="goal" cx="512" cy="176" r="9.5" />
+      </svg>
+    </div>
   </div>
 </header>
 
