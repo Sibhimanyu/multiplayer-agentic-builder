@@ -7,7 +7,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { COLUMNS, type AgentPresence, type Freshness, type Snapshot, type TaskView } from './store/types';
 import { createFirestoreStore, type StoreStatus } from './store/firebase';
 import {
-  AccountChip, DetailPanel, EmptyColumn, ProjectCard, ProjectsEmpty, SignInView, TaskCard, TopNav,
+  AccountChip, BrandLockup, DetailPanel, EmptyColumn, ProjectCard, ProjectsEmpty, SignInView,
+  TaskCard, TopNav,
 } from './components';
 import { LoginPage } from './Login';
 import {
@@ -50,8 +51,7 @@ export function ProjectsIndex({
   return (
     <>
       <nav className="nav">
-        <div className="mark">FL</div>
-        <div className="brand">Flotilla</div>
+        <BrandLockup />
         <span className="grow" />
         {session && onSignOut && <AccountChip session={session} onSignOut={onSignOut} />}
       </nav>
@@ -114,6 +114,14 @@ function Notice({ status }: { status: StoreStatus }) {
         <div style={{ marginTop: 8 }}>
           Signed in, but the security rules do not grant this browser read access to{' '}
           <code>{status.project_id}</code>. This is the rules working, not an outage.
+        </div>
+        {/*
+          THE SENTENCE THAT USED TO SIT IN FRONT OF EVERYONE SIGNING IN. Order 0065 point 3: the
+          sign-in screen carried three lines about throwaway identities before anyone had chosen
+          one. It belongs here, where someone is actually looking at the consequence.
+        */}
+        <div style={{ marginTop: 8 }}>
+          An identity is a member of nothing until someone admits it — including an anonymous one.
         </div>
         <div style={{ marginTop: 8 }}>Admit this browser by running:</div>
         <div style={{ marginTop: 6, color: 'var(--ink)', userSelect: 'all' }}>
@@ -360,25 +368,20 @@ export default function App() {
 function SignedIn({ pathname, navigate }: { pathname: string; navigate: (to: string) => void }) {
   const { session, error, busy, signIn, signOut } = useSession();
 
-  // Still asking. NOT the sign-in screen -- see useSession.
+  // Still asking. NOT the sign-in screen -- see useSession. Centred rather than pinned to the
+  // top-left, because it occupies the same empty page the card is about to.
   if (session === undefined) {
-    return <div style={{ padding: 28, color: 'var(--muted)' }}>Connecting…</div>;
+    return <div className="centered"><p className="muted-note">Connecting…</p></div>;
   }
+  // NO NAV. SignInView is the whole page and carries the lockup itself -- order 0065 point 2.
   if (session === null) {
     return (
-      <>
-        <nav className="nav">
-          <div className="mark">FL</div>
-          <div className="brand">Flotilla</div>
-          <span className="grow" />
-        </nav>
-        <SignInView
-          onGoogle={() => signIn('google')}
-          onAnonymous={() => signIn('anonymous')}
-          error={error}
-          busy={busy}
-        />
-      </>
+      <SignInView
+        onGoogle={() => signIn('google')}
+        onAnonymous={() => signIn('anonymous')}
+        error={error}
+        busy={busy}
+      />
     );
   }
 
@@ -432,7 +435,9 @@ export function ProjectsIndexRoute({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.uid]);
 
-  if (!ready) return <div style={{ padding: 28, color: 'var(--muted)' }}>Connecting…</div>;
+  // Also centred: this route renders no nav until the rows arrive, so a top-left placeholder is
+  // the same "nothing is centered" defect one screen along.
+  if (!ready) return <div className="centered"><p className="muted-note">Connecting…</p></div>;
   return (
     <ProjectsIndex
       projects={projects} onOpen={onOpen} session={session} onSignOut={onSignOut}

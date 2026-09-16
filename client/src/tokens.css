@@ -26,14 +26,30 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
      line-height:1.5;-webkit-font-smoothing:antialiased}
 #root{display:grid;grid-template-rows:auto 1fr;overflow:hidden}
 
+/* ---- brand lockup ---- */
+/* Order 0054 built this; order 0065 restored it after a branch consolidation dropped it back to a
+   div containing the letters "FL". Scoped to the COMPONENT rather than to .nav, because the
+   signed-out card carries the same lockup and a nav-only rule is how it went missing in three
+   places at once. */
+.brand-lockup{display:flex;align-items:center;gap:10px;flex:none}
+.brand-lockup .mark{display:block;width:36px;height:29px;object-fit:contain;flex:none}
+.brand-lockup .brand{font-family:var(--brand-serif);font-size:18px;font-weight:600;line-height:1;
+     font-optical-sizing:auto;font-kerning:normal;font-feature-settings:'kern' 1;
+     letter-spacing:-.015em}
+/* The fallback, for when the SVG cannot load. Same box as the mark it replaces, in the brand
+   serif at the mark's colour -- a missing asset must not also change the typeface. */
+.brand-lockup .mark-text{display:grid;place-items:center;font-family:var(--brand-serif);
+     font-size:15px;font-weight:600;line-height:1;letter-spacing:.02em;color:var(--teal)}
+/* One larger size, for the screen where the lockup IS the page furniture rather than a corner of
+   it. A size attribute rather than a second component, so both stay one thing. */
+.brand-lockup[data-size="lg"]{gap:13px}
+.brand-lockup[data-size="lg"] .mark{width:54px;height:44px}
+.brand-lockup[data-size="lg"] .brand{font-size:26px}
+.brand-lockup[data-size="lg"] .mark-text{font-size:22px}
+
 /* ---- top nav ---- */
 .nav{background:var(--card);border-bottom:1px solid var(--line);padding:0 28px;height:60px;
      display:flex;align-items:center;gap:18px}
-.nav .brand-lockup{display:flex;align-items:center;gap:10px;flex:none}
-.nav .mark{display:block;width:36px;height:29px;object-fit:contain;flex:none}
-.nav .brand{font-family:var(--brand-serif);font-size:18px;font-weight:600;line-height:1;
-     font-optical-sizing:auto;font-kerning:normal;font-feature-settings:'kern' 1;
-     letter-spacing:-.015em}
 .nav .sep{width:1px;height:22px;background:var(--line2)}
 .nav .proj{font-family:var(--serif);font-size:19px;font-weight:600;letter-spacing:-.015em}
 .nav .repo{font-family:var(--mono);font-size:11.5px;color:var(--muted);background:var(--paper);
@@ -62,6 +78,25 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .fresh[data-mode="poll"] .dot{animation:pulse 2.6s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.32}}
 
+/* ---- the centered page (order 0065) ---- */
+/* ONE named container, because the constraint was "do not invent a second set of spacing values".
+   Signed out is the only screen in the product with a single job and no data, and it rendered as
+   content pinned to the top-left of an empty 1440px viewport. Anything else that ends up in that
+   shape uses this rather than growing its own inline styles.
+
+   `grid-row:1/-1` because #root is `grid-template-rows:auto 1fr` and this page has no nav to put
+   in the first row; without it the page occupies only its content height and centres vertically
+   inside nothing.
+
+   `margin:auto` on the child rather than `align-items:center` on the parent: when the card is
+   taller than the viewport, centring via align-items overflows PAST THE TOP EDGE and the top of
+   the card cannot be scrolled to. The auto-margin form degrades to top-aligned-and-scrollable,
+   which is the behaviour anyone actually wants at 320px tall. */
+.centered{grid-row:1 / -1;display:flex;justify-content:center;padding:28px;overflow-y:auto}
+.centered > *{margin:auto}
+/* The loading line that shares these pages. Was an inline style at two call sites. */
+.muted-note{color:var(--muted)}
+
 /* ---- /login ---- */
 /* The handoff page for `flotilla login`. Not in dashboard.md: it is a route the design never
    covered, added when the CLI turned out to be opening a page that did not exist. */
@@ -80,6 +115,19 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .login code{font-family:var(--mono);font-size:12px;background:var(--paper);
        border:1px solid var(--line);border-radius:var(--r-tag);padding:1px 5px}
 .login .cta{margin-top:6px}
+
+/* The board's signed-out card. A modifier on .login rather than a new block: it is the same
+   typography, the same gap rhythm and the same tokens -- what differs is that this one is a card
+   on an empty page instead of a column on a document. */
+.login[data-signin="board"]{width:100%;max-width:400px;background:var(--card);
+     border:1px solid var(--line);border-radius:var(--r-card);box-shadow:var(--shadow);
+     padding:34px 30px 28px;gap:13px;justify-items:center;text-align:center}
+.login[data-signin="board"] .brand-lockup{margin-bottom:4px}
+.login[data-signin="board"] h2{font-size:19px}
+.login[data-signin="board"] p{font-size:13.5px}
+/* Full width, so the primary action reads as the primary action. The secondary is one line of
+   note text beneath it -- order 0065 point 3. */
+.login[data-signin="board"] .cta{justify-self:stretch;padding:10px 15px;margin-top:5px}
 
 /* ---- who is signed in (order 0064) ---- */
 /* A button that reads as a link. The anonymous chip's action is "Sign in", which is the one

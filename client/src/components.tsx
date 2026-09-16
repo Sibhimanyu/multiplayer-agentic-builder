@@ -96,10 +96,7 @@ export function TopNav({
         comparison record has to stay readable. Renaming a project id would invalidate every
         measurement that names it.
       */}
-      <div className="brand-lockup" aria-label="Flotilla">
-        <img className="mark" src="/brand/flotilla-mark.svg" alt="" aria-hidden="true" />
-        <div className="brand">Flotilla</div>
-      </div>
+      <BrandLockup />
       <div className="sep" />
       <div className="proj">{snap.project_name}</div>
       <div className="repo">{snap.repo_url}</div>
@@ -297,6 +294,39 @@ export function ProjectsEmpty({ anonymous }: { anonymous?: boolean } = {}) {
 }
 
 /**
+ * The mark and the wordmark, together, in ONE component.
+ *
+ * ORDER 0065, AND THE REGRESSION IS MINE. Order 0054 replaced `<div className="mark">FL</div>`
+ * with an `<img>` of /brand/flotilla-mark.svg. Consolidating the branches, I kept the product
+ * components.tsx because it had ProjectCard and the blockedChain prop — and the brand work came
+ * back only as far as TopNav. Three other places went on rendering the literal string "FL" in
+ * whatever typeface the browser felt like, and the asset has been serving HTTP 200 to nobody
+ * since.
+ *
+ * One component rather than four call sites, so there is no fourth place to forget.
+ *
+ * THE TEXT FALLBACK STAYS, because an `<img>` whose source 404s renders as a broken-image glyph,
+ * which is worse than two letters. But it is STYLED now — brand serif, mark colour, the mark's
+ * own box — rather than raw default type. A missing asset should not also change the typeface.
+ */
+export function BrandLockup({ size = 'sm' }: { size?: 'sm' | 'lg' }) {
+  const [broken, setBroken] = useState(false);
+  return (
+    <div className="brand-lockup" data-size={size} data-broken={broken} aria-label="Flotilla">
+      {broken
+        ? <span className="mark mark-text" aria-hidden="true">FL</span>
+        : (
+          <img
+            className="mark" src="/brand/flotilla-mark.svg" alt="" aria-hidden="true"
+            onError={() => setBroken(true)}
+          />
+        )}
+      <div className="brand">Flotilla</div>
+    </div>
+  );
+}
+
+/**
  * WHOSE BOARD IS THIS. The nav chip, with a way out.
  *
  * Order 0064, point 4: "a board that cannot tell you which account it is showing is how this bug
@@ -344,20 +374,33 @@ export function SignInView({
   busy?: boolean;
 }) {
   return (
-    <div className="stage">
+    // `.centered`, not `.stage`. The stage is the board's scroll area and centres nothing; this
+    // page was rendering as content pinned to the top-left of an otherwise empty 1440px viewport.
+    // The container is one named thing in tokens.css -- see the note there about why it is not an
+    // inline style and not a second set of spacing values.
+    <div className="centered">
       <div className="login" data-signin="board">
+        {/*
+          THE LOCKUP LIVES IN THE CARD, and there is no nav above it. A 60px bar carrying only a
+          brand mark, on a page with no navigation to offer, is chrome for its own sake -- and it
+          was pushing the one thing this screen exists for off-centre.
+        */}
+        <BrandLockup size="lg" />
         <h2>Sign in to Flotilla</h2>
-        <p>
-          Your projects are listed by the account that owns them. Sign in with the Google account
-          you used to create them.
-        </p>
+        <p>Your projects are listed by the account that owns them.</p>
         <button className="cta" onClick={onGoogle} disabled={busy}>
           {busy ? 'Taking you to Google…' : 'Continue with Google'}
         </button>
+        {/*
+          ONE LINE. This was three lines of grey prose about throwaway identities and being
+          admitted to boards -- so the escape hatch carried more visual weight than the button
+          anyone actually wants to press. The explanation did not disappear: it moved to the two
+          places where it is load-bearing, which are the denied state and the anonymous empty
+          index. Nobody needs to read it before signing in.
+        */}
         <p className="note">
           Or <button className="linkish" onClick={onAnonymous} disabled={busy}>continue
-          anonymously</button> — a throwaway identity that is a member of nothing until someone
-          admits it. Useful for looking at a board you have been invited to see.
+          anonymously</button>.
         </p>
         {error && (
           <>

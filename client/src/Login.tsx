@@ -20,6 +20,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
+import { BrandLockup } from './components';
 import {
   boardAuth, consumeRedirect, signInAnonymous, signInWithGoogle,
 } from './store/session';
@@ -51,8 +52,7 @@ export function LoginView({
   return (
     <>
       <nav className="nav">
-        <div className="mark">FL</div>
-        <div className="brand">Flotilla</div>
+        <BrandLockup />
         <span className="grow" />
       </nav>
       <div className="stage">
