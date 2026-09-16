@@ -58,11 +58,20 @@ section + section{border-top:1px solid var(--line)}
 /* ---- type ---- */
 .eyebrow{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.11em;
      color:var(--muted);margin-bottom:14px}
-h1{font-family:var(--serif);font-weight:600;font-size:clamp(38px,5.6vw,60px);line-height:1.05;
-   letter-spacing:-.026em}
-h2{font-family:var(--serif);font-weight:600;font-size:clamp(26px,3.2vw,34px);line-height:1.15;
-   letter-spacing:-.022em}
-h3{font-family:var(--serif);font-weight:600;font-size:18.5px;line-height:1.28;letter-spacing:-.015em}
+/* Fraunces is already a compact face, so the negative tracking that suits a
+   grotesque made it cramped -- "agents." was crowding "One" at 51px. Relaxed to
+   roughly a quarter of what it was.
+
+   WONK 0 switches off Fraunces' quirky angled j/y/g terminals, which is what
+   made the headings read as fussy old-magazine rather than quiet editorial.
+   This axis only exists because the font URL now requests SOFT and WONK; with
+   the previous opsz,wght-only request this declaration was a silent no-op. */
+h1{font-family:var(--serif);font-weight:600;font-size:clamp(38px,5.6vw,60px);line-height:1.06;
+   letter-spacing:-.008em;font-variation-settings:'WONK' 0}
+h2{font-family:var(--serif);font-weight:600;font-size:clamp(26px,3.2vw,34px);line-height:1.18;
+   letter-spacing:-.010em;font-variation-settings:'WONK' 0}
+h3{font-family:var(--serif);font-weight:600;font-size:18.5px;line-height:1.3;
+   letter-spacing:-.008em;font-variation-settings:'WONK' 0}
 h4{font-family:var(--sans);font-weight:600;font-size:14.5px;letter-spacing:-.005em}
 .lead{font-size:18.5px;line-height:1.58;color:var(--ink2);max-width:62ch}
 .sub{color:var(--ink2);max-width:66ch}
@@ -81,7 +90,7 @@ strong{font-weight:600;color:var(--ink)}
 /* Two columns: the copy carries the claim, the illustration states it. The one-column hero
    left the right third of the page empty at desktop width. */
 .hero-grid{display:grid;grid-template-columns:1.08fr .92fr;gap:44px;align-items:center}
-.hero-copy h1{font-size:clamp(36px,4.1vw,51px);max-width:16ch}
+.hero-copy h1{font-size:clamp(36px,4.1vw,51px);max-width:17ch}
 
 /* ---- hero illustration ---- */
 .hero-illo svg{width:100%;height:auto;max-width:560px;margin-left:auto}
