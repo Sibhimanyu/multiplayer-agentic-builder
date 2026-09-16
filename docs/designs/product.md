@@ -1,4 +1,16 @@
-# Catalyst Builder Product Design
+# Product design — Flotilla
+
+> **Historical.** This document framed the product when it was called Catalyst Builder and
+> assumed a Zoho Catalyst backend. Both were superseded: decision 0001 chose Firebase for
+> coordination with git as the durable store, and decision 0004 named the product Flotilla.
+>
+> Kept because the **product framing** below still holds — bring-your-own local agent, no hosted
+> sandbox, GitHub as the source of truth, coordination through a store rather than agent-to-agent
+> messaging. Only the backend it names is wrong. For what is actually built, see the README and
+> `docs/designs/project-tier.md`.
+
+---
+
 
 ## Summary
 

@@ -1,9 +1,9 @@
 {
-  "name": "catalyst-builder",
+  "name": "flotilla",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Multiplayer agentic builder -- SHARED foundation. Both impl branches consume this; neither may fork it.",
+  "description": "Several AI coding agents build one app together, without stepping on each other.",
   "scripts": {
     "test": "node --test \"shared/**/*.test.ts\"",
     "test:memory": "node --test shared/store/memory.test.ts",
