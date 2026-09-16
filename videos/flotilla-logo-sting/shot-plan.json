@@ -1,0 +1,133 @@
+{
+  "category": "logo-reveal",
+  "duration_s": 3.6,
+  "fps": 30,
+  "canvas": {
+    "w": 1920,
+    "h": 1080,
+    "aspect": "16:9"
+  },
+  "style": "Flat, quiet, editorial. Light mode, warm paper ground, single teal accent, low density. One restrained move, then true stillness. No glow, no slam, no assembly, no outlines, no gradients, no waves or wakes. The energy is 'the fleet is already in formation', not 'the fleet arrives with force'.",
+  "palette": [
+    "#0F766E",
+    "#1A1917",
+    "#FAF9F7",
+    "#E8E4DD",
+    "#8A857C"
+  ],
+  "font": "JetBrains Mono",
+  "beats": [
+    0.25,
+    0.9,
+    1.3
+  ],
+  "export": "mp4",
+  "asset_needs": [],
+  "block": "titlecard-lockup",
+  "customize": {
+    "why": "Its described behaviour is this brand's register verbatim: one restrained move, a hairline rule drawing left to right, a mono label beneath, then a still hold. The category module's default `logo-outro` is rejected: its piece-by-piece assembly would separate the mark's three boats and its glow bloom is a prohibited effect. `svg-stroke-trace` draw-on is rejected too: the mark is FILLED paths, so tracing them would render outlines, also prohibited.",
+    "wordmark_slot": "assets/brand/flotilla-lockup.svg",
+    "wordmark_treatment": "Placed as one indivisible unit. The mark and wordmark never move relative to each other; individual boats are never revealed, moved, scaled or recoloured separately.",
+    "reveal": "scale settle: the lockup fades up with scale .96 -> 1, power3.out, entrance half only. Supersedes this field's earlier draft value (a clip-path sweep), which contradicted motion.timeline; the component's own restrained settle was kept instead of inventing a move.",
+    "rule_color": "#0F766E",
+    "rule_behaviour": "hairline, draws left to right via measured-length stroke dash (getTotalLength), never the pathLength attribute. Supersedes this field's earlier draft value (scaleX 0->1); same direction and origin, different mechanism, and the dash is what the component implements.",
+    "kicker": null,
+    "label_font": "JetBrains Mono",
+    "label_color": "#8A857C",
+    "background": "#FAF9F7",
+    "remove": [
+      "glow",
+      "bloom",
+      "text-shadow",
+      "drop-shadow",
+      "gradient",
+      "letter-by-letter split",
+      "impact frame",
+      "accent ring",
+      "scale punch",
+      "slam"
+    ],
+    "wordmark_slot_note": "titlecard-lockup renders its wordmark as a TEXT span in --font-display. That is unusable here: the brand forbids retypesetting the outlined wordmark with a substitute font. Replace the .tl-wordmark span with the INLINED flotilla-lockup.svg markup (outlined paths, self-contained, no network, deterministic). Strip or namespace its internal title/desc ids so they cannot collide.",
+    "host_tokens": {
+      "--bg": "#FAF9F7",
+      "--fg": "#1A1917",
+      "--brand": "#0F766E",
+      "--font-mono": "'JetBrains Mono', ui-monospace, Menlo, monospace"
+    },
+    "rule_override": "Override .tl-rule-svg line: the component mixes the accent with --fg via color-mix at stroke-opacity .62, which muddies the brand teal. Use a flat #0F766E at full opacity, hairline, matching the website's rail-live idiom.",
+    "ink_override": "Override .tl-kicker/.tl-label ink from the component's color-mix to the brand's exact muted token #8A857C.",
+    "rule_width": "52cqw rather than the component's 34cqw, so the rule spans the lockup art's own width instead of starting inboard of the mark."
+  },
+  "content": {
+    "logo": "assets/brand/flotilla-lockup.svg",
+    "tagline": "Many agents. One objective.",
+    "url": null
+  },
+  "motion": {
+    "dominant_motif": "a single left-to-right uncovering: the lockup is swept into view, the hairline teal rule draws along the same axis, and everything then holds perfectly still.",
+    "timeline": [
+      {
+        "t": "0.00-0.25",
+        "what": "paper ground, empty. kicker is hidden, so this is the component's beat of quiet.",
+        "primitive": "hold"
+      },
+      {
+        "t": "0.25-1.10",
+        "what": "THE one move: the lockup settles dead-centre, scale .96 -> 1 with autoAlpha, power3.out, entrance half only, no bounce or overshoot. Mark and wordmark move as one indivisible unit.",
+        "primitive": "scale_grow (restrained)"
+      },
+      {
+        "t": "0.90-1.45",
+        "what": "hairline teal rule draws left to right beneath the lockup via measured-length dash. This is the single pattern interrupt.",
+        "primitive": "underline_sweep"
+      },
+      {
+        "t": "1.30-1.80",
+        "what": "mono tagline fades up beneath the rule, uppercase, wide tracking",
+        "primitive": "fade_in"
+      },
+      {
+        "t": "1.80-3.60",
+        "what": "true stillness for 1.8s. No drift, no breath, no pulse. The stillness is the confidence.",
+        "primitive": "hold"
+      }
+    ]
+  },
+  "decisions_without_asking": [
+    "16:9 1920x1080 rather than the IR's 1080x1920 default: a brand sting's home is the head or tail of a product video and the top of a page, not a social vertical feed. Square and vertical are a re-render of the same composition, not a rebuild.",
+    "3.6s, not 4.5s: the component's IN phase is a fixed 1.80s and only HOLD stretches, so 4.5s would have meant 2.7s of dead air. 3.6s gives a 1.8s hold, which lands the sting without dragging, and stays inside the module's ~3-5s range.",
+    "Tagline in JetBrains Mono, not Fraunces: the lockup's wordmark is already Fraunces, so a Fraunces tagline would compete with it. Mono is subordinate and matches the site's own mono idiom (the nav pill, branch names, identifiers).",
+    "An alpha-overlay variant will also be rendered, since the module notes a sting is often dropped onto other footage."
+  ],
+  "proof_times": [
+    0.1,
+    0.7,
+    1.45,
+    1.9,
+    3.5
+  ],
+  "hard_prohibitions": [
+    "Do NOT rotate the mark, or add any rotation to it.",
+    "Do NOT separate, stagger, or individually reveal the three boats. The mark animates only as one whole.",
+    "Do NOT recolour individual boats.",
+    "Do NOT add waves, wakes, gradients, shadows, glows, blooms, text-shadow, drop-shadow, outlines or strokes on the mark.",
+    "Do NOT retypeset or substitute a font for the wordmark. Use the outlined SVG art.",
+    "Do NOT stretch, skew or redraw the lockup. Uniform scale only.",
+    "Keep at least 20% of the mark's height clear on every side."
+  ],
+  "verified": {
+    "lint": "0 errors, 0 warnings",
+    "check": "passed - lint, runtime, layout (9 samples), motion, contrast 3/3 AA",
+    "proof_times": [
+      0.1,
+      0.7,
+      1.45,
+      1.9,
+      3.5
+    ],
+    "rule_colour": "pixel-sampled #0f766e at 100% coverage on rows y=648-649 - brand exact",
+    "stillness": "wordmark ink bbox identical x744-1442 y402-558 at 1.45s, 1.9s and 3.5s - no drift, no reflow when the tagline fades in",
+    "settle": "bbox w698->699 between 0.7s and 1.10s, the tail of scale .96->1",
+    "entry_moved": "composition lives at the project root index.html, not compositions/, because the CLI resolves the project entry there - `check .` and `render .` both fail otherwise"
+  }
+}
