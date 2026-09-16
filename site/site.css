@@ -393,3 +393,67 @@ footer .fine{width:100%;margin-top:30px;padding-top:22px;border-top:1px solid va
 @media (prefers-reduced-motion:reduce){
   .splash{display:none}
 }
+
+
+/* ============================================ illustration system
+   One vocabulary for every diagram on the page, so they read as a family
+   rather than six unrelated pictures:
+
+     .il-rail    structure and flow      ink at 18%, 2px
+     .il-live    the active/committed path  teal, 2.6px
+     .il-card    a machine, file or repo    paper card + hairline
+     .il-node    a landed event            ink at 20%
+     .il-hot     the thing happening now   teal
+     .il-lbl     mono micro-label          replaces a sentence
+     .il-warn    a conflict                red
+
+   Strokes are declared once here. An illustration that needs a new weight or
+   colour is a sign the vocabulary is wrong, not that it needs an exception. */
+.il{width:100%;height:auto;display:block}
+.il-rail{fill:none;stroke:var(--ink);stroke-opacity:.18;stroke-width:2;stroke-linecap:round}
+.il-rail-d{fill:none;stroke:var(--ink);stroke-opacity:.2;stroke-width:2;stroke-linecap:round;
+      stroke-dasharray:5 6}
+.il-live{fill:none;stroke:var(--teal);stroke-width:2.6;stroke-linecap:round}
+.il-card{fill:var(--card);stroke:var(--line2);stroke-width:1.6}
+.il-card-q{fill:var(--paper);stroke:var(--line2);stroke-width:1.6}
+.il-glyph{fill:none;stroke:var(--ink);stroke-opacity:.26;stroke-width:2;stroke-linecap:round}
+.il-node{fill:var(--ink);fill-opacity:.2}
+.il-hot{fill:var(--teal)}
+.il-ring{fill:none;stroke:var(--teal);stroke-opacity:.3;stroke-width:2}
+.il-warn{fill:var(--red)}
+.il-warn-s{fill:none;stroke:var(--red);stroke-width:2.4;stroke-linecap:round}
+.il-lbl{font-family:var(--mono);font-size:16px;fill:var(--muted)}
+.il-lbl-t{font-family:var(--mono);font-size:16px;fill:var(--teal)}
+.il-ttl{font-family:var(--mono);font-size:16px;font-weight:500;fill:var(--ink2)}
+
+/* figure wrapper: an illustration is content, so it gets the card treatment
+   only where it needs a ground of its own */
+.il-frame{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);
+      padding:26px 24px;box-shadow:var(--shadow);overflow-x:auto;
+      -webkit-overflow-scrolling:touch}
+/* A 1000-unit viewBox squeezed into a 335px phone renders its 16px labels at
+   4.6px, which is not a diagram, it is a smudge. Hold a legible floor and let
+   the figure scroll instead -- the same trade the wide tables already make. */
+.il-frame svg.il{min-width:720px}
+.il-cap{font-size:13px;color:var(--muted);margin-top:12px;max-width:62ch}
+
+/* One-shot draw-in. Illustrations are below the fold except the hero, so this
+   is deliberately cheap: opacity and a short offset, no path-length tricks. */
+@keyframes il-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.il-frame{animation:il-in .5s ease both}
+@media (prefers-reduced-motion:reduce){
+  .il-frame{animation:none}
+}
+
+/* The dark band inverts the ground, so the illustration vocabulary needs the
+   same inversion rather than a white box dropped onto ink. */
+.band .il-frame{background:#242320;border-color:#35332F}
+.band .il-rail{stroke:#F5F3F0;stroke-opacity:.22}
+.band .il-rail-d{stroke:#F5F3F0;stroke-opacity:.26}
+.band .il-live{stroke:#5EC4B8}
+.band .il-card{fill:#2C2B27;stroke:#45423D}
+.band .il-card-q{fill:#242320;stroke:#45423D}
+.band .il-ttl{fill:#E8E4DD}
+.band .il-lbl{fill:#8A857C}
+.band .il-lbl-t{fill:#5EC4B8}
+.band .il-cap{color:#8A857C}
