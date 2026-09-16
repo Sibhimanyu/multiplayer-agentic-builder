@@ -1,0 +1,1021 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>How Flotilla works — internal reference</title>
+<meta name="description" content="Internal reference: architecture, the store/git split, protocol v0.2, the .agentic file contract, roles as capabilities, the CLI surface, and the measured numbers." />
+<meta name="robots" content="noindex,nofollow" />
+<meta name="theme-color" content="#0F766E" />
+<link rel="icon" href="favicon.svg" type="image/svg+xml" />
+<link rel="icon" href="favicon-32x32.png" type="image/png" sizes="32x32" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" sizes="180x180" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="site.css" />
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a href="index.html" aria-label="Flotilla home">
+      <img class="lockup" src="brand/flotilla-lockup.svg" alt="Flotilla" width="1060" height="260" />
+    </a>
+    <span class="tag">reference</span>
+    <div class="links">
+      <a href="index.html">Product page</a>
+      <a href="https://github.com/Sibhimanyu/multiplayer-agentic-builder" class="hide-sm">Source</a>
+    </div>
+  </div>
+</nav>
+
+<div class="internal">
+  <div class="wrap">
+    <span class="k">Internal</span>
+    <p>
+      Working reference, not customer documentation. It records mechanism and measured behaviour,
+      including what does not work. The normative sources are the files under <code>docs/</code>;
+      where this page and those disagree, they win.
+    </p>
+  </div>
+</div>
+
+<header class="hero" style="padding:62px 0 44px">
+  <div class="wrap">
+    <p class="eyebrow">How it works</p>
+    <h1 style="font-size:clamp(32px,4.4vw,46px)">The mechanism, end to end.</h1>
+    <p class="lead" style="margin-top:18px">
+      Two halves that each hold what the other is bad at: an ephemeral store for anything that must
+      be atomic, and git for anything that must be reviewable. Everything else in this document
+      follows from that split.
+    </p>
+  </div>
+</header>
+
+<section style="padding-top:54px">
+<div class="wrap">
+<div class="doc">
+
+  <!-- ---------------------------------------------------- TOC -->
+  <aside class="toc">
+    <p class="eyebrow">Contents</p>
+    <a href="#status">1. Where the build is</a>
+    <a href="#arch">2. Architecture</a>
+    <a href="#split">3. The split</a>
+    <a href="#ports">4. The ports</a>
+    <a href="#protocol">5. Protocol v0.2</a>
+    <a href="#states">6. State machines</a>
+    <a href="#claim">7. Claims and scope locks</a>
+    <a href="#agentic">8. The .agentic contract</a>
+    <a href="#blackboard">9. The git blackboard</a>
+    <a href="#roles">10. Roles as capabilities</a>
+    <a href="#cli">11. CLI surface</a>
+    <a href="#numbers">12. Measured numbers</a>
+    <a href="#decisions">13. Decisions</a>
+    <a href="#open">14. Open items</a>
+    <a href="#sources">15. Source map</a>
+  </aside>
+
+  <!-- ---------------------------------------------------- BODY -->
+  <div class="doc-body">
+
+  <!-- 1 ---------------------------------------------------------------- -->
+  <article id="status">
+    <h2>1. Where the build actually is</h2>
+    <p class="sub">
+      Phase 0 (spec plus shared dashboard) is complete. Phase 1 built three coordination routes
+      from one spec and measured them. The comparison is closed; the vertical slice is what is
+      being finished now.
+    </p>
+
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead><tr><th>Piece</th><th>State</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Spec and protocol</td><td><span class="badge" data-t="ok">done</span></td>
+              <td>Store interface, protocol v0.2, <code>.agentic/</code> contract, blackboard, dashboard design</td></tr>
+          <tr><td class="k">Dashboard</td><td><span class="badge" data-t="ok">live</span></td>
+              <td>React, board renders against a real backend; projects index and routing landed</td></tr>
+          <tr><td class="k">Coordination store</td><td><span class="badge" data-t="ok">chosen</span></td>
+              <td>Firestore. Contended claim verified on production, not the emulator</td></tr>
+          <tr><td class="k">Git blackboard</td><td><span class="badge" data-t="ok">done</span></td>
+              <td>Concurrent publish measured: 1 rejection, 1 rebase, both facts landed</td></tr>
+          <tr><td class="k">CLI</td><td><span class="badge" data-t="review">publish-ready</span></td>
+              <td>Real binary, installs from a tarball into a clean dir. <strong>Not published to npm</strong> &mdash; that is the user&rsquo;s call</td></tr>
+          <tr><td class="k">Multi-user auth</td><td><span class="badge" data-t="review">landed, fragile</span></td>
+              <td>Google sign-in via a locally served page and a popup. Four orders of breakage; see <a href="#open">open items</a></td></tr>
+          <tr><td class="k">Cloud Functions</td><td><span class="badge" data-t="blocked">absent</span></td>
+              <td>Spark plan has none. The reaper and the PR/CI poll live in the bridge instead</td></tr>
+          <tr><td class="k">GitHub webhook</td><td><span class="badge" data-t="blocked">replaced</span></td>
+              <td>No webhook receiver. PR and CI state come from the bridge&rsquo;s poll</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note stop">
+      <h4>Two copy defects worth remembering, because they recurred</h4>
+      The product named a GitHub webhook in on-screen text for weeks after the mechanism became a
+      poll, and three separate renames each covered the binary and missed a surface it prints
+      (generated role packs, an empty state, the env var block in <code>--help</code>). The rule
+      that came out of it: <strong>assert the absence of the retired name in every artifact a user
+      can see</strong> &mdash; built bundle, generated files, <code>--help</code>, and the served
+      tarball &mdash; not in the source.
+    </div>
+  </article>
+
+  <!-- 2 ---------------------------------------------------------------- -->
+  <article id="arch">
+    <h2>2. Architecture</h2>
+    <p class="sub">
+      There is no server in the coordination path that the team does not own, and no agent is
+      reachable from the network. Every agent sits behind NAT on somebody&rsquo;s laptop, which is
+      why push-to-agent was never an option and why the bridge exists.
+    </p>
+
+    <div class="arch" role="img" aria-label="Deployed architecture: hosted board, Firestore and RTDB, local bridge CLI per laptop, local agent harness, GitHub.">
+<pre>  <b>browser</b>  ── hosted board (static) ──┐
+                                      │  <span class="c">listener push, ~191 ms</span>
+                                      ▼
+                        <b>coordination store</b>  <span class="c">Firestore + RTDB presence</span>
+                        <span class="t">events</span>      append-only, monotonic seq, gaps legal
+                        <span class="t">task_claims</span> atomic, exactly one winner
+                        <span class="t">scope_locks</span> server-enforced glob intersection
+                        <span class="t">presence</span>    TTL-shaped, staleness derived at read
+                        <span class="t">projects/{pid}/members/{uid}</span>  membership is a document
+                                      ▲
+                       admin SDK      │      <span class="c">client writes are denied outright</span>
+                                      │
+  ┌───────────────────────────────────┴───────────────────────────────┐
+  │                        <b>flotilla</b>  (the bridge)                    │
+  │   drain outbox → publish     deliver inbox ← fold events          │
+  │   claimTask on behalf        heartbeat                            │
+  │   stale-claim reaper         PR / CI poll   <span class="c">(no webhook)</span>          │
+  │   commit + push contracts to the blackboard branch                │
+  └───────────────────────────────────┬───────────────────────────────┘
+                                      │  <span class="c">filesystem only. no token, no socket.</span>
+                             <b>.agentic/</b> + AGENTS.md
+                                      │
+                       <b>Claude Code / Codex / anything</b>
+                                      │
+                                      ▼
+                                  <b>GitHub</b>
+                     branches · pull requests · CI
+                     <span class="t">agentic/blackboard</span>  contracts, schemas, decisions</pre>
+    </div>
+
+    <h3>Why the bridge holds so much</h3>
+    <p class="sub">
+      The Spark plan has no Cloud Functions, so anything that would have been server-side moved
+      into the CLI: the stale-claim reaper, the PR/CI poll, and the privileged writes that
+      <code>firestore.rules</code> refuses from a browser. Blaze plus one function is the
+      documented upgrade path and was deliberately not taken &mdash; it would add a bill with no
+      spending cap for work the bridge already does.
+    </p>
+    <p class="sub">
+      Membership is a <em>document</em>, not a custom token claim, and that is on purpose: a claim
+      needs a token refresh to revoke, and revocation has to be immediate.
+    </p>
+  </article>
+
+  <!-- 3 ---------------------------------------------------------------- -->
+  <article id="split">
+    <h2>3. The split, and why it is the whole design</h2>
+    <p class="sub">
+      No single system is good at both atomic contention and reviewable history. Each fact goes
+      where it belongs.
+    </p>
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead><tr><th>Fact</th><th>Durable</th><th>Atomic</th><th>Needs a diff</th><th>Lives in</th></tr></thead>
+        <tbody>
+          <tr><td class="k">API contract</td><td>forever</td><td>no</td><td><strong>yes</strong></td><td><strong>git</strong></td></tr>
+          <tr><td class="k">Data schema</td><td>forever</td><td>no</td><td><strong>yes</strong></td><td><strong>git</strong></td></tr>
+          <tr><td class="k">Decision + rationale</td><td>forever</td><td>no</td><td><strong>yes</strong></td><td><strong>git</strong></td></tr>
+          <tr><td class="k">Task claim</td><td>transient</td><td><strong>yes</strong></td><td>no</td><td>store</td></tr>
+          <tr><td class="k">File-scope lock</td><td>transient</td><td><strong>yes</strong></td><td>no</td><td>store</td></tr>
+          <tr><td class="k">Heartbeat</td><td>seconds</td><td>no</td><td>no</td><td>store</td></tr>
+          <tr><td class="k">Task state</td><td>medium</td><td>no</td><td>no</td><td>store</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sub">
+      Moving contracts out of the ledger removed three problems at once: a hard character cap on
+      the durable text column, silent emoji corruption in an append-only log, and the complete
+      absence of any diff between contract v1 and v2 &mdash; which is the single most useful thing
+      a blocked consumer has.
+    </p>
+  </article>
+
+  <!-- 4 ---------------------------------------------------------------- -->
+  <article id="ports">
+    <h2>4. The ports</h2>
+    <p class="sub">
+      Two interfaces, deliberately separate. <code>CoordinationStore</code> is ten operations
+      inside one project. <code>ProjectDirectory</code> is the project tier. They were not merged
+      into one fifteen-operation port because that would put unproven surface behind a proven gate,
+      and force every future backend to implement multi-project before it could implement
+      coordination at all.
+    </p>
+
+    <h3>CoordinationStore — ten operations</h3>
+<pre><span class="c">// ledger</span>
+<b>appendEvent</b>(project_id, event, idempotency_key)   <span class="c">idempotent on the key; a repeat</span>
+                                                 <span class="c">returns the ORIGINAL {event_id, seq}</span>
+<b>readEvents</b>(project_id, since_seq, limit?)         <span class="c">ascending by seq; limit caps at 300</span>
+
+<span class="c">// claims — atomic</span>
+<b>claimTask</b>(project_id, task_id, agent_id)          <span class="c">exactly one winner; the loser gets</span>
+                                                 <span class="c">{ok:false, owner} — a normal outcome</span>
+<b>releaseTask</b>(project_id, task_id, agent_id)        <span class="c">idempotent; releasing what you do</span>
+                                                 <span class="c">not own is a no-op</span>
+
+<span class="c">// file scope — server-enforced, not advisory</span>
+<b>acquireScope</b>(project_id, agent_id, task_id, globs)  <span class="c">rejects on glob intersection with</span>
+                                                   <span class="c">a live lock; returns the conflicts</span>
+<b>releaseScope</b>(project_id, agent_id)
+
+<span class="c">// presence — must NOT cost a durable row update per call</span>
+<b>heartbeat</b>(project_id, agent_id, status, task?, branch?)
+<b>listPresence</b>(project_id)
+
+<span class="c">// read + notify</span>
+<b>readSnapshot</b>(project_id, etag?)                   <span class="c">returns null when the etag matches</span>
+<b>subscribe</b>(project_id, from_seq, onChange)         <span class="c">fires once immediately, then on</span>
+                                                 <span class="c">every change; survives network loss</span>
+
+<b>freshness</b>                                        <span class="c">{mode:'live'} or {mode:'poll', stale_ms}</span></pre>
+
+    <h3>ProjectDirectory — the project tier</h3>
+<pre><b>createProject</b> · <b>listProjects</b> · <b>getProject</b>
+<b>addMember</b> · <b>listMembers</b> · <b>setRole</b> · <b>revokeMember</b></pre>
+    <p class="sub">
+      <strong>The CLI creates projects; the browser lists and opens them.</strong> Creating a
+      project means connecting a repo, writing <code>.agentic/</code> and generating role packs
+      &mdash; all of which need the repo on disk. So client writes stay denied, nothing in the
+      rules is loosened, and no billing is required.
+    </p>
+
+    <h3>Rulings that are part of the contract</h3>
+    <ul class="plain">
+      <li>The auth header is <code>X-Agent-Token</code>, never <code>Authorization</code>.</li>
+      <li><code>created_at</code> is metadata and is <strong>never</strong> an ordering key. Order by <code>seq</code>.</li>
+      <li><code>seq</code> is monotonic ascending; <strong>gaps are legal</strong>. It comes from a dedicated allocator, never from a row id &mdash; a live probe showed row ids are allocated from per-shard blocks and run backwards across inserts.</li>
+      <li>Never match on an error message string. Map to typed errors.</li>
+      <li><code>NotProvisionedError</code> is required and distinct &mdash; &ldquo;this platform cannot do this&rdquo; is not the same as &ldquo;this failed&rdquo;.</li>
+      <li>Read the structured field, never the exit code.</li>
+      <li>Strip emoji and 4-byte UTF-8 from all durable text before write, in every implementation.</li>
+      <li>A third implementation, <code>memory</code>, exists so the conformance suite can run with no cloud at all.</li>
+    </ul>
+  </article>
+
+  <!-- 5 ---------------------------------------------------------------- -->
+  <article id="protocol">
+    <h2>5. Protocol v0.2 &mdash; three layers</h2>
+    <p class="sub">
+      Every event carries a <code>layer</code>, and the layer decides <strong>who receives
+      it</strong>. Version 0.1 had eleven activity-shaped event types delivered to everybody;
+      v0.2 replaced them because progress narration is worthless to another agent and costs it
+      context.
+    </p>
+
+    <h3>Contract layer &mdash; agents subscribe. This is the payload that matters.</h3>
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead><tr><th>Kind</th><th>Body</th></tr></thead>
+        <tbody>
+          <tr><td class="k"><code>schema_published</code></td><td><code>{ name, path, commit_sha }</code></td></tr>
+          <tr><td class="k"><code>contract_published</code></td><td><code>{ name, version, path, commit_sha, supersedes }</code></td></tr>
+          <tr><td class="k"><code>contract_superseded</code></td><td><code>{ name, old_version, new_version, breaking, migration_note }</code></td></tr>
+          <tr><td class="k"><code>decision_recorded</code></td><td><code>{ path, commit_sha, title, affects_tasks[] }</code></td></tr>
+          <tr><td class="k"><code>scope_locked</code></td><td><code>{ agent_id, task_id, globs[] }</code></td></tr>
+          <tr><td class="k"><code>scope_released</code></td><td><code>{ agent_id, task_id }</code></td></tr>
+          <tr><td class="k"><code>task_unblocked</code></td><td><code>{ task_id, was_blocked_by, reason_resolved }</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sub">
+      <code>path</code> + <code>commit_sha</code> point into the git blackboard.
+      <strong>Content is never in the event.</strong>
+    </p>
+
+    <h3>Coordination layer &mdash; agents subscribe.</h3>
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead><tr><th>Kind</th><th>Body</th></tr></thead>
+        <tbody>
+          <tr><td class="k"><code>task_claimed</code></td><td><code>{ task_id, agent_id, role_slug }</code></td></tr>
+          <tr><td class="k"><code>task_completed</code></td><td><code>{ task_id, agent_id }</code></td></tr>
+          <tr><td class="k"><code>task_blocked</code></td><td><code>{ task_id, reason, blocked_by_task_id }</code></td></tr>
+          <tr><td class="k"><code>branch_pushed</code></td><td><code>{ branch, commit, task_id }</code></td></tr>
+          <tr><td class="k"><code>pr_opened</code></td><td><code>{ task_id, pr_number, pr_url, branch }</code></td></tr>
+          <tr><td class="k"><code>ci_passed</code> / <code>ci_failed</code></td><td><code>{ task_id, pr_number, check_name, details_url }</code></td></tr>
+          <tr><td class="k"><code>merged</code></td><td><code>{ task_id, pr_number, commit }</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sub">
+      The last five originate outside the agents, with <code>actor_type: 'github'</code>. The
+      design said webhook; the shipped mechanism is the bridge&rsquo;s poll.
+    </p>
+
+    <h3>Human layer &mdash; dashboard only. Never delivered to an agent.</h3>
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead><tr><th>Kind</th><th>Body</th></tr></thead>
+        <tbody>
+          <tr><td class="k"><code>agent_heartbeat</code></td><td><code>{ status, task_id, branch, harness }</code></td></tr>
+          <tr><td class="k"><code>task_progress</code></td><td><code>{ task_id, summary, files_changed[] }</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <h4>This exclusion is normative</h4>
+      An agent subscription that includes the human layer is a protocol violation. It is the single
+      most important rule in the protocol: it is what keeps agents sharp over a long session
+      instead of drowning in each other&rsquo;s status updates. It is also what makes the client
+      seat structurally safe &mdash; a client&rsquo;s text is human-layer by definition, so it
+      cannot enter any <code>inbox.jsonl</code>. <strong>Prompt injection from the least-trusted
+      seat is impossible by plumbing, not policed by a filter.</strong>
+    </div>
+
+    <h3>What agents share, and what they do not</h3>
+    <div class="grid g2">
+      <div class="tile">
+        <h4>Share &mdash; high value, low volume</h4>
+        <ul class="plain" style="margin-top:10px">
+          <li class="yes">API contract: endpoint, request, response, version</li>
+          <li class="yes">Data schema: table, columns, types</li>
+          <li class="yes">File-scope lock: who owns which paths</li>
+          <li class="yes">Task state transitions: done, blocked</li>
+          <li class="yes">A decision plus its rationale</li>
+          <li class="yes">A blocking failure that changed the plan</li>
+        </ul>
+      </div>
+      <div class="tile">
+        <h4>Do not share &mdash; low value, high volume</h4>
+        <ul class="plain" style="margin-top:10px">
+          <li class="no">Progress narration</li>
+          <li class="no">Agent reasoning or chain of thought</li>
+          <li class="no">Full file contents &mdash; git already has them</li>
+          <li class="no">Questions to each other &mdash; route to the human</li>
+          <li class="no">Retry and error chatter</li>
+          <li class="no">Heartbeats &mdash; infra signal, not semantics</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>Envelope</h3>
+<pre>{
+  "event_id": "evt_01J9X2",
+  "project_id": "proj_inventory",
+  "seq": 4211,
+  "layer": "contract",
+  "kind": "contract_published",
+  "actor_type": "agent",
+  "actor_id": "agent_backend_1",
+  "created_at": "2026-08-25T09:41:02.881Z",
+  "protocol_version": "0.2",
+  "body": {
+    "name": "items-api", "version": 2,
+    "path": "contracts/items-api.v2.yaml",
+    "commit_sha": "a3f9c1e0d4b28f6712c9ab3e5580f1d2c7e46a9b",
+    "supersedes": 1
+  }
+}</pre>
+    <p class="sub">
+      Reject an unsupported <strong>major</strong> version. Accept additive fields within a minor.
+    </p>
+
+    <h3>Read-your-own-writes</h3>
+    <p class="sub">
+      An agent that appends and receives <code>seq = N</code> may immediately read a snapshot
+      reporting <code>seq &lt; N</code>, because publication is debounced. <strong>That is stale,
+      not lost.</strong> Track <code>last_written_seq</code> locally and treat
+      <code>snapshot.seq &lt; last_written_seq</code> as &ldquo;not yet folded&rdquo;. Do not
+      retry the append &mdash; retrying here is the most likely source of duplicate events in the
+      whole system.
+    </p>
+  </article>
+
+  <!-- 6 ---------------------------------------------------------------- -->
+  <article id="states">
+    <h2>6. State machines</h2>
+    <h3>Task</h3>
+<pre>open ──► claimed ──► in_progress ──┬──► needs_review ──► pr_open ──► merged ──► done
+                          │        │
+                          └► blocked
+                                   └► cancelled</pre>
+    <ul class="plain">
+      <li><code>open → claimed</code> requires an atomic claim.</li>
+      <li><code>claimed → in_progress</code> on first local work.</li>
+      <li><code>in_progress → blocked</code> requires a reason and, where known, <code>blocked_by_task_id</code>.</li>
+      <li><code>needs_review → pr_open</code> and <code>pr_open → merged</code> come from GitHub, <strong>not from an agent&rsquo;s assertion</strong>.</li>
+      <li><code>merged → done</code> automatic, or owner-confirmed.</li>
+    </ul>
+    <p class="sub">
+      The board&rsquo;s six columns are these states, in this order. That is not a coincidence and
+      it is not open for reinterpretation.
+    </p>
+
+    <h3>Agent session</h3>
+<pre>connected ──► idle ⇄ claiming ⇄ working ⇄ blocked ⇄ reviewing ──► offline
+                                                                  revoked</pre>
+    <p class="sub">
+      <code>stale</code> is <strong>derived at read time</strong> from
+      <code>last_heartbeat_at</code> against a 90 s default. It is never stored &mdash; a stored
+      staleness flag is a flag that can be wrong, and the failure mode is a dead laptop that looks
+      healthy.
+    </p>
+  </article>
+
+  <!-- 7 ---------------------------------------------------------------- -->
+  <article id="claim">
+    <h2>7. Claims and scope locks</h2>
+
+    <h3>The agent does not claim. It asks.</h3>
+    <p class="sub">
+      This was a real gap: the agent had no way to claim anything, because it has no network
+      access by design. The ruling keeps both properties intact.
+    </p>
+    <ol class="plain" style="list-style:none">
+      <li>The agent appends <code>claim_requested</code> to <code>outbox.jsonl</code>.</li>
+      <li>The bridge calls the verified <code>claimTask</code> &mdash; the atomic operation stays where it is proven contended.</li>
+      <li>The outcome returns on the inbox as a <strong>coordination-layer</strong> event, win or lose.</li>
+    </ol>
+    <p class="sub">
+      A lost claim is a <strong>normal reply</strong>, not an error. It must not be logged as one,
+      and the CLI exits <code>0</code> on it.
+    </p>
+
+    <h3>Conflict handling</h3>
+    <div class="grid g3">
+      <div class="tile">
+        <h4>Task claim</h4>
+        <p style="margin-top:7px">
+          Atomic, exactly one winner. The loser receives <code>{ok:false, owner}</code> and picks
+          another task.
+        </p>
+      </div>
+      <div class="tile">
+        <h4>File scope</h4>
+        <p style="margin-top:7px">
+          Rejected at claim time on glob intersection with a live lock. The response names the
+          conflicting agent and globs, so the caller can choose differently without asking a human.
+        </p>
+      </div>
+      <div class="tile">
+        <h4>Stale claim</h4>
+        <p style="margin-top:7px">
+          The reaper releases claims whose owner has been stale past <code>claim_timeout</code>
+          (default 15 min) and appends <code>task_unblocked</code>. Without it a dead laptop holds a
+          task forever.
+        </p>
+      </div>
+    </div>
+
+    <div class="note warn">
+      <h4>Containment is not intersection, and using one for the other is a silent hole</h4>
+      Two different questions with <em>opposite</em> biases. <em>Does this glob conflict with a live
+      lock?</em> is intersection. <em>Is this glob inside the role&rsquo;s permitted scope?</em> is
+      containment. <code>**</code> <em>intersects</em> <code>functions/**</code> &mdash; so reusing
+      the conflict logic for the permission check would let an agent asking for the whole repo pass
+      a backend check.
+    </div>
+
+    <h3>Why not read-verify-write</h3>
+    <p class="sub">
+      Because it stays racy, and the measured failures are worse than the theory. Against a store
+      with no transactions, a &ldquo;unique&rdquo; column did not enforce under concurrent insert
+      &mdash; 547 winners for 200 tasks. Its compare-and-set fallback was worse and
+      <strong>silent</strong>: 658 winners while the durable table looked perfect, so 458 agents
+      held claims they did not own and no database audit could have found them. Both are reportable
+      platform findings, and both are why the claim primitive is verified contended before it is
+      trusted.
+    </p>
+  </article>
+
+  <!-- 8 ---------------------------------------------------------------- -->
+  <article id="agentic">
+    <h2>8. The <code>.agentic/</code> file contract</h2>
+    <p class="sub">
+      The interface between the CLI and the local agent. <strong>The agent speaks filesystem, not
+      HTTP.</strong> This is also the answer to &ldquo;what is the harness launch contract?&rdquo;
+      &mdash; there isn&rsquo;t one. The contract is a file format, so it works identically for
+      Claude Code, Codex, or a human with <code>echo &gt;&gt; outbox.jsonl</code>.
+    </p>
+
+    <h3>Layout</h3>
+<pre><b>AGENTS.md</b>                        <span class="c">generated role prompt, read at session start</span>
+<b>.agentic/</b>
+  project.json                   <span class="c">{ project_id, name, repo_url, brief, protocol_version }</span>
+  role.md                        <span class="c">responsibilities, file scope, branch prefix</span>
+  protocol.md                    <span class="c">the subset of the protocol the agent needs</span>
+  tasks/current-task.md          <span class="c">the claimed task: title, description, acceptance</span>
+  contracts/                     <span class="c">materialised from the blackboard, read-only</span>
+  decisions/
+  <span class="t">inbox.jsonl</span>                    <span class="c">CLI appends. contract + coordination layers ONLY.</span>
+  inbox.cursor                   <span class="c">agent writes: byte offset it has consumed</span>
+  <span class="t">outbox.jsonl</span>                   <span class="c">agent appends. CLI drains.</span>
+  outbox.cursor                  <span class="c">CLI writes: byte offset it has published</span>
+  outbox.d/                      <span class="c">spool dir for payloads over 4 KiB</span>
+  state.json                     <span class="c">CLI-owned: last_seen_seq, last_written_seq, agent_id</span></pre>
+    <p class="sub">
+      The token lives <strong>outside</strong> <code>.agentic/</code>, in
+      <code>.flotilla-token</code> at mode <code>0600</code>, so the agent&rsquo;s own tree never
+      contains a credential. Add both <code>.agentic/</code> and <code>.flotilla-token</code> to
+      <code>.gitignore</code>.
+    </p>
+
+    <h3>What this buys</h3>
+    <ul class="plain">
+      <li class="yes">The agent holds no token, so prompt injection cannot exfiltrate a credential it never had.</li>
+      <li class="yes">Unsent work survives an agent crash, because it is on disk.</li>
+      <li class="yes">Every message the agent tried to send is auditable, byte for byte.</li>
+      <li class="yes">Offline is a normal state. Unpublished lines accumulate and the agent keeps working.</li>
+    </ul>
+
+    <h3>Framing rules</h3>
+    <p class="sub">
+      JSONL: one object per line, LF-terminated, no embedded raw newlines &mdash; escape as
+      <code>\n</code>. A single <code>write()</code> with <code>O_APPEND</code> is atomic in
+      practice under one page, 4 KiB. POSIX does not guarantee non-interleaving above that, and
+      network filesystems break it outright, so:
+    </p>
+<pre><span class="c"># payloads over 4 KiB — and a contract fragment will exceed it — MUST spool</span>
+write   .agentic/outbox.d/.tmp-&lt;uuid&gt;
+rename  .agentic/outbox.d/&lt;uuid&gt;.json      <span class="c"># rename() on one fs is atomic</span></pre>
+    <p class="sub">
+      A reader never observes a partial file. The CLI drains <code>outbox.jsonl</code> and
+      <code>outbox.d/</code> together, ordered by mtime.
+    </p>
+
+    <h3>Cursors, and why the wire path is at-least-once</h3>
+    <p class="sub">
+      Separate files, never in-band. The CLI reads <code>outbox.cursor</code>, publishes from that
+      offset to EOF, then writes the new offset <strong>after</strong> the publish succeeds. A
+      crash therefore re-sends rather than drops &mdash; which is exactly why
+      <code>appendEvent</code> requires an idempotency key.
+    </p>
+
+    <h3><code>body.local</code></h3>
+    <p class="sub">
+      For contract events the CLI has already fetched the blob and written it to disk, and
+      populates <code>body.local</code> with the path. <strong>The agent opens a file. It never
+      makes a network call.</strong> A fetch failure appends no line and does not advance
+      <code>lastSeen</code> &mdash; announcing a contract whose file is not on disk is worse than
+      announcing it late.
+    </p>
+    <p class="sub">
+      Going the other way, for <code>contract_published</code> the agent names a file it has
+      written into the working tree. The CLI commits it to the blackboard branch, pushes, and
+      rewrites the event body as a pointer before publishing. The agent never deals with commit
+      shas.
+    </p>
+  </article>
+
+  <!-- 9 ---------------------------------------------------------------- -->
+  <article id="blackboard">
+    <h2>9. The git blackboard</h2>
+
+    <div class="note">
+      <h4>One file per fact. Never a shared append-only markdown file.</h4>
+      A single <code>BLACKBOARD.md</code> that every agent appends to conflicts on every merge
+      from every branch, forever. One file per fact makes merges purely additive, so conflicts are
+      structurally impossible. This is the changesets / ADR-directory / migrations pattern. If you
+      take one thing from this section, take this.
+    </div>
+
+    <p class="sub">
+      The claim was measured rather than assumed: two agents publishing concurrently produced
+      1 rejection, 1 rebase, both facts landed, nothing lost.
+    </p>
+
+<pre><span class="t">agentic/blackboard</span>          <span class="c">long-lived, everyone pushes directly, no review gate</span>
+
+contracts/
+  items-api.v1.yaml       <span class="c">kept forever, never edited</span>
+  items-api.v2.yaml       <span class="c">new version = new file</span>
+schema/
+  items.sql
+decisions/
+  0007-qty-is-integer.md</pre>
+
+    <p class="sub">
+      Contracts do not need review to be <em>published</em> &mdash; they need review to be
+      <em>merged into main</em>. Pushing straight to a shared branch removes the case where a
+      blocked agent cannot see a contract sitting on somebody&rsquo;s unmerged feature branch.
+    </p>
+    <p class="sub">
+      <strong>Versions are new files, never edits.</strong> Editing <code>v1</code> in place
+      destroys the diff that tells a consumer what broke &mdash; and it does so while leaving
+      every path-existence check green, which is why the acceptance test asserts v1 is
+      <em>byte-identical</em> rather than merely present.
+    </p>
+    <p class="sub">
+      Contracts are OpenAPI 3.1 fragments, not prose. A contract that is a paragraph in a text
+      field has moved the ambiguity, not removed it.
+    </p>
+  </article>
+
+  <!-- 10 --------------------------------------------------------------- -->
+  <article id="roles">
+    <h2>10. Roles as capabilities</h2>
+    <p class="sub">
+      A role was once a <code>role_slug</code> string plus prose in <code>role.md</code>, which
+      constrained an agent only by asking it nicely. <strong>That is not a permission.</strong>
+    </p>
+<pre>role:
+  slug          "backend"
+  file_scope    ["functions/**", "schema/**"]     <span class="c">may edit</span>
+  deploy_scope  ["functions"]                     <span class="c">may deploy</span>
+  capabilities  claim · publish_contract · open_pr</pre>
+
+    <p class="sub">Three enforcement points, deliberately layered &mdash; a prompt is guidance, the other two are gates:</p>
+    <div class="steps">
+      <div class="step"><div>
+        <h4>The role pack tells the agent its scope</h4>
+        <p><code>AGENTS.md</code> already does this. Guidance only.</p>
+      </div></div>
+      <div class="step"><div>
+        <h4><code>acquireScope</code> refuses globs outside the role&rsquo;s <code>file_scope</code></h4>
+        <p>The existing verified primitive, now bounded by role rather than by whatever the agent asks for.</p>
+      </div></div>
+      <div class="step"><div>
+        <h4>Deploy refuses targets outside <code>deploy_scope</code></h4>
+        <p>Genuinely new &mdash; nothing before this had a concept of a deployable target.</p>
+      </div></div>
+    </div>
+
+    <p class="sub" style="margin-top:22px">
+      Defaults: <code>owner</code>, <code>architect</code>, <code>backend</code>,
+      <code>frontend</code>, <code>qa</code>, <code>client</code>. The
+      <code>backend-builder</code> / <code>frontend-builder</code> role slugs survive every rename
+      &mdash; they are data, not the product name.
+    </p>
+
+    <h3>The client seat</h3>
+<pre>client <b>can</b>:     read the board · append question and suggestion (human layer)
+client <b>cannot</b>:  claim · acquireScope · deploy · publish contracts · run an agent</pre>
+    <p class="sub">
+      Triage is a feature, not overhead: an owner or architect turns a suggestion into a task, or
+      declines it with a recorded reason. That step is where a human decides what agents work on,
+      so it is a surface on the board rather than a side channel.
+    </p>
+
+    <h3>Generated <code>AGENTS.md</code></h3>
+<pre># Backend Builder
+
+You own functions, data access, API contracts and backend tests.
+
+## Your file scope
+You may edit:      functions/**, schema/**
+You may not edit:  client/**, test/e2e/**
+Push to:           agent/backend/&lt;task-slug&gt;
+
+## How you communicate
+Append one JSON line to .agentic/outbox.jsonl. Never call the network.
+Read .agentic/inbox.jsonl from the offset in .agentic/inbox.cursor.
+Contracts you need are already on disk in .agentic/contracts/.
+
+Do not ask other agents questions. If you are blocked, append task_blocked
+with a reason and stop. A human will unblock you.
+
+## Publishing a contract
+Write the file into contracts/ in the working tree, then append
+contract_published naming that file. Do not commit it yourself.
+
+## Permissions
+push branches: yes    open PRs: yes    merge: no</pre>
+    <div class="note warn">
+      <h4>Generated prose is a product surface, and for a long time nothing tested it</h4>
+      A real agent found the generated pack contradicting itself (&ldquo;push branches: yes&rdquo;
+      against &ldquo;never run git yourself&rdquo;), claiming contracts were on disk when the
+      directory was empty, and naming a retired command. The assertion &mdash; that a freshly
+      generated project contains no stale command name and no claim that is false for an empty
+      project &mdash; is the deliverable, not the rename.
+    </div>
+  </article>
+
+  <!-- 11 --------------------------------------------------------------- -->
+  <article id="cli">
+    <h2>11. CLI surface</h2>
+<pre><b>flotilla</b> — agentic coordination CLI
+
+  flotilla <b>init</b> --project &lt;id&gt;  point this install at a coordination project
+  flotilla <b>login</b>                sign in with Google (--anonymous for a disposable identity)
+                                serves the sign-in page locally; --hosted uses the board
+                                --no-browser prints the URL instead of opening one
+  flotilla <b>whoami</b>               the identity this machine is signed in as
+
+  flotilla <b>new</b> &lt;name&gt;           create a project here, connect this repo, write .agentic/
+  flotilla <b>ls</b>                   projects you are a member of
+  flotilla <b>members</b> &lt;project_id&gt; the roster
+
+  flotilla <b>connect</b> &lt;invite&gt;     write AGENTS.md + .agentic/, store the agent token
+  flotilla <b>status</b>               what the board thinks is happening
+  flotilla <b>claim</b> &lt;task_id&gt;      atomic claim, then acquire the declared file scope
+  flotilla <b>report</b> "&lt;message&gt;"   queue one progress line in the outbox
+  flotilla <b>start</b>                drain the outbox, deliver the inbox, heartbeat
+
+Environment:
+  FLOTILLA_UID          your member id; defaults to uid_$USER
+  FLOTILLA_API_URL      coordination API base url
+  FLOTILLA_REPO         owner/repo for the git blackboard
+  FLOTILLA_GIT_TOKEN    token for reading contracts from a private repo</pre>
+    <p class="sub">
+      The <code>BUILDER_*</code> spellings are accepted for one release with a deprecation line on
+      stderr, because someone may have them exported. After that, the check is <strong>zero
+      occurrences of <code>BUILDER_</code> in the built bundle</strong> &mdash; not in the source.
+    </p>
+
+    <h3>Exit codes are deliberate</h3>
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead><tr><th>Code</th><th>Means</th></tr></thead>
+        <tbody>
+          <tr><td class="k"><code>0</code></td><td>It worked &mdash; <strong>including a lost claim, and including being offline</strong></td></tr>
+          <tr><td class="k"><code>1</code></td><td>A real failure: bad usage, revoked token, unpublishable state</td></tr>
+          <tr><td class="k"><code>2</code></td><td>Not connected yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sub">
+      Diagnostics go to stderr so stdout stays parseable &mdash; <code>flotilla status</code> is
+      read by people <em>and</em> by scripts, and interleaving log lines would break both.
+      Unconfigured prints one clean line and the command to run; a stack trace only appears under
+      <code>FLOTILLA_DEBUG=1</code>.
+    </p>
+
+    <h3>The stranger path</h3>
+<pre>install tarball → flotilla init → flotilla login → flotilla new
+   → agent appends claim_requested → bridge claims → card moves
+   → agent reports → ledger</pre>
+    <p class="sub">
+      Tested under a scrubbed environment with a fresh <code>HOME</code>. That matters: an earlier
+      version of this test passed only because <code>GOOGLE_APPLICATION_CREDENTIALS</code> was
+      still exported, so <code>init</code> found credentials it should never need.
+      <strong>A redirected <code>HOME</code> is not a fresh machine.</strong> Login cannot be
+      driven headlessly, so that one step is stubbed and says so; everything either side of it is
+      asserted on artifacts &mdash; the config file, the project document, the claim document, the
+      ledger event &mdash; not on return values.
+    </p>
+  </article>
+
+  <!-- 12 --------------------------------------------------------------- -->
+  <article id="numbers">
+    <h2>12. Measured numbers</h2>
+    <p class="sub">
+      Three routes were built from one spec and measured against one checklist, to replace
+      estimates with real latency and cost. Every figure below names its mechanism, because in the
+      first version of the scoreboard four of six rows were wrong on mechanism while every one of
+      them named its host correctly.
+    </p>
+
+    <h3>Correctness outranks every latency row</h3>
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead><tr><th>Route</th><th>Claim primitive</th><th>Contended</th><th>Result</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Git-only</td><td><code>push --force-with-lease</code></td><td>20 &times; 50</td>
+              <td><span class="badge" data-t="ok">holds</span> 50/50, ref agreed with reply</td></tr>
+          <tr><td class="k">Firestore</td><td><code>runTransaction</code></td><td>5 &times; 200, plus 20 &times; 50 on production</td>
+              <td><span class="badge" data-t="ok">holds</span> 0 of 6 retries used; breaks only past 256&ndash;512 concurrent single-doc writers, 12&ndash;25&times; the design ceiling</td></tr>
+          <tr><td class="k">Data Store</td><td><code>is_unique</code> on INSERT</td><td>5 &times; 200</td>
+              <td><span class="badge" data-t="ci-failed">fails</span> 84.5% &mdash; 547 winners for 200 tasks</td></tr>
+          <tr><td class="k">Data Store</td><td>CAS <code>UPDATE…WHERE</code></td><td>5 &times; 200</td>
+              <td><span class="badge" data-t="ci-failed">fails worse, silently</span> 658 winners, durable state <em>perfect</em></td></tr>
+          <tr><td class="k">Object store</td><td><code>overwrite:false</code></td><td>5 &times; 200</td>
+              <td><span class="badge" data-t="ok">holds</span> 200/200, etag confirmed the right winner</td></tr>
+          <tr><td class="k">NoSQL</td><td>conditional insert</td><td>5 &times; 200</td>
+              <td><span class="badge" data-t="ok">holds</span> 200/200, 0 contradictions &mdash; but 91% of losers get HTTP 500 rather than a semantic rejection</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Latency</h3>
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead><tr><th>Row</th><th>Data Store route</th><th>Firestore route</th><th>Git-only route</th><th>Comparable?</th></tr></thead>
+        <tbody>
+          <tr><td class="k"><code>appendEvent</code> p50</td><td>202 ms</td><td><strong>186 ms</strong></td><td>3,262 ms</td>
+              <td class="k"><strong>No</strong> <a href="#ln1">&#91;a&#93;</a></td></tr>
+          <tr><td class="k">claim p50, uncontended</td><td>127 ms <em>(broken primitive)</em></td><td>257 ms</td><td>2,182 ms</td><td class="k">Yes</td></tr>
+          <tr><td class="k">publish&rarr;visible, floor</td><td>318 ms</td><td>n/a</td><td>7,599 ms</td>
+              <td class="k">Partly <a href="#ln2">&#91;b&#93;</a></td></tr>
+          <tr><td class="k">publish&rarr;visible, <strong>with a subscriber</strong></td><td>~5,200 ms <em>(5 s poll)</em></td><td><strong>191 ms</strong> <em>(listener push)</em></td><td>8,551 ms <em>(5 s poll)</em></td>
+              <td class="k">No <a href="#ln3">&#91;c&#93;</a></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul class="plain">
+      <li id="ln1"><strong>[a]</strong> Firestore is adapter&rarr;database direct with no function hop, so it does strictly less work per call than the route that pays client&rarr;function&rarr;store plus two SELECTs of auth resolution.</li>
+      <li id="ln2"><strong>[b]</strong> Comparable to each other only: both are tight read loops with zero backoff and <strong>no subscriber</strong>.</li>
+      <li id="ln3"><strong>[c]</strong> Mechanism differs &mdash; push versus poll. <strong>This is the row a human watching a dashboard actually feels.</strong></li>
+    </ul>
+    <div class="note warn">
+      <h4>The floor/subscriber split is the most important correction in the record</h4>
+      &ldquo;318 vs 191&rdquo; sat in the table for two runs looking like a 1.7&times; gap. But
+      <code>subscribe</code> on that route throws <code>NotProvisionedError</code> and its real
+      poll interval is 5,000 ms, so the honest gap is <strong>~26&times;</strong>. A floor measured
+      with no subscriber is not the number a user experiences.
+    </div>
+
+    <h3>Cost</h3>
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead><tr><th>Row</th><th>Data Store route</th><th>Firestore route</th><th>Git-only route</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Claim write</td><td>1 object upload <em>(2,000/mo free)</em></td><td>1 transaction: reads + writes</td><td><strong>1 git push, zero metered requests</strong></td></tr>
+          <tr><td class="k">Presence write</td><td><strong>0 updates</strong> <em>(cache TTL is the signal)</em></td><td>1 read + 1 write per beat</td><td><strong>0 durable rows</strong> <em>(timestamp in the ref name)</em></td></tr>
+          <tr><td class="k">Presence at 10 agents</td><td>0%</td><td>72&ndash;144% of the document allowance &rarr; <strong>1.4% on RTDB</strong></td><td>0%</td></tr>
+          <tr><td class="k">Auth overhead per request</td><td><strong>2 SELECTs, every call</strong></td><td>none measured</td><td>none</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sub">
+      Presence moved to RTDB for exactly this reason: on documents it consumed most or all of the
+      free daily write allowance at ten agents; on RTDB it is 1.4% of a bandwidth allowance, and
+      was then <em>observed</em> at 1.3% against that 1.4% estimate.
+    </p>
+
+    <h3>Quota exhaustion has three different shapes, and &ldquo;days of runway&rdquo; fits one</h3>
+    <div class="grid g3">
+      <div class="tile">
+        <h4>Monthly, depleting, hard wall</h4>
+        <p style="margin-top:7px">
+          Refused, not billed. Every authed route spent 2 SELECTs, so one service&rsquo;s
+          exhaustion became every service&rsquo;s outage.
+        </p>
+      </div>
+      <div class="tile">
+        <h4>Daily allowance that resets</h4>
+        <p style="margin-top:7px">
+          Cannot be exhausted by this workload. It throttles rather than stops.
+        </p>
+      </div>
+      <div class="tile">
+        <h4>Rolling hourly bucket that refills</h4>
+        <p style="margin-top:7px">
+          Exceeding it is a 403 that clears within the hour.
+        </p>
+      </div>
+    </div>
+    <p class="sub">
+      Converting all three into &ldquo;days of runway&rdquo; would have manufactured a ratio out of
+      three incompatible mechanisms. Only one route has a depleting budget.
+    </p>
+
+    <h3>Reference measurements, same machine, real remote</h3>
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead><tr><th>Operation</th><th>Median</th></tr></thead>
+        <tbody>
+          <tr><td class="k"><code>git ls-remote</code></td><td>1,347 ms</td></tr>
+          <tr><td class="k"><code>git fetch</code>, no-op</td><td>1,354 ms</td></tr>
+          <tr><td class="k"><code>git commit</code>, local</td><td>116 ms</td></tr>
+          <tr><td class="k"><code>git push</code>, local bare</td><td>197 ms</td></tr>
+          <tr><td class="k">HTTPS GET, static CDN object</td><td><strong>34 ms</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>The reading</h3>
+    <p class="sub">
+      <strong>The routes fail differently, and the choice is which failure you can absorb.</strong>
+      Firestore is the only one with a working push subscriber &mdash; 191 ms against 5,200 and
+      8,551 &mdash; a primitive verified contended, and a quota that resets rather than walls. The
+      git-only route owns the cost column outright and has the most rigorously verified primitive,
+      but loses every latency row by more than an order of magnitude and cannot meet its own
+      advertised freshness: a 5,000 ms poll is 5,040 requests/hour against a 5,000 limit.
+      <strong>Its binding constraint is the dashboard, not the agents</strong> &mdash; found by
+      that route, against that route.
+    </p>
+    <p class="sub">
+      So: <strong>Firestore as the coordination layer, git as the durable store.</strong> Close to
+      what the original design proposed, for reasons the design did not know.
+    </p>
+  </article>
+
+  <!-- 13 --------------------------------------------------------------- -->
+  <article id="decisions">
+    <h2>13. Decisions</h2>
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead><tr><th>#</th><th>Decision</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td class="k">0001</td><td>Firestore for coordination, git for durable facts</td><td><span class="badge" data-t="ok">accepted</span> closed the three-route comparison</td></tr>
+          <tr><td class="k">0002</td><td>The product is called Drydock</td><td><span class="badge" data-t="blocked">superseded</span> by 0004</td></tr>
+          <tr><td class="k">0003</td><td>RTDB stays in <code>us-central1</code></td><td><span class="badge" data-t="ok">accepted</span></td></tr>
+          <tr><td class="k">0004</td><td>The product is called <strong>Flotilla</strong></td><td><span class="badge" data-t="ok">accepted</span> 2026-09-15</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Why Flotilla, and what it cost</h3>
+    <p class="sub">
+      Drydock named the <em>place work happens</em>. <strong>There is no place.</strong> The
+      architecture is deliberately local-first: every agent runs on a different person&rsquo;s
+      laptop, on their own subscription, with no server in the coordination path. A drydock is one
+      fixed location everyone travels to &mdash; precisely what this was built not to be. Flotilla
+      names the agents and gets the shape right: many independent vessels, separately crewed, no
+      mothership, moving together toward one objective.
+    </p>
+    <p class="sub">
+      Stated plainly, because it is a real loss: <strong>Flotilla says nothing about
+      territory.</strong> Ships do not own patches of sea, while Drydock&rsquo;s assigned zones
+      mapped exactly onto <code>acquireScope</code> and non-intersecting globs &mdash; the
+      mechanic that differentiates this product, and the one thing enforced server-side. The
+      runner-up, Mosaic, kept territory and fixed the location problem. It lost on the
+      user&rsquo;s call.
+    </p>
+
+    <h3>The rename boundary, both times</h3>
+    <p class="sub">
+      Rename the brand, the CLI, the package, the installer, every generated file and every
+      user-facing string. <strong>Do not rename</strong> the repo, branches, backend project ids,
+      or collections &mdash; those are live infrastructure, and renaming them breaks running
+      installs and makes the measured comparison record unreadable.
+    </p>
+  </article>
+
+  <!-- 14 --------------------------------------------------------------- -->
+  <article id="open">
+    <h2>14. Open items</h2>
+    <ul class="plain">
+      <li><strong>Login is the fragile surface.</strong> Four orders went into it: the hosted page used a redirect that ITP breaks, the popup needed a real user gesture, the page had to be served from the CLI, and then the CLI never opened a browser at all &mdash; so the user kept landing on the hosted page nobody was fixing. Default now opens the local page and always prints the URL; <code>--no-browser</code> finally does what it says.</li>
+      <li><strong>The CLI is not published.</strong> Publishing claims a name on a public registry permanently and is the user&rsquo;s call. It is publish-<em>ready</em> and verified by installing the tarball into a clean temp directory &mdash; packaging that works in the source tree and fails from a tarball is the normal failure, and only the tarball test tells them apart.</li>
+      <li><strong>Artifacts that only exist in git keep going stale.</strong> Three separate times: the rules were three weeks behind while hosting deployed repeatedly, the compiled output was behind its source, and the served tarball was built before the command a user tried to run existed. The fix is to build the artifact in the pipeline and assert the <em>downloaded</em> thing against the repo.</li>
+      <li><strong>No Cloud Functions, so no budget exposure &mdash; and no server-side authority either.</strong> Blaze has no spending cap by default, only alerts, and <code>firebase-tools</code> cannot set a budget. If it is ever enabled, the budget alert is a hard gate a script must not paper over.</li>
+      <li><strong>Nothing is deployed for anyone but this machine.</strong> The board is live for the bake-off project only; there is no public instance, and the database region is permanent (<code>asia-south1</code>, chosen so the latency comparison was like-for-like rather than flattered by a US default).</li>
+      <li><strong>An unexplained but localised git wedge.</strong> <code>git send-pack</code> wedged while the same host measured 1.9 s in the same minute. Four hypotheses were eliminated by measurement. It is <em>not</em> the adapter &mdash; an instrumented replica ran 30 appends flat with zero wedges at the same instant the harness wedged ~3&times; per append. Mitigated: every git child now gets a deadline and a bounded retry counted in <code>stats.git_timeouts</code>.</li>
+      <li><strong>Two findings worth more than the platform choice</strong>, both reportable upstream: a column documented as &ldquo;enforces unique values&rdquo; does not enforce under concurrent insert, and compare-and-set reports success to <em>every</em> racer while writing exactly one row. The second is the more serious &mdash; a silent violation an audit cannot detect.</li>
+    </ul>
+
+    <h3>Method rules that came out of the work</h3>
+    <ul class="plain">
+      <li>Assert the <strong>artifact</strong>, not the return value: the installed binary, not <code>npm pack</code> exiting 0.</li>
+      <li><strong>A control that never fires has not been run.</strong> A negative assertion is vacuous unless you prove the thing could have appeared.</li>
+      <li><strong>Reasoned is not measured.</strong> A figure with no run behind it does not go in the table; the cell says the route owes it.</li>
+      <li><strong>Verify cross-branch invariants by running, not by reading.</strong> Two branches reported different test counts from the same command while both looked correct from inside.</li>
+      <li>Report the flake rather than keeping the green re-run. A known-intermittent failure only reported when it blocks something becomes a surprise later.</li>
+    </ul>
+  </article>
+
+  <!-- 15 --------------------------------------------------------------- -->
+  <article id="sources">
+    <h2>15. Source map</h2>
+    <p class="sub">
+      This page is a synthesis. These are the normative files, and they win any disagreement.
+    </p>
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead><tr><th>Path</th><th>What it is</th></tr></thead>
+        <tbody>
+          <tr><td class="k"><code>docs/reference/store-interface.md</code></td><td>The contract. Ten operations, wire-level rulings, error mapping</td></tr>
+          <tr><td class="k"><code>docs/protocol/agent-coordination.md</code></td><td>Protocol v0.2. Three layers, envelope, state machines</td></tr>
+          <tr><td class="k"><code>docs/reference/agentic-file-contract.md</code></td><td><code>.agentic/</code> layout, JSONL framing, cursors, spool dir</td></tr>
+          <tr><td class="k"><code>docs/reference/blackboard.md</code></td><td>The git half. One file per fact</td></tr>
+          <tr><td class="k"><code>docs/reference/territory.md</code></td><td>What is shared, what is per-build, and the credential rule</td></tr>
+          <tr><td class="k"><code>docs/designs/dashboard.md</code></td><td>Approved tokens and the locked patterns</td></tr>
+          <tr><td class="k"><code>docs/designs/project-tier.md</code></td><td><code>ProjectDirectory</code>, written against what exists</td></tr>
+          <tr><td class="k"><code>docs/designs/multi-user-auth.md</code></td><td>Sign-in, membership, revocation</td></tr>
+          <tr><td class="k"><code>docs/how-to/acceptance-checklist.md</code></td><td>The identical bar, sections A&ndash;H</td></tr>
+          <tr><td class="k"><code>docs/results/scoreboard.md</code></td><td>The three-route comparison, every figure with its mechanism</td></tr>
+          <tr><td class="k"><code>docs/decisions/</code></td><td>0001&ndash;0004</td></tr>
+          <tr><td class="k"><code>docs/orders/</code></td><td>0001&ndash;0060, append-only. The working record</td></tr>
+          <tr><td class="k"><code>client/public/brand/README.md</code></td><td>Brand assets and usage rules</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </article>
+
+  </div><!-- /doc-body -->
+</div><!-- /doc -->
+</div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>
+      <img class="lockup" src="brand/flotilla-lockup.svg" alt="Flotilla" width="1060" height="260" />
+      <p class="muted" style="font-size:13px;margin-top:12px;max-width:36ch">
+        Internal reference. Not customer documentation.
+      </p>
+    </div>
+    <div class="cols">
+      <div class="col">
+        <p class="eyebrow">Also</p>
+        <a href="index.html">Product page</a>
+        <a href="https://github.com/Sibhimanyu/multiplayer-agentic-builder">Source repository</a>
+      </div>
+    </div>
+    <p class="fine">
+      Where this page and the files under <code>docs/</code> disagree, the files win.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

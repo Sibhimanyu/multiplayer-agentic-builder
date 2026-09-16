@@ -31,18 +31,10 @@ export function Avatar({ agent, small, idx }: { agent: AgentPresence; small?: bo
   );
 }
 
-/**
- * Collapses past 4 so 10 agents does not push the nav around.
- *
- * FOUR, not five: docs/designs/dashboard.md is the declared source of truth for pixels and its
- * edge-case table says ten agents collapse to `+6`, which is 10 - 4. This comment previously
- * said five and the code agreed with the comment rather than the design — an implementation
- * note that drifted from the spec it was meant to describe. No measurement can settle a visual
- * density choice, so the design wins by rule (order 0041).
- */
+/** Collapses past 5 so 10 agents does not push the nav around. */
 export function Presence({ agents }: { agents: AgentPresence[] }) {
   if (agents.length === 0) return <span className="noagents">no agents connected</span>;
-  const shown = agents.slice(0, 4);
+  const shown = agents.slice(0, 5);
   const rest = agents.length - shown.length;
   return (
     <div className="avs">
@@ -79,14 +71,10 @@ export function FreshnessPill({ freshness, generatedAt }: { freshness: Freshness
 export function TopNav({ snap, freshness }: { snap: Snapshot; freshness: Freshness }) {
   return (
     <nav className="nav">
-      {/*
-        Flotilla, decision 0002. The UI BRAND only: the repo, the branches and the project ids
-        deliberately keep their old names, because they are live infrastructure and the
-        comparison record has to stay readable. Renaming a project id would invalidate every
-        measurement that names it.
-      */}
-      <div className="mark">FL</div>
-      <div className="brand">Flotilla</div>
+      <div className="brand-lockup" aria-label="Flotilla">
+        <img className="mark" src="/brand/flotilla-mark.svg" alt="" aria-hidden="true" />
+        <div className="brand">Flotilla</div>
+      </div>
       <div className="sep" />
       <div className="proj">{snap.project_name}</div>
       <div className="repo">{snap.repo_url}</div>
@@ -143,164 +131,24 @@ export function EmptyColumn({ label }: { label: string }) {
     Claimed:         ['Nothing claimed', 'Tasks land here the moment an agent calls claim.'],
     'In progress':   ['Nothing in progress', 'Claimed tasks move here on first local edit.'],
     'Needs review':  ['Nothing awaiting review', 'Finished work with no PR yet appears here.'],
-    // THE POLL, not a webhook. Order 0043 moved PR and CI state into the bridge's GitHub poll,
-    // because Spark has no Cloud Functions and so there is no server to receive a webhook. The
-    // checklist was updated at the time and these two strings were not -- so the
-    // mechanism-naming rule reached the test and missed the product, surviving in the one place
-    // a user actually reads.
-    'PR open':       ['No open pull requests', 'Opened PRs appear here when the bridge polls GitHub.'],
-    Merged:          ['Nothing merged yet', 'Merged work lands here when the bridge polls GitHub.'],
+    'PR open':       ['No open pull requests', 'Opened PRs appear here via the GitHub webhook.'],
+    Merged:          ['Nothing merged yet', 'Merged work lands here from the webhook.'],
   };
   const [head, body] = copy[label] ?? ['Empty', ''];
   return <div className="empty"><b>{head}</b>{body}</div>;
 }
 
-/**
- * One project on the index. Reuses `.card` and the avatar row rather than inventing chrome.
- *
- * `members` are AgentPresence-shaped so Avatar can render them unchanged — a project member is
- * not an agent, but the avatar is a picture of a person either way, and giving it a second
- * near-identical component is how two drifting implementations of one idea start.
- */
-export function ProjectCard({
-  project, onOpen,
-}: {
-  project: {
-    project_id: string; project_name: string; repo_url: string;
-    role: string; members: AgentPresence[];
-  };
-  onOpen: () => void;
-}) {
-  return (
-    <button className="card" onClick={onOpen} data-project={project.project_id}>
-      <div className="title">{project.project_name}</div>
-      <div className="row">
-        <span className="kind" data-k="docs">{project.role}</span>
-        {project.members.length > 0 && (
-          <div className="who"><Presence agents={project.members} /></div>
-        )}
-      </div>
-      {project.repo_url && <div className="branch">{truncPath(project.repo_url)}</div>}
-    </button>
-  );
-}
-
-/**
- * The empty state TEACHES THE COMMAND rather than offering a button.
- *
- * A "New project" button here could not work: creating a project connects a repo, writes
- * .agentic/ and generates role packs, none of which a browser can do. A button that opens a
- * dialog which then explains it cannot proceed is worse than no button. For a developer tool the
- * command IS the affordance.
- */
-export function ProjectsEmpty() {
-  return (
-    <div className="empty">
-      <b>No projects yet</b>
-      Run <code>flotilla new &lt;name&gt;</code> in your repo.
-    </div>
-  );
-}
-
-export interface Suggestion {
-  seq: number;
-  from: string;
-  summary: string;
-  created_at: string;
-  /** Absent while it is still waiting on a human. */
-  decision?: 'accepted' | 'declined';
-  reason?: string;
-}
-
-/**
- * The triage surface. Where a human decides what agents work on.
- *
- * This is the client seat's only route into the system, and the shape of it is the security
- * property made visible: a suggestion is rendered here, on the board, and NOWHERE ELSE. It is a
- * human-layer event, so the file contract keeps it out of every agent's inbox.jsonl without
- * anything having to inspect its text. Prompt injection from this seat is impossible by plumbing
- * rather than caught by a filter — which is why the text below is displayed verbatim and not
- * sanitised. Sanitising it would imply the text is dangerous somewhere, and the point is that it
- * is not reachable from anywhere it could be.
- *
- * Accept turns it into a task, which agents DO see. Decline records a reason, which they do not
- * need to. Both decisions are the human's, and only the accepted one becomes work.
- */
-export function TriagePanel({
-  suggestions, canTriage, onAccept, onDecline,
-}: {
-  suggestions: Suggestion[];
-  /** Only owner and architect hold the triage capability. */
-  canTriage: boolean;
-  onAccept: (seq: number) => void;
-  onDecline: (seq: number) => void;
-}) {
-  const pending = suggestions.filter((s) => !s.decision);
-  const settled = suggestions.filter((s) => s.decision);
-
-  return (
-    <section className="col" key="triage" data-triage="true">
-      <div className="col-head">
-        <h3>Suggestions</h3><span className="count">{pending.length}</span>
-      </div>
-      <div className="col-body">
-        {suggestions.length === 0 ? (
-          <div className="empty">
-            <b>Nothing to triage</b>
-            Client questions and suggestions land here for a human to turn into tasks.
-          </div>
-        ) : (
-          <>
-            {pending.map((s) => (
-              <div className="card" key={s.seq} data-suggestion={s.seq}>
-                <div className="title">{s.summary}</div>
-                <div className="row">
-                  <span className="kind" data-k="docs">{s.from}</span>
-                  {canTriage && (
-                    <span className="who" style={{ display: 'flex', gap: 6 }}>
-                      <button className="cta" onClick={() => onAccept(s.seq)}>Make a task</button>
-                      <button className="x" onClick={() => onDecline(s.seq)} aria-label="Decline">&times;</button>
-                    </span>
-                  )}
-                </div>
-              </div>
-            ))}
-            {settled.map((s) => (
-              <div className="card" key={s.seq} data-suggestion={s.seq} data-merged={s.decision === 'declined'}>
-                <div className="title">{s.summary}</div>
-                <div className="row">
-                  <span className="badge" data-t={s.decision === 'accepted' ? 'review' : 'blocked'}>
-                    {s.decision}
-                  </span>
-                </div>
-                {/* A decline without a reason is just a no. The reason is what makes it answerable. */}
-                {s.reason && <div className="branch">{s.reason}</div>}
-              </div>
-            ))}
-          </>
-        )}
-      </div>
-    </section>
-  );
-}
-
 export function DetailPanel({
-  task, agent, contract, blockedChain, onClose,
+  task, agent, contract, blockedByTask, onClose,
 }: {
   task: TaskView; agent?: AgentPresence; contract?: ContractPointer;
-  /**
-   * The FULL blocked chain, A -> B -> C, nearest blocker first. Walked by the caller.
-   *
-   * It has to be the caller: `blocked_by` is a TaskId string, and resolving it needs the task
-   * index that App holds and this component deliberately does not — data in via props, no
-   * lookups in here. App.tsx's blockedChain() does the walk and is cycle-guarded.
-   *
-   * This replaced a single `blockedByTask?: TaskView` whose loop could only ever render the
-   * immediate blocker, so the design's A->B->C case was unbuildable rather than merely unbuilt.
-   */
-  blockedChain?: TaskView[]; onClose: () => void;
+  blockedByTask?: TaskView; onClose: () => void;
 }) {
-  const chain = blockedChain ?? [];
+  // Full chain, not just the immediate blocker.
+  const chain: TaskView[] = [];
+  let cursor = blockedByTask;
+  const guard = new Set<string>();
+  while (cursor && !guard.has(cursor.task_id)) { guard.add(cursor.task_id); chain.push(cursor); break; }
 
   return (
     <aside className="panel">

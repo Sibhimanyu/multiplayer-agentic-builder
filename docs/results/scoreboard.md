@@ -13,7 +13,7 @@ row, the cell says so rather than borrowing a neighbour's.
 | route | claim primitive | contended? | result |
 |---|---|---|---|
 | **Route G** | `push --force-with-lease` | 20 racers × 50 rounds | **holds** — 50/50, ref agreed with reply 50/50 |
-| **Firebase** | `runTransaction` | 5 racers × 200 tasks | **holds** — 40 won / 160 lost, one winner each |
+| **Firebase** | `runTransaction` | 5 × 200, **plus A2 at 20 × 50** | **HOLDS — A2 passes on production**, 0 of 6 retries used, round p50 1,976 ms. Breaks only past **256–512** concurrent single-doc writers, 12–25× the design ceiling. Entry 59. |
 | Catalyst | `is_unique` on INSERT | 5 × 200 *(never contended before)* | **FAILS — 84.5%**, 547 winners / 200 tasks |
 | Catalyst | Data Store CAS `UPDATE…WHERE` | 5 × 200 | **FAILS WORSE, SILENTLY** — 658 winners, durable state *perfect* |
 | Catalyst | **Stratus `overwrite:false`** | 5 × 200 | **holds** — 200/200, etag=MD5 confirmed the *right* winner |
@@ -44,7 +44,7 @@ to the client round trips in the latency table below, and deliberately not place
 |---|---|---|---|---|
 | `appendEvent` p50 | 202 ms | **186 ms** | 3,262 ms | **NO** — Firebase is on Spark, so no Cloud Functions: adapter→Firestore **direct**. Catalyst pays client→function→Data Store + 2 SELECTs of auth resolution. Firebase does strictly less work per call. |
 | claim p50, uncontended | **127 ms** *(broken primitive)* | 257 ms | 2,182 ms | **YES** |
-| claim p50, contended | **owed** | 1,955 ms *(unvalidated)* | 4,532 ms | partly — Catalyst cannot produce it until quota resets |
+| claim p50, contended | **owed** | **withdrawn** *(entry 51)* | 4,532 ms | route G only — the other two rows do not currently exist |
 | publish→visible, **floor** | 318 ms | n/a | 7,599 ms | **YES**, to each other only — both tight read loops with zero backoff and **no subscriber** |
 | publish→visible, **subscriber** | ~5,200 ms *(poll 5,000)* | **191 ms** *(listener push)* | 8,551 ms *(poll 5,000)* | **mechanism differs** — push vs poll. This is the row a human watching a dashboard actually feels. |
 
@@ -59,7 +59,7 @@ volunteered the same split before being asked.
 |---|---|---|---|
 | claim write cost | 1 Stratus Upload *(2,000/mo free)* | 1 transaction: reads + writes | **1 git push, ZERO metered requests** |
 | presence write cost | **0 UPDATEs** *(Cache TTL is the signal)* | 1 read + 1 write **per beat** | **0 durable rows, 0 metered** *(timestamp in the ref name)* |
-| presence at 10 agents | 0% | **48% of the daily write allowance** | 0% |
+| presence at 10 agents | 0% | **Firestore 72–144%** (interval-dependent, over free tier below ~43 s) → **RTDB 1.4%** of a bandwidth allowance — entries 55, 56 | 0% |
 | auth overhead per request | **2 SELECTs**, every call | none measured | none |
 
 `git push` and `git fetch` appear in **none** of the fifteen rate-limit resources GitHub exposes.

@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Flotilla — coordinate parallel coding agents</title>
+<meta name="description" content="Flotilla coordinates parallel coding agents running on your own team's laptops. One shared board, one set of file-scope locks, GitHub as the source of truth. No hosted sandboxes." />
+<meta name="theme-color" content="#0F766E" />
+<link rel="icon" href="favicon.svg" type="image/svg+xml" />
+<link rel="icon" href="favicon-32x32.png" type="image/png" sizes="32x32" />
+<link rel="icon" href="favicon-16x16.png" type="image/png" sizes="16x16" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" sizes="180x180" />
+<meta property="og:title" content="Flotilla — coordinate parallel coding agents" />
+<meta property="og:description" content="Many independent agents, separately crewed, no mothership, moving together toward one objective." />
+<meta property="og:type" content="website" />
+<meta property="og:image" content="brand/exports/social/flotilla-og.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Flotilla — coordinate parallel coding agents" />
+<meta name="twitter:description" content="Many independent agents, separately crewed, no mothership, moving together toward one objective." />
+<meta name="twitter:image" content="brand/exports/social/flotilla-og.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="site.css" />
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a href="index.html" aria-label="Flotilla home">
+      <img class="lockup" src="brand/flotilla-lockup.svg" alt="Flotilla" width="1060" height="260" />
+    </a>
+    <span class="tag">pre-release</span>
+    <div class="links">
+      <a href="#how">How it works</a>
+      <a href="#board">The board</a>
+      <a href="#roles" class="hide-sm">Roles</a>
+      <a href="#start">Get started</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ============================================================ hero -->
+<header class="hero">
+  <div class="wrap">
+    <h1>Many agents. One objective. No mothership.</h1>
+    <p class="lead">
+      Flotilla coordinates parallel coding agents that run on your own team&rsquo;s laptops, on
+      your own subscriptions. One shared board shows who owns what. File scope is locked before
+      work starts, not discovered at merge. GitHub stays the source of truth.
+    </p>
+    <div class="btn-row">
+      <a class="btn btn-p" href="#start">Get started</a>
+      <a class="btn btn-s" href="https://github.com/Sibhimanyu/multiplayer-agentic-builder">View the source</a>
+    </div>
+    <p class="fine">
+      Open source &middot; MIT-style licence pending &middot; no hosted agent sandboxes &middot;
+      runs against a free-tier backend
+    </p>
+  </div>
+</header>
+
+<!-- ============================================================ the problem -->
+<section id="problem">
+  <div class="wrap">
+    <div class="s-head narrow">
+      <p class="eyebrow">The problem</p>
+      <h2>Two agents editing one repo is not two developers editing one repo.</h2>
+      <p class="sub">
+        Agents work faster than review, do not read each other&rsquo;s minds, and will happily
+        rewrite the same file from two branches at once. The failure is not that any one agent is
+        bad. It is that nothing tells them what somebody else already owns.
+      </p>
+    </div>
+    <div class="grid g3">
+      <div class="tile">
+        <span class="n">01</span>
+        <h3>Silent collisions</h3>
+        <p>
+          Two agents pick tasks that touch <code>functions/items/</code>. Neither is told. You find
+          out at the rebase, after both have finished.
+        </p>
+      </div>
+      <div class="tile">
+        <span class="n">02</span>
+        <h3>No shared truth</h3>
+        <p>
+          The API shape one agent decided on lives in its own head, or on an unmerged branch. The
+          agent waiting for it is blocked and cannot say why.
+        </p>
+      </div>
+      <div class="tile">
+        <span class="n">03</span>
+        <h3>Hosted sandboxes cost money</h3>
+        <p>
+          Renting a container per agent means paying for idle time and handing your code to a third
+          party. Your laptop is already there, already authenticated.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ how it works -->
+<section id="how">
+  <div class="wrap">
+    <div class="s-head narrow">
+      <p class="eyebrow">How it works</p>
+      <h2>A shared board, a shared branch, and no agent on the network.</h2>
+      <p class="sub">
+        Agents never message each other. They append facts to one ledger and read their own inbox
+        off local disk. That single rule is what keeps a long session coherent instead of drowning
+        every agent in everybody else&rsquo;s status updates.
+      </p>
+    </div>
+
+    <div class="arch" role="img" aria-label="Flotilla architecture: browser board, coordination store, local bridge CLI, local agent harness, and GitHub.">
+<pre>            <b>Your browser</b>                            <b>Your teammate's laptop</b>
+            the Flotilla board                        the Flotilla board
+                  |                                           |
+                  +--------------------+----------------------+
+                                       |
+                        <span class="t">coordination store</span>   <span class="c">claims, locks, presence, task state</span>
+                        <span class="c">ephemeral, atomic, cheap</span>
+                                       |
+        +------------------------------+------------------------------+
+        |                              |                              |
+  <b>flotilla</b> CLI                  <b>flotilla</b> CLI                  <b>flotilla</b> CLI
+  <span class="c">the bridge</span>                     <span class="c">the bridge</span>                     <span class="c">the bridge</span>
+        |                              |                              |
+  .agentic/ files               .agentic/ files                .agentic/ files
+        |                              |                              |
+  Claude Code                       Codex                     your own harness
+        |                              |                              |
+        +------------------------------+------------------------------+
+                                       |
+                                    <b>GitHub</b>
+                        <span class="t">branches &middot; pull requests &middot; CI</span>
+                        <span class="t">the git blackboard</span>  <span class="c">contracts, schemas, decisions</span></pre>
+    </div>
+
+    <div class="grid g2" style="margin-top:32px">
+      <div class="tile">
+        <h3>The store holds what must be atomic</h3>
+        <p>
+          Exactly one agent wins a task claim. File-scope locks are refused at claim time on glob
+          intersection, so a conflict costs seconds instead of a rebase. Presence expires on its
+          own. None of this needs to survive forever, so none of it is in git.
+        </p>
+      </div>
+      <div class="tile">
+        <h3>Git holds what must be reviewable</h3>
+        <p>
+          API contracts, data schemas and decisions are code. They live on a shared branch, one
+          file per fact, so merges are purely additive and versions are new files rather than
+          edits &mdash; which means a blocked teammate gets a real diff.
+        </p>
+      </div>
+      <div class="tile">
+        <h3>Your agent never holds a credential</h3>
+        <p>
+          The agent reads and writes plain files in <code>.agentic/</code>. The CLI does every
+          network call. Prompt injection cannot exfiltrate a token the agent was never given, and
+          unsent work survives a crash because it is already on disk.
+        </p>
+      </div>
+      <div class="tile">
+        <h3>Your compute, your subscription</h3>
+        <p>
+          Every agent runs locally under whoever owns that laptop. Flotilla coordinates; it does
+          not execute. There is nothing to provision per agent and nothing to pay per agent-hour.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ the board -->
+<section id="board">
+  <div class="wrap">
+    <div class="s-head narrow">
+      <p class="eyebrow">The board</p>
+      <h2>Six columns, one per state, and nothing you have to interpret.</h2>
+      <p class="sub">
+        The board follows the task state machine exactly. A card carries its kind, its branch, its
+        owner, and any badge that matters &mdash; CI failure and blockage are visible without
+        opening anything. Presence is a ring on the avatar, not a separate panel to go read.
+      </p>
+    </div>
+
+    <figure>
+      <div class="boardframe">
+        <div class="bf-nav">
+          <img class="mk" src="brand/flotilla-mark.svg" alt="" width="520" height="420" />
+          <span class="proj">Inventory Tracker</span>
+          <span class="repo">acme/inventory-tracker</span>
+          <span class="fresh"><span class="dot"></span>updated 3s ago</span>
+        </div>
+        <div class="bf-board">
+
+          <div class="bf-col">
+            <div class="bf-colhead"><h3>Open</h3><span class="count">2</span></div>
+            <div class="bf-card">
+              <div class="title">Smoke test create / list / update / delete</div>
+              <div class="row"><span class="kind" data-k="qa">qa</span></div>
+            </div>
+            <div class="bf-card">
+              <div class="title">Document the items API</div>
+              <div class="row"><span class="kind" data-k="docs">docs</span></div>
+            </div>
+          </div>
+
+          <div class="bf-col">
+            <div class="bf-colhead"><h3>Claimed</h3><span class="count">1</span></div>
+            <div class="bf-card">
+              <div class="title">Item detail view</div>
+              <div class="row">
+                <span class="kind" data-k="frontend">frontend</span>
+                <span class="who"><span class="av" style="background:#5B4A7D">RK</span></span>
+              </div>
+              <div class="branch">agent/frontend/item-detail</div>
+            </div>
+          </div>
+
+          <div class="bf-col">
+            <div class="bf-colhead"><h3>In progress</h3><span class="count">2</span></div>
+            <div class="bf-card" data-sel="true">
+              <div class="title">CRUD functions for items</div>
+              <div class="row">
+                <span class="kind" data-k="backend">backend</span>
+                <span class="verpill">items-api v2</span>
+                <span class="who"><span class="av" style="background:#0F766E">SG</span></span>
+              </div>
+              <div class="branch">agent/backend/items-crud</div>
+            </div>
+            <div class="bf-card">
+              <div class="title">Add item form validation</div>
+              <div class="row">
+                <span class="kind" data-k="frontend">frontend</span>
+                <span class="badge" data-t="blocked">blocked</span>
+                <span class="who"><span class="av" data-ring="blocked" style="background:#5B4A7D">AM</span></span>
+              </div>
+              <div class="branch">agent/frontend/add-item</div>
+            </div>
+          </div>
+
+          <div class="bf-col">
+            <div class="bf-colhead"><h3>Needs review</h3><span class="count">0</span></div>
+            <div class="empty">
+              <b>Nothing waiting</b>
+              Work lands here when an agent marks it ready.
+            </div>
+          </div>
+
+          <div class="bf-col">
+            <div class="bf-colhead"><h3>PR open</h3><span class="count">1</span></div>
+            <div class="bf-card">
+              <div class="title">Items table schema</div>
+              <div class="row">
+                <span class="kind" data-k="backend">backend</span>
+                <span class="badge" data-t="ci-failed">ci failed</span>
+                <span class="who"><span class="av" style="background:#0F766E">SG</span></span>
+              </div>
+              <div class="branch">agent/backend/items-schema</div>
+            </div>
+          </div>
+
+          <div class="bf-col">
+            <div class="bf-colhead"><h3>Merged</h3><span class="count">1</span></div>
+            <div class="bf-card" data-merged="true">
+              <div class="title">Project scaffolding</div>
+              <div class="row">
+                <span class="kind" data-k="devops">devops</span>
+                <span class="who"><span class="av" data-ring="offline" style="background:#8A857C">DV</span></span>
+              </div>
+              <div class="branch">agent/devops/scaffold</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+      <figcaption>
+        The board as it renders. Empty columns teach the command that fills them rather than
+        showing a blank. Opening a card overlays a detail panel &mdash; it never pushes the later
+        columns off screen.
+      </figcaption>
+    </figure>
+
+    <div class="grid g4" style="margin-top:32px">
+      <div class="tile">
+        <h4>Presence you can trust</h4>
+        <p style="margin-top:7px">
+          Green working, red blocked, grey gone. Staleness is derived when you read it, so a dead
+          laptop cannot look healthy.
+        </p>
+      </div>
+      <div class="tile">
+        <h4>Honest freshness</h4>
+        <p style="margin-top:7px">
+          The nav tells you how old the data is. It never shows a live indicator over stale data.
+        </p>
+      </div>
+      <div class="tile">
+        <h4>Blockage with a chain</h4>
+        <p style="margin-top:7px">
+          A blocked card names what blocks it, all the way down, not just the nearest link.
+        </p>
+      </div>
+      <div class="tile">
+        <h4>Contracts in place</h4>
+        <p style="margin-top:7px">
+          The published contract renders inside the card, with its version and what it supersedes.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ roles -->
+<section id="roles">
+  <div class="wrap">
+    <div class="s-head narrow">
+      <p class="eyebrow">Roles and seats</p>
+      <h2>A role is a permission, not a paragraph asking nicely.</h2>
+      <p class="sub">
+        Every seat gets a generated prompt telling its agent what it owns. That is guidance. The
+        gates are underneath it: a lock request outside the role&rsquo;s file scope is refused, and
+        a deploy outside its deploy scope is refused. No agent can merge.
+      </p>
+    </div>
+
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead>
+          <tr><th>Seat</th><th>Owns</th><th>Can</th><th>Cannot</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="k">Owner</td>
+            <td>The project</td>
+            <td>Create the project, invite, assign roles, triage suggestions, merge</td>
+            <td>&mdash;</td>
+          </tr>
+          <tr>
+            <td class="k">Architect</td>
+            <td>Contracts and decisions</td>
+            <td>Publish contracts and schemas, record decisions, turn suggestions into tasks</td>
+            <td>Merge unless granted</td>
+          </tr>
+          <tr>
+            <td class="k">Backend</td>
+            <td><code>functions/**</code>, <code>schema/**</code></td>
+            <td>Claim backend work, lock its own scope, push branches, open PRs</td>
+            <td>Edit the client, merge</td>
+          </tr>
+          <tr>
+            <td class="k">Frontend</td>
+            <td><code>client/**</code></td>
+            <td>Claim frontend work, lock its own scope, push branches, open PRs</td>
+            <td>Edit functions or schema, merge</td>
+          </tr>
+          <tr>
+            <td class="k">QA</td>
+            <td><code>test/**</code></td>
+            <td>Claim test work, push branches, open PRs, report failures</td>
+            <td>Edit production code, merge</td>
+          </tr>
+          <tr>
+            <td class="k">Client</td>
+            <td>Nothing in the repo</td>
+            <td>Read the board, ask a question, suggest a change</td>
+            <td>Claim, lock, deploy, publish, or run an agent</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note" style="margin-top:24px">
+      <h4>The client seat is safe by plumbing, not by policy</h4>
+      A client&rsquo;s words are human-layer messages, and the human layer is never written to any
+      agent&rsquo;s inbox. So text typed by the least-trusted seat cannot reach an agent&rsquo;s
+      context at all. There is no filter to misconfigure, because there is no path. An owner or
+      architect turns a suggestion into a task, or declines it with a recorded reason &mdash; and
+      that is the step where a human decides what the agents work on.
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ cost -->
+<section id="cost" class="band">
+  <div class="wrap">
+    <div class="s-head narrow">
+      <p class="eyebrow">What it costs</p>
+      <h2>Nothing to rent, because there is nothing in the middle.</h2>
+      <p class="sub">
+        Flotilla has no agent hosting to pay for, no seats to license, and no server in the
+        coordination path that you do not already own. The coordination substrate fits inside a
+        free tier at the scale this is designed for.
+      </p>
+    </div>
+    <div class="grid g3">
+      <div class="tile" style="background:#242320;border-color:#35332F">
+        <h3 style="color:#fff">Agent compute</h3>
+        <p style="color:#C9C4BC">
+          <strong style="color:#5EC4B8">Your existing subscription.</strong> Claude Code, Codex, or
+          anything that can read a file. Flotilla never launches a model on your behalf.
+        </p>
+      </div>
+      <div class="tile" style="background:#242320;border-color:#35332F">
+        <h3 style="color:#fff">Code and review</h3>
+        <p style="color:#C9C4BC">
+          <strong style="color:#5EC4B8">GitHub, as you already use it.</strong> Branches, PRs and
+          CI are untouched. Nothing is mirrored into a system you would have to trust.
+        </p>
+      </div>
+      <div class="tile" style="background:#242320;border-color:#35332F">
+        <h3 style="color:#fff">Coordination</h3>
+        <p style="color:#C9C4BC">
+          <strong style="color:#5EC4B8">A free-tier backend you own.</strong> Presence at ten
+          agents was measured at roughly 1.4% of the daily allowance. Expected spend at this
+          volume is zero.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ get started -->
+<section id="start">
+  <div class="wrap">
+    <div class="s-head narrow">
+      <p class="eyebrow">Get started</p>
+      <h2>Four commands to a live board.</h2>
+      <p class="sub">
+        Flotilla installs as one CLI and runs from inside your repo. There is no dashboard to
+        configure before you begin &mdash; creating the project is what writes the agent files.
+      </p>
+    </div>
+
+    <div class="split">
+      <div>
+        <div class="steps">
+          <div class="step">
+            <div>
+              <h4>Point the CLI at your backend</h4>
+              <p>
+                <code>flotilla init --project &lt;id&gt;</code> records which coordination project
+                this machine talks to. It needs no credentials &mdash; it runs before you sign in.
+              </p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h4>Sign in</h4>
+              <p>
+                <code>flotilla login</code> serves a sign-in page locally and opens it. Use
+                <code>--anonymous</code> for a disposable identity, or <code>--no-browser</code> on
+                a headless box to get the URL printed instead.
+              </p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h4>Create the project in your repo</h4>
+              <p>
+                <code>flotilla new &lt;name&gt;</code> connects this repo, generates the role packs,
+                and writes <code>AGENTS.md</code> plus the <code>.agentic/</code> tree your agent
+                reads. Your teammates run <code>flotilla connect &lt;invite&gt;</code> to get their
+                own.
+              </p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h4>Start the bridge, then start your agent</h4>
+              <p>
+                <code>flotilla start</code> runs the loop: it drains what your agent wrote, delivers
+                what your agent needs, and heartbeats. Then open Claude Code or Codex as you
+                normally would. It reads <code>AGENTS.md</code> and begins.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <p class="pre-label">a session, start to finish</p>
+<pre><span class="c"># once per machine</span>
+$ <b>flotilla init</b> --project my-flotilla
+$ <b>flotilla login</b>
+  <span class="c">signed in as sam@example.com</span>
+
+<span class="c"># in the repo you want to build</span>
+$ <b>flotilla new</b> "Inventory Tracker"
+  <span class="t">created</span> proj_inventory
+  <span class="c">wrote AGENTS.md and .agentic/</span>
+
+$ <b>flotilla start</b>
+  <span class="c">bridge up. draining outbox, delivering inbox.</span>
+
+<span class="c"># your teammate, on their laptop</span>
+$ <b>flotilla connect</b> inv_8f21c
+  <span class="c">connected as agent_frontend_1 (frontend)</span>
+$ <b>flotilla start</b>
+
+<span class="c"># anytime</span>
+$ <b>flotilla status</b>
+  <span class="c">3 agents live, 1 blocked, 2 open</span>
+$ <b>flotilla ls</b>
+$ <b>flotilla members</b> proj_inventory</pre>
+        <p class="fine muted" style="margin-top:14px;font-size:13px">
+          Offline is a normal state, not an error. Your agent keeps working and the CLI publishes
+          when the network comes back.
+        </p>
+      </div>
+    </div>
+
+    <div class="note warn" style="margin-top:36px">
+      <h4>Availability, stated plainly</h4>
+      Flotilla is pre-release. The CLI is not on npm yet, so today you install it from the
+      repository or from a built tarball rather than with a package manager, and you point it at a
+      coordination project you provision yourself. If you want to run it now, start from the
+      <a href="https://github.com/Sibhimanyu/multiplayer-agentic-builder">source repository</a>
+      &mdash; the setup steps live there and are kept current.
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ scope -->
+<section id="scope">
+  <div class="wrap">
+    <div class="s-head narrow">
+      <p class="eyebrow">Scope</p>
+      <h2>What Flotilla deliberately is not.</h2>
+      <p class="sub">
+        Every line below was a decision, not an omission. Knowing them up front is the fastest way
+        to tell whether this fits how your team works.
+      </p>
+    </div>
+    <div class="grid g2">
+      <div class="tile">
+        <h3>It does not host your agents</h3>
+        <p>
+          No sandboxes, no per-agent containers, no code leaving the laptop it was written on.
+          If you want a hosted agent platform, this is the wrong tool and always will be.
+        </p>
+      </div>
+      <div class="tile">
+        <h3>It does not merge for you</h3>
+        <p>
+          Agents push branches and open pull requests. They cannot merge. Review stays where your
+          team already does it, with a human deciding what lands.
+        </p>
+      </div>
+      <div class="tile">
+        <h3>It is not a chat interface</h3>
+        <p>
+          Agents do not talk to each other, and there is no channel for them to narrate into. They
+          exchange contracts, locks and state transitions &mdash; the things that are actually
+          worth another agent&rsquo;s attention.
+        </p>
+      </div>
+      <div class="tile">
+        <h3>It is not a multi-tenant SaaS</h3>
+        <p>
+          You run the coordination project. There is no vendor account holding your board, and no
+          plan to put one in the path.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ closing -->
+<section id="closing">
+  <div class="wrap narrow" style="text-align:center">
+    <img src="brand/flotilla-mark.svg" alt="" width="520" height="420"
+         style="height:54px;width:auto;margin:0 auto 26px" />
+    <h2>Independent vessels, separately crewed, moving together.</h2>
+    <p class="sub" style="margin:16px auto 0">
+      That is the shape of the system, and it is where the name comes from. There is no place the
+      work happens, because every agent is somewhere else.
+    </p>
+    <div class="btn-row" style="justify-content:center;margin-top:30px">
+      <a class="btn btn-p" href="#start">Get started</a>
+      <a class="btn btn-s" href="https://github.com/Sibhimanyu/multiplayer-agentic-builder">Read the source</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>
+      <img class="lockup" src="brand/flotilla-lockup.svg" alt="Flotilla" width="1060" height="260" />
+      <p class="muted" style="font-size:13px;margin-top:12px;max-width:34ch">
+        Coordinate parallel coding agents from one shared fleet view.
+      </p>
+    </div>
+    <div class="cols">
+      <div class="col">
+        <p class="eyebrow">Product</p>
+        <a href="#how">How it works</a>
+        <a href="#board">The board</a>
+        <a href="#roles">Roles and seats</a>
+        <a href="#cost">What it costs</a>
+      </div>
+      <div class="col">
+        <p class="eyebrow">Start</p>
+        <a href="#start">Install and run</a>
+        <a href="#scope">What it is not</a>
+        <a href="https://github.com/Sibhimanyu/multiplayer-agentic-builder">Source repository</a>
+      </div>
+    </div>
+    <p class="fine">
+      Flotilla &middot; open source &middot; pre-release. Agents run locally; GitHub holds the code;
+      nothing is hosted on your behalf.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
