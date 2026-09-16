@@ -31,12 +31,12 @@ import {
   collection,
   connectFirestoreEmulator,
   doc,
-  getFirestore,
   limit,
   onSnapshot,
   query,
   type Firestore,
 } from 'firebase/firestore';
+import { boardDb } from './db';
 
 import { explainAuthError, watchSession } from './session';
 import { STALE_AFTER_MS } from './types';
@@ -148,7 +148,7 @@ class BrowserFirestoreStore implements BrowserStore {
 
   constructor(opts: FirestoreStoreOptions) {
     const app = opts.app ?? initializeApp(opts.config);
-    this.db = getFirestore(app);
+    this.db = boardDb(app);
     this.auth = getAuth(app);
     this.debounce_ms = opts.debounce_ms ?? 40;
 

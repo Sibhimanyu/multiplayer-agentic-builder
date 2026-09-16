@@ -79,6 +79,41 @@ export function ProjectsIndex({
 }
 
 /**
+ * Waiting, with a deadline and a name for what is being waited on.
+ *
+ * TWO DIFFERENT HANGS USED TO RENDER THE SAME PIXELS: the session gate waiting on
+ * onAuthStateChanged, and the projects route waiting on a collection-group query. Both printed
+ * "Connecting…" in the same grey, so a screenshot of a stuck board could not say which half was
+ * stuck -- the ambiguity store/firebase.ts already argues is a bug, reintroduced one layer up.
+ *
+ * After `after_ms` it stops pretending progress is being made and says what did not arrive. It
+ * cannot recover on its own (neither Firebase call has a timeout to cancel), but it turns a blank
+ * page into a report, and a reload is a real option the user could not see before.
+ */
+function Connecting({ what, after_ms = 8000 }: { what: string; after_ms?: number }) {
+  const [stalled, setStalled] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setStalled(true), after_ms);
+    return () => clearTimeout(t);
+  }, [after_ms]);
+
+  const base = { padding: 28, color: 'var(--muted)', maxWidth: 620, lineHeight: 1.6 } as const;
+  if (!stalled) return <div style={base}>Connecting…</div>;
+  return (
+    <div style={base}>
+      <p style={{ color: 'var(--ink)' }}>Still waiting on {what}.</p>
+      <p>
+        This usually means the browser could not hold the connection open. Safari with
+        cross-site tracking prevention, or a proxy that buffers responses, both do this.
+      </p>
+      <p style={{ marginTop: 12 }}>
+        <button className="cta" onClick={() => window.location.reload()}>Reload</button>
+      </p>
+    </div>
+  );
+}
+
+/**
  * The pre-board states, rendered as themselves.
  *
  * Deliberately the same shape as the "Connecting…" placeholder this replaces -- a padded block
@@ -362,7 +397,7 @@ function SignedIn({ pathname, navigate }: { pathname: string; navigate: (to: str
 
   // Still asking. NOT the sign-in screen -- see useSession.
   if (session === undefined) {
-    return <div style={{ padding: 28, color: 'var(--muted)' }}>Connecting…</div>;
+    return <Connecting what="the sign-in check" />;
   }
   if (session === null) {
     return (
@@ -432,7 +467,7 @@ export function ProjectsIndexRoute({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.uid]);
 
-  if (!ready) return <div style={{ padding: 28, color: 'var(--muted)' }}>Connecting…</div>;
+  if (!ready) return <Connecting what="your project list" />;
   return (
     <ProjectsIndex
       projects={projects} onOpen={onOpen} session={session} onSignOut={onSignOut}

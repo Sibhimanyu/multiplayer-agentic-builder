@@ -13,12 +13,12 @@
 // a collection-group rule permitting exactly that query and no wider one.
 
 import type { FirebaseApp } from 'firebase/app';
+import { boardDb } from './db';
 import {
   collection,
   collectionGroup,
   getDoc,
   getDocs,
-  getFirestore,
   query,
   where,
   type Firestore,
@@ -39,7 +39,7 @@ export type ProjectSummary = ProjectRecord & {
 export class BrowserDirectory {
   private readonly db: Firestore;
   constructor(app: FirebaseApp) {
-    this.db = getFirestore(app);
+    this.db = boardDb(app);
   }
 
   /**
