@@ -84,18 +84,13 @@ try {
   // So the anonymous identity it needs is now obtained the way a user obtains it, by clicking the
   // choice the sign-in screen offers. That the click is here at all is the assertion: if anonymous
   // ever becomes the silent default again, this button will not exist and this probe fails first.
-  // SYNCHRONISED ON A STRUCTURE, NOT A SENTENCE. This used to wait on the string "Sign in to
-  // Flotilla"; order 0066 shortened that heading to "Sign in" because the lockup directly above
-  // it already says Flotilla. A probe that waits on copy breaks every time the copy improves, so
-  // the wait is now `.login[data-signin="board"]` -- the thing, not its wording.
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle2', timeout: 60_000 });
-  const SIGNIN_CARD = '.login[data-signin="board"]';
   await page.waitForFunction(
-    (sel) => document.querySelector(sel) !== null || document.querySelector('.col') !== null,
-    { timeout: 45_000 }, SIGNIN_CARD,
+    () => /Sign in to Flotilla|Projects/.test(document.body.innerText),
+    { timeout: 45_000 },
   ).catch(() => {});
   console.log('0. sign-in');
-  const needsSignIn = await page.evaluate((sel) => document.querySelector(sel) !== null, SIGNIN_CARD);
+  const needsSignIn = await page.evaluate(() => /Sign in to Flotilla/.test(document.body.innerText));
   check(needsSignIn, 'the board asks who you are instead of signing itself in');
   if (needsSignIn) {
     const clicked = await page.evaluate(() => {
@@ -107,8 +102,8 @@ try {
     });
     check(clicked, 'anonymous is offered as a choice and can be taken');
     await page.waitForFunction(
-      (sel) => document.querySelector(sel) === null,
-      { timeout: 45_000 }, SIGNIN_CARD,
+      () => !/Sign in to Flotilla/.test(document.body.innerText),
+      { timeout: 45_000 },
     ).catch(() => {});
   }
 

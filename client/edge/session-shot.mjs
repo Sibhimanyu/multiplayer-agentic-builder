@@ -118,10 +118,7 @@ try {
   {
     const { page, text } = await boardAs(null);
     const t = await text();
-    // The CARD, not its heading. Order 0066 shortened the heading to "Sign in"; a probe that
-    // waits on copy breaks every time the copy improves.
-    const hasCard = await page.evaluate(() => document.querySelector('.login[data-signin="board"]') !== null);
-    check(hasCard, 'signed out: the board renders a sign-in screen');
+    check(/Sign in to Flotilla/.test(t), 'signed out: the board renders a sign-in screen');
     check(/Continue with Google/.test(t), 'signed out: Google is offered');
     check(/continue anonymously/.test(t), 'signed out: anonymous is offered as a CHOICE');
     check(!/No projects yet/.test(t),

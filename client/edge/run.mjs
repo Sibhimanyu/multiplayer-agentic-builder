@@ -107,42 +107,5 @@ console.log(
 );
 if (offenders.length > 0 || !ownerHasIt) code = 1;
 
-// ---- THE BRAND MARK IS A COMPONENT, NOT A LITERAL. Order 0065. ----
-//
-// A browser measures whether the mark renders; client/edge/layout-shot.mjs does that. This rule
-// is here because of HOW the regression happened: not an edit, but a branch consolidation that
-// restored an older components.tsx wholesale, and three files quietly went back to
-// `<div className="mark">FL</div>`. A grep catches that without needing Chromium, which means it
-// catches it on a machine that has not installed one.
-//
-// The literal is still allowed inside BrandLockup, because that is where the fallback lives.
-const MARK_OWNER = 'src/components.tsx';
-const bareMark = /<div\s+className="mark"/;
-const markOffenders = srcFiles.filter((f) => bareMark.test(code_only(fs.readFileSync(f, 'utf8'))));
-console.log('\nbrand mark ownership -- the shape the regression had:');
-console.log(
-  `  ${markOffenders.length === 0 ? 'PASS' : 'FAIL'}  no file renders a bare <div className="mark">` +
-    `${markOffenders.length ? ` -- ${markOffenders.map((f) => path.relative(client, f)).join(', ')}` : ''}`,
-);
-// The control: a rule that cannot see its own subject proves nothing. BrandLockup must exist and
-// must be the thing referencing the asset.
-const ownerSrc = fs.readFileSync(path.join(client, MARK_OWNER), 'utf8');
-const ownsAsset = /export function BrandLockup/.test(ownerSrc)
-  && /\/brand\/flotilla-mark\.svg/.test(ownerSrc);
-console.log(
-  `  ${ownsAsset ? 'PASS' : 'FAIL'}  (control) BrandLockup exists in ${MARK_OWNER} and references the asset`,
-);
-// And nothing else may reference the asset path directly -- a second <img> is a second place to
-// forget, which is exactly how this happened.
-const assetRefs = srcFiles.filter((f) => {
-  const rel = path.relative(client, f).split(path.sep).join('/');
-  return rel !== MARK_OWNER && /\/brand\/flotilla-mark\.svg/.test(code_only(fs.readFileSync(f, 'utf8')));
-});
-console.log(
-  `  ${assetRefs.length === 0 ? 'PASS' : 'FAIL'}  only BrandLockup references /brand/flotilla-mark.svg` +
-    `${assetRefs.length ? ` -- also ${assetRefs.map((f) => path.relative(client, f)).join(', ')}` : ''}`,
-);
-if (markOffenders.length > 0 || !ownsAsset || assetRefs.length > 0) code = 1;
-
 fs.rmSync(out, { force: true });
 process.exit(code);

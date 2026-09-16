@@ -6,9 +6,10 @@
   "description": "Shared kanban dashboard. Both the Catalyst and Firebase builds render this; only src/store/* differs.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node verify-bundle.mjs",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify-bundle": "node verify-bundle.mjs"
   },
   "dependencies": {
     "firebase": "^12.18.0",
