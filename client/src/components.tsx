@@ -90,16 +90,7 @@ export function TopNav({
 }) {
   return (
     <nav className="nav">
-      {/*
-        Flotilla, decision 0002. The UI BRAND only: the repo, the branches and the project ids
-        deliberately keep their old names, because they are live infrastructure and the
-        comparison record has to stay readable. Renaming a project id would invalidate every
-        measurement that names it.
-      */}
-      <div className="brand-lockup" aria-label="Flotilla">
-        <img className="mark" src="/brand/flotilla-mark.svg" alt="" aria-hidden="true" />
-        <div className="brand">Flotilla</div>
-      </div>
+      <BrandLockup />
       <div className="sep" />
       <div className="proj">{snap.project_name}</div>
       <div className="repo">{snap.repo_url}</div>
@@ -313,14 +304,44 @@ export function AccountChip({
   session: { uid: string; email: string | null; anonymous: boolean };
   onSignOut: () => void;
 }) {
+  const who = session.anonymous ? 'Anonymous session' : session.email ?? session.uid;
+  // The avatar is the first letter of whatever is actually shown, so it always agrees with the
+  // label beside it. '?' for an anonymous session, which has no initial worth inventing.
+  const initial = session.anonymous ? '?' : (who.trim()[0] ?? '?').toUpperCase();
+
   return (
     <div className="account" data-anonymous={session.anonymous}>
-      <span className="who-label" title={session.uid}>
-        {session.anonymous ? 'Anonymous session' : session.email ?? session.uid}
-      </span>
-      <button className="linkish" onClick={onSignOut}>
+      <span className="account-av" aria-hidden="true">{initial}</span>
+      <span className="who-label" title={session.uid}>{who}</span>
+      {/*
+        A BUTTON THAT LOOKS LIKE A BUTTON. This was `.linkish` -- teal and underlined -- which
+        rendered sign-out as a bare anchor floating at the edge of the nav, the one destructive
+        control on the page styled as the lightest thing on it.
+      */}
+      <button className="ghost" onClick={onSignOut}>
         {session.anonymous ? 'Sign in' : 'Sign out'}
       </button>
+    </div>
+  );
+}
+
+/**
+ * The brand, in one place.
+ *
+ * THREE NAV BARS HAD DRIFTED. Only the board's TopNav rendered the real mark; the projects
+ * index, the board's sign-in screen and /login each hardcoded `<div className="mark">FL</div>`,
+ * a two-letter text stand-in that predates the SVG existing. Whichever page you landed on first
+ * decided whether Flotilla appeared to have a logo at all.
+ *
+ * The UI BRAND only, decision 0002: the repo, the branches and the project ids deliberately keep
+ * their old names, because they are live infrastructure and the comparison record has to stay
+ * readable. Renaming a project id would invalidate every measurement that names it.
+ */
+export function BrandLockup() {
+  return (
+    <div className="brand-lockup" aria-label="Flotilla">
+      <img className="mark" src="/brand/flotilla-mark.svg" alt="" aria-hidden="true" />
+      <div className="brand">Flotilla</div>
     </div>
   );
 }

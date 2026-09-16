@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { COLUMNS, type AgentPresence, type Freshness, type Snapshot, type TaskView } from './store/types';
 import { createFirestoreStore, type StoreStatus } from './store/firebase';
 import {
-  AccountChip, DetailPanel, EmptyColumn, ProjectCard, ProjectsEmpty, SignInView, TaskCard, TopNav,
+  AccountChip, BrandLockup, DetailPanel, EmptyColumn, ProjectCard, ProjectsEmpty, SignInView, TaskCard, TopNav,
 } from './components';
 import { LoginPage } from './Login';
 import {
@@ -50,8 +50,7 @@ export function ProjectsIndex({
   return (
     <>
       <nav className="nav">
-        <div className="mark">FL</div>
-        <div className="brand">Flotilla</div>
+        <BrandLockup />
         <span className="grow" />
         {session && onSignOut && <AccountChip session={session} onSignOut={onSignOut} />}
       </nav>
@@ -403,8 +402,7 @@ function SignedIn({ pathname, navigate }: { pathname: string; navigate: (to: str
     return (
       <>
         <nav className="nav">
-          <div className="mark">FL</div>
-          <div className="brand">Flotilla</div>
+          <BrandLockup />
           <span className="grow" />
         </nav>
         <SignInView
