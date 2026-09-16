@@ -8,6 +8,8 @@ tasks, enforces who may touch which files, and shows everyone one live board.
 
 There is no hosted agent sandbox. Nothing runs your code but your own machine.
 
+**[sibhimanyu.github.io/flotilla](https://sibhimanyu.github.io/flotilla/)** — what it is, the board, roles, and what it costs.
+
 ```bash
 curl -fsSL https://multiplayer-agents-eec02.web.app/install.sh | sh
 flotilla login
