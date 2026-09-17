@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Flotilla — coordinate parallel coding agents</title>
+<meta name="description" content="Flotilla is an open-source multiplayer agentic app builder: several AI coding agents (Claude Code, Codex) build one app together without colliding. Local agents, file-scope locks, one live board. No hosted sandboxes." />
+<meta name="theme-color" content="#0F766E" />
+<link rel="icon" href="favicon.svg" type="image/svg+xml" />
+<link rel="icon" href="favicon-32x32.png" type="image/png" sizes="32x32" />
+<link rel="icon" href="favicon-16x16.png" type="image/png" sizes="16x16" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" sizes="180x180" />
+<meta property="og:title" content="Flotilla — coordinate parallel coding agents" />
+<meta property="og:description" content="Many independent agents, separately crewed, no mothership, moving together toward one objective." />
+<meta property="og:type" content="website" />
+<meta property="og:image" content="brand/exports/social/flotilla-og.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Flotilla — coordinate parallel coding agents" />
+<meta name="twitter:description" content="Many independent agents, separately crewed, no mothership, moving together toward one objective." />
+<meta name="twitter:image" content="brand/exports/social/flotilla-og.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,500..600,0..100,0..1&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet" />
+<link rel="canonical" href="https://sibhimanyu.github.io/flotilla/" />
+<link rel="stylesheet" href="site.css" />
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Flotilla",
+  "alternateName": "Multiplayer Agentic Builder",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS, Linux",
+  "url": "https://sibhimanyu.github.io/flotilla/",
+  "description": "An open-source multiplayer agentic app builder. Several AI coding agents build one app together without stepping on each other: each teammate runs their own agent locally, file scope is locked before work starts, and one live board shows who owns what.",
+  "keywords": "multiplayer agentic builder, parallel coding agents, multi-agent coding, agent coordination, file scope locks, Claude Code, Codex, agentic development",
+  "isAccessibleForFree": true,
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "codeRepository": "https://github.com/Sibhimanyu/multiplayer-agentic-builder",
+  "author": { "@type": "Person", "name": "Sibhimanyu" }
+}
+</script>
+</head>
+<body>
+
+<!-- Brand splash. Ported from the HyperFrames logo sting
+     (videos/flotilla-logo-sting) to pure CSS: this page ships zero JavaScript
+     and a GSAP dependency for a 1.5s intro would be disproportionate.
+
+     FAIL-SAFE BY CONSTRUCTION: the overlay's resting state is hidden. It is
+     made visible only *by* the animation, so if keyframes never run -- old
+     engine, stylesheet fails, animations disabled -- the splash simply never
+     appears and the page is usable immediately. It can never trap content.
+
+     aria-hidden: the lockup is decorative here; the real one is in the nav. -->
+<div class="splash" aria-hidden="true">
+  <svg class="splash-art" viewBox="0 0 1060 260" focusable="false">
+    <g transform="translate(0 15) scale(.55)">
+      <g class="sp-mark" transform="rotate(-7 260 210)">
+        <g class="sp-boat" style="animation-delay:0s"><path transform="translate(0 -12)" d="M184 39C245 46 346 75 429 112C442 118 444 128 430 135C376 164 311 185 249 199C235 202 231 193 239 181C259 151 266 121 256 94C246 68 220 50 184 39Z"/></g>
+        <g class="sp-boat" style="animation-delay:.08s"><path transform="translate(-4 6)" d="M86 143C132 151 198 173 239 193C250 198 250 207 239 213C192 238 139 261 54 281C41 284 37 275 46 264C75 235 98 211 101 188C103 170 98 155 86 143Z"/></g>
+        <g class="sp-boat" style="animation-delay:.16s"><path transform="translate(0 12)" d="M190 245C233 253 290 274 326 293C337 299 337 307 326 313C287 336 243 353 176 369C163 372 159 363 168 352C192 326 210 304 212 284C213 268 207 254 190 245Z"/></g>
+      </g>
+    </g>
+    <g class="sp-word"><path fill="#1A1917" transform="translate(300 46) scale(1.1) translate(-10.4 -41.29999999999998)" d="M16.500 50L87.800 50Q91.700 50 94.150 49.050Q96.600 48.100 98.600 47.200Q100.600 46.300 102.700 46.300L102.700 46.300Q105.800 46.300 107.450 47.850Q109.100 49.400 110.100 53.300L110.100 53.300L118.300 82.600Q119 84.900 117.750 86.500Q116.500 88.100 114.200 88.400L114.200 88.400Q112.200 88.800 110.350 88.050Q108.500 87.300 107.300 84.700L107.300 84.700Q102.500 74.400 98.250 69.100Q94 63.800 89.300 61.900Q84.600 60 78.300 60L78.300 60L56.300 60L56.300 173.300Q56.300 175.500 57.500 177.050Q58.700 178.600 61.300 179L61.300 179L70.100 180.200Q72.700 180.700 73.750 181.900Q74.800 183.100 74.800 185.400L74.800 185.400Q74.800 187.500 73.350 188.750Q71.900 190 68.800 190L68.800 190L16.500 190Q13.400 190 11.900 188.750Q10.400 187.500 10.400 185.400L10.400 185.400Q10.400 181.600 14.600 180.300L14.600 180.300L20.300 179Q22.800 178.300 24.050 176.900Q25.300 175.500 25.300 173.300L25.300 173.300L25.300 66.700Q25.300 64.500 24.050 63.100Q22.800 61.700 20.300 61L20.300 61L14.600 59.700Q10.400 58.400 10.400 54.600L10.400 54.600Q10.400 52.400 11.900 51.200Q13.400 50 16.500 50L16.500 50ZM44 128.100L44 118.300L76.200 118.300Q82.500 118.300 85.050 115.850Q87.600 113.400 89.100 106.100L89.100 106.100Q89.700 103.900 90.900 102.900Q92.100 101.900 93.900 101.800L93.900 101.800Q98.100 101.500 99.100 105.800L99.100 105.800L106.600 135.700Q107.200 138.300 106.450 139.750Q105.700 141.200 103.800 141.800L103.800 141.800Q101.800 142.400 100.050 141.750Q98.300 141.100 96.800 139L96.800 139Q94.200 134.700 91.950 132.300Q89.700 129.900 86.850 129Q84 128.100 79.500 128.100L79.500 128.100L44 128.100ZM169.900 47.700L169.900 47.700L169.900 174Q169.900 177.100 170.750 178.550Q171.600 180 173.400 180.600L173.400 180.600L177.200 181.600Q179.100 182.200 180 183.250Q180.900 184.300 180.900 185.900L180.900 185.900Q180.900 187.800 179.600 188.900Q178.300 190 175.400 190L175.400 190L136 190Q133.200 190 131.900 188.900Q130.600 187.800 130.600 185.900L130.600 185.900Q130.600 184.400 131.500 183.350Q132.400 182.300 134.300 181.600L134.300 181.600L138.200 180.600Q140 179.900 140.850 178.500Q141.700 177.100 141.700 174L141.700 174L141.700 64.500Q141.700 62 140.950 60.900Q140.200 59.800 138.500 59.500L138.500 59.500L133.200 59.100Q131.400 58.600 130.600 57.700Q129.800 56.800 129.800 55.400L129.800 55.400Q129.800 53.800 130.800 52.800Q131.800 51.800 134.400 50.800L134.400 50.800L153 44Q157 42.500 159.300 41.900Q161.600 41.300 163.300 41.300L163.300 41.300Q166.600 41.300 168.250 43.050Q169.900 44.800 169.900 47.700ZM246.500 93L246.500 93Q262 93 273.700 99.300Q285.400 105.600 291.950 116.850Q298.500 128.100 298.500 143L298.500 143Q298.500 157.100 291.750 168.300Q285 179.500 273.100 186Q261.200 192.500 245.500 192.500L245.500 192.500Q230.100 192.500 218.450 186.100Q206.800 179.700 200.200 168.450Q193.600 157.200 193.600 142.500L193.600 142.500Q193.600 128.200 200.350 117.050Q207.100 105.900 219 99.450Q230.900 93 246.500 93ZM253.600 182L253.600 182Q260.400 181 264.550 175.750Q268.700 170.500 269.850 161.300Q271 152.100 268.600 139.200L268.600 139.200Q266.300 126.300 261.900 117.950Q257.500 109.600 251.500 105.900Q245.500 102.200 238.500 103.400L238.500 103.400Q231.600 104.500 227.450 109.750Q223.300 115 222.250 124.150Q221.200 133.300 223.500 146.300L223.500 146.300Q225.800 159.100 230.200 167.450Q234.600 175.800 240.600 179.500Q246.600 183.200 253.600 182ZM318.200 105.100L318.200 105.100L313.600 103.700Q311.200 102.900 310.200 101.850Q309.200 100.800 309.200 99.400L309.200 99.400Q309.200 97.400 310.550 96.350Q311.900 95.300 314.200 95.300L314.200 95.300L320.300 95.300Q322.700 95.300 324.300 94.400Q325.900 93.500 327.600 91.200L327.600 91.200L338.500 75.900Q340.600 73.300 342.500 72.100Q344.400 70.900 346.300 70.900L346.300 70.900Q348.400 70.900 349.600 72.200Q350.800 73.500 350.800 76L350.800 76L350.800 161.500Q350.800 168.500 353.550 172.200Q356.300 175.900 361.200 175.900L361.200 175.900Q364.900 175.900 366.950 174.450Q369 173 370.200 171.100Q371.400 169.200 372.550 167.750Q373.700 166.300 375.500 166.200L375.500 166.200Q377 166.200 377.850 167.200Q378.700 168.200 378.700 170.500L378.700 170.500Q378.600 176.200 374.950 181.100Q371.300 186 364.800 189.050Q358.300 192.100 350 192.100L350 192.100Q337.200 192.100 329.950 185.650Q322.700 179.200 322.700 166.200L322.700 166.200L322.700 111Q322.700 108.400 321.650 107.150Q320.600 105.900 318.200 105.100ZM366.800 105.200L339.700 105.200L339.700 95.300L372.800 95.300Q375.100 95.300 376.450 96.250Q377.800 97.200 377.800 99L377.800 99Q377.800 101.600 375.200 103.400Q372.600 105.200 366.800 105.200L366.800 105.200ZM430.600 99.800L430.600 99.800L430.600 174Q430.600 177.100 431.450 178.550Q432.300 180 434.100 180.600L434.100 180.600L437.900 181.600Q439.800 182.200 440.700 183.250Q441.600 184.300 441.600 185.900L441.600 185.900Q441.600 187.800 440.300 188.900Q439.000 190 436.100 190L436.100 190L396.700 190Q393.900 190 392.600 188.900Q391.300 187.800 391.300 185.900L391.300 185.900Q391.300 184.400 392.200 183.350Q393.100 182.300 395.000 181.600L395.000 181.600L398.900 180.600Q400.700 179.900 401.550 178.500Q402.400 177.100 402.400 174L402.400 174L402.400 116.700Q402.400 114.100 401.650 113Q400.900 111.900 399.200 111.600L399.200 111.600L393.900 111.200Q392.100 110.800 391.300 109.900Q390.500 109 390.500 107.600L390.500 107.600Q390.500 105.900 391.450 104.900Q392.400 103.900 395.100 102.900L395.100 102.900L413.700 96.100Q417.600 94.700 419.950 94.100Q422.300 93.500 423.900 93.500L423.900 93.500Q427.300 93.500 428.950 95.250Q430.600 97 430.600 99.800ZM414.300 78.200L414.300 78.200Q406.300 78.200 401.450 74.050Q396.600 69.900 396.600 63.200L396.600 63.200Q396.600 56.500 401.450 52.450Q406.300 48.400 414.300 48.400L414.300 48.400Q422.400 48.400 427.250 52.450Q432.100 56.500 432.100 63.200L432.100 63.200Q432.100 69.900 427.250 74.050Q422.400 78.200 414.300 78.200ZM494.000 47.700L494.000 47.700L494.000 174Q494.000 177.100 494.850 178.550Q495.700 180 497.500 180.600L497.500 180.600L501.300 181.600Q503.200 182.200 504.100 183.250Q505.000 184.300 505.000 185.900L505.000 185.900Q505.000 187.800 503.700 188.900Q502.400 190 499.500 190L499.500 190L460.100 190Q457.300 190 456.000 188.900Q454.700 187.800 454.700 185.900L454.700 185.900Q454.700 184.400 455.600 183.350Q456.500 182.300 458.400 181.600L458.400 181.600L462.300 180.600Q464.100 179.900 464.950 178.500Q465.800 177.100 465.800 174L465.800 174L465.800 64.500Q465.800 62 465.050 60.900Q464.300 59.800 462.600 59.500L462.600 59.500L457.300 59.100Q455.500 58.600 454.700 57.700Q453.900 56.800 453.900 55.400L453.900 55.400Q453.900 53.800 454.900 52.800Q455.900 51.800 458.500 50.800L458.500 50.800L477.100 44Q481.100 42.500 483.400 41.900Q485.700 41.300 487.400 41.300L487.400 41.300Q490.700 41.300 492.350 43.050Q494.000 44.800 494.000 47.700ZM559.900 47.700L559.900 47.700L559.900 174Q559.900 177.100 560.750 178.550Q561.600 180 563.400 180.600L563.400 180.600L567.200 181.600Q569.100 182.200 570 183.250Q570.900 184.300 570.900 185.900L570.900 185.900Q570.900 187.800 569.600 188.900Q568.300 190 565.400 190L565.400 190L526 190Q523.200 190 521.900 188.900Q520.600 187.800 520.600 185.900L520.600 185.900Q520.600 184.400 521.500 183.350Q522.400 182.300 524.300 181.600L524.300 181.600L528.200 180.600Q530 179.900 530.850 178.500Q531.700 177.100 531.700 174L531.700 174L531.700 64.500Q531.700 62 530.950 60.900Q530.200 59.800 528.500 59.500L528.500 59.500L523.200 59.100Q521.400 58.600 520.600 57.700Q519.800 56.800 519.800 55.400L519.800 55.400Q519.800 53.800 520.800 52.800Q521.800 51.800 524.400 50.800L524.400 50.800L543 44Q547 42.500 549.300 41.900Q551.600 41.300 553.300 41.300L553.300 41.300Q556.600 41.300 558.250 43.050Q559.900 44.800 559.900 47.700ZM645 177.300L645 177.300L645 175.200L643.100 174.800L643.100 115.100Q643.100 108.100 639.550 104.250Q636 100.400 629.500 100.400L629.500 100.400Q623.600 100.400 620.400 102.900Q617.200 105.400 617.200 109.100L617.200 109.100L617.200 117.900Q617.200 123.900 613.200 127.150Q609.200 130.400 601.900 130.400L601.900 130.400Q595.700 130.400 592.500 127.450Q589.300 124.500 589.300 119.400L589.300 119.400Q589.300 113.100 594.500 107.050Q599.700 101 609.800 97.050Q619.900 93.100 634.700 93.100L634.700 93.100Q653.100 93.100 662.050 100.550Q671 108 671 120.700L671 120.700L671 172.700Q671 175.500 672.150 176.900Q673.300 178.300 675.400 178.300L675.400 178.300Q677.600 178.300 678.700 177.250Q679.800 176.200 680.600 175.100L680.600 175.100Q681.100 174.400 681.700 173.950Q682.300 173.500 683.200 173.500L683.200 173.500Q684.400 173.500 685 174.400Q685.600 175.300 685.600 176.800L685.600 176.800Q685.600 180.200 683.250 183.800Q680.900 187.400 676.250 189.950Q671.600 192.500 664.600 192.500L664.600 192.500Q655.700 192.500 650.350 188.450Q645 184.400 645 177.300ZM585.100 169.100L585.100 169.100Q585.100 156.600 596.250 148.900Q607.400 141.200 627.400 141.200L627.400 141.200Q633.900 141.200 639.150 142.300Q644.400 143.400 648.200 145.300L648.200 145.300L646 151.700Q642.600 150.100 639.050 149.200Q635.500 148.300 631.400 148.300L631.400 148.300Q623.100 148.300 618.450 152.550Q613.800 156.800 613.800 164.300L613.800 164.300Q613.800 171.800 617.750 175.800Q621.700 179.800 628 179.800L628 179.800Q633.400 179.800 638.350 177.350Q643.300 174.900 646.700 170.500L646.700 170.500L648.900 176.200Q643.400 184 634.150 188.250Q624.900 192.500 614.500 192.500L614.500 192.500Q601.400 192.500 593.250 186Q585.100 179.500 585.100 169.100Z"/></g>
+    <!-- The wipe is a PAPER-COLOURED cover that slides off along the mark's own
+         -7deg axis, not a clip-path or an animated SVG geometry attribute.
+         Same result over a flat ground, but it is a plain transform, so it
+         works in every engine and stays on the compositor. -->
+    <g transform="rotate(-7 285 130)">
+      <rect class="sp-cover" x="285" y="-200" width="840" height="660" />
+    </g>
+  </svg>
+</div>
+
+<nav class="nav">
+  <div class="wrap">
+    <a href="index.html" aria-label="Flotilla home">
+      <img class="lockup" src="brand/flotilla-lockup.svg" alt="Flotilla" width="1060" height="260" />
+    </a>
+    <span class="tag">pre-release</span>
+    <div class="links">
+      <a href="#how" class="hide-sm">How it works</a>
+      <a href="#board" class="hide-sm">The board</a>
+      <a href="#roles" class="hide-sm">Roles</a>
+      <a href="#start">Get started</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ============================================================ hero -->
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <h1>Many agents. One objective. No mothership.</h1>
+      <p class="lead">
+        Parallel coding agents on your team&rsquo;s own laptops, each locked to its own part of the
+        repo. One board shows who owns what; GitHub stays the source of truth.
+      </p>
+      <div class="btn-row">
+        <a class="btn btn-p" href="#start">Get started</a>
+        <a class="btn btn-s" href="https://github.com/Sibhimanyu/multiplayer-agentic-builder">View the source</a>
+      </div>
+      <p class="fine">
+        Open source &middot; no hosted agent sandboxes &middot; runs on a free-tier backend
+      </p>
+    </div>
+
+    <!-- The headline, drawn. Three lanes from three separate origins, each at its own pace,
+         joining one line that ends in one finished objective. Nothing sits in the middle
+         routing the work -- that is the "no mothership" claim, and it is the shape of the
+         whole product. Deliberately NOT a variation on the mark: the brand rules forbid
+         rotating it further, separating its boats or recolouring them. -->
+    <div class="hero-illo">
+      <svg class="il tf" viewBox="0 0 570 336" role="img" aria-labelledby="tf-t tf-d">
+        <title id="tf-t">One repository, three owners, no overlap</title>
+        <desc id="tf-d">The repository drawn as a field of files. Three agents hold three separate
+          regions of it -- test, client and functions -- and the regions never touch. The quiet
+          cells are everything nobody has claimed. A few cells are lit: work landing right now.</desc>
+        <rect x="18" y="16" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.073"/><rect x="49" y="16" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.063"/><rect x="80" y="16" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.079"/><rect x="111" y="16" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.061"/><rect x="142" y="16" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.064"/><rect x="173" y="16" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.074"/><rect x="204" y="16" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.078"/><rect x="235" y="16" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.075"/><rect x="266" y="16" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.053"/><rect x="297" y="16" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.071"/><rect x="328" y="16" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.078"/><rect x="359" y="16" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.062"/><rect x="390" y="16" width="23" height="16" rx="3.5" fill="#0F766E" opacity="0.46"/><rect x="421" y="16" width="23" height="16" rx="3.5" fill="#0F766E" opacity="0.21"/><rect x="452" y="16" width="23" height="16" rx="3.5" fill="#0F766E" opacity="0.43"/><rect x="483" y="16" width="23" height="16" rx="3.5" fill="#0F766E" opacity="0.40"/><rect x="514" y="16" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.051"/><rect x="18" y="40" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.083"/><rect x="49" y="40" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.065"/><rect x="80" y="40" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.082"/><rect x="111" y="40" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.077"/><rect x="142" y="40" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.070"/><rect x="173" y="40" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.060"/><rect x="204" y="40" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.070"/><rect x="235" y="40" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.072"/><rect x="266" y="40" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.069"/><rect x="297" y="40" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.068"/><rect x="328" y="40" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.060"/><rect x="359" y="40" width="23" height="16" rx="3.5" fill="#0F766E" opacity="0.25"/><rect x="390" y="40" width="23" height="16" rx="3.5" fill="#0F766E" opacity="0.44"/><rect class="tf-live" x="421" y="40" width="23" height="16" rx="3.5" fill="#0F766E" style="animation-delay:1.00s"/><rect x="452" y="40" width="23" height="16" rx="3.5" fill="#0F766E" opacity="0.24"/><rect x="483" y="40" width="23" height="16" rx="3.5" fill="#0F766E" opacity="0.19"/><rect x="514" y="40" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.056"/><rect x="18" y="64" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.080"/><rect x="49" y="64" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.080"/><rect x="80" y="64" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.059"/><rect x="111" y="64" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.053"/><rect x="142" y="64" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.051"/><rect x="173" y="64" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.075"/><rect x="204" y="64" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.068"/><rect x="235" y="64" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.060"/><rect x="266" y="64" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.060"/><rect x="297" y="64" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.052"/><rect x="328" y="64" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.065"/><rect x="359" y="64" width="23" height="16" rx="3.5" fill="#0F766E" opacity="0.29"/><rect class="tf-live" x="390" y="64" width="23" height="16" rx="3.5" fill="#0F766E" style="animation-delay:0.15s"/><rect x="421" y="64" width="23" height="16" rx="3.5" fill="#0F766E" opacity="0.24"/><rect x="452" y="64" width="23" height="16" rx="3.5" fill="#0F766E" opacity="0.39"/><rect x="483" y="64" width="23" height="16" rx="3.5" fill="#0F766E" opacity="0.29"/><rect x="514" y="64" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.082"/><rect x="18" y="88" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.074"/><rect x="49" y="88" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.080"/><rect x="80" y="88" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.082"/><rect x="111" y="88" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.068"/><rect x="142" y="88" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.051"/><rect x="173" y="88" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.060"/><rect x="204" y="88" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.053"/><rect x="235" y="88" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.054"/><rect x="266" y="88" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.052"/><rect x="297" y="88" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.064"/><rect x="328" y="88" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.054"/><rect x="359" y="88" width="23" height="16" rx="3.5" fill="#0F766E" opacity="0.49"/><rect x="390" y="88" width="23" height="16" rx="3.5" fill="#0F766E" opacity="0.31"/><rect x="421" y="88" width="23" height="16" rx="3.5" fill="#0F766E" opacity="0.35"/><rect x="452" y="88" width="23" height="16" rx="3.5" fill="#0F766E" opacity="0.39"/><rect x="483" y="88" width="23" height="16" rx="3.5" fill="#0F766E" opacity="0.29"/><rect x="514" y="88" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.050"/><rect x="18" y="112" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.051"/><rect x="49" y="112" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.068"/><rect x="80" y="112" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.055"/><rect x="111" y="112" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.073"/><rect x="142" y="112" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.051"/><rect x="173" y="112" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.082"/><rect x="204" y="112" width="23" height="16" rx="3.5" fill="#5B4A7D" opacity="0.29"/><rect x="235" y="112" width="23" height="16" rx="3.5" fill="#5B4A7D" opacity="0.29"/><rect x="266" y="112" width="23" height="16" rx="3.5" fill="#5B4A7D" opacity="0.39"/><rect x="297" y="112" width="23" height="16" rx="3.5" fill="#5B4A7D" opacity="0.49"/><rect x="328" y="112" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.061"/><rect x="359" y="112" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.080"/><rect x="390" y="112" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.085"/><rect x="421" y="112" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.076"/><rect x="452" y="112" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.084"/><rect x="483" y="112" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.060"/><rect x="514" y="112" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.073"/><rect x="18" y="136" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.055"/><rect x="49" y="136" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.085"/><rect x="80" y="136" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.071"/><rect x="111" y="136" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.075"/><rect x="142" y="136" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.060"/><rect x="173" y="136" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.073"/><rect x="204" y="136" width="23" height="16" rx="3.5" fill="#5B4A7D" opacity="0.44"/><rect x="235" y="136" width="23" height="16" rx="3.5" fill="#5B4A7D" opacity="0.34"/><rect class="tf-live" x="266" y="136" width="23" height="16" rx="3.5" fill="#5B4A7D" style="animation-delay:1.40s"/><rect x="297" y="136" width="23" height="16" rx="3.5" fill="#5B4A7D" opacity="0.41"/><rect x="328" y="136" width="23" height="16" rx="3.5" fill="#5B4A7D" opacity="0.25"/><rect x="359" y="136" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.080"/><rect x="390" y="136" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.084"/><rect x="421" y="136" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.079"/><rect x="452" y="136" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.051"/><rect x="483" y="136" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.065"/><rect x="514" y="136" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.063"/><rect x="18" y="160" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.080"/><rect x="49" y="160" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.059"/><rect x="80" y="160" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.067"/><rect x="111" y="160" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.070"/><rect x="142" y="160" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.066"/><rect x="173" y="160" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.066"/><rect x="204" y="160" width="23" height="16" rx="3.5" fill="#5B4A7D" opacity="0.41"/><rect x="235" y="160" width="23" height="16" rx="3.5" fill="#5B4A7D" opacity="0.47"/><rect x="266" y="160" width="23" height="16" rx="3.5" fill="#5B4A7D" opacity="0.21"/><rect class="tf-live" x="297" y="160" width="23" height="16" rx="3.5" fill="#5B4A7D" style="animation-delay:1.52s"/><rect x="328" y="160" width="23" height="16" rx="3.5" fill="#5B4A7D" opacity="0.37"/><rect x="359" y="160" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.069"/><rect x="390" y="160" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.059"/><rect x="421" y="160" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.079"/><rect x="452" y="160" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.051"/><rect x="483" y="160" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.080"/><rect x="514" y="160" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.056"/><rect x="18" y="184" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.066"/><rect x="49" y="184" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.055"/><rect x="80" y="184" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.067"/><rect x="111" y="184" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.059"/><rect x="142" y="184" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.055"/><rect x="173" y="184" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.068"/><rect x="204" y="184" width="23" height="16" rx="3.5" fill="#5B4A7D" opacity="0.33"/><rect x="235" y="184" width="23" height="16" rx="3.5" fill="#5B4A7D" opacity="0.32"/><rect x="266" y="184" width="23" height="16" rx="3.5" fill="#5B4A7D" opacity="0.33"/><rect x="297" y="184" width="23" height="16" rx="3.5" fill="#5B4A7D" opacity="0.40"/><rect x="328" y="184" width="23" height="16" rx="3.5" fill="#5B4A7D" opacity="0.34"/><rect x="359" y="184" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.058"/><rect x="390" y="184" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.065"/><rect x="421" y="184" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.083"/><rect x="452" y="184" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.056"/><rect x="483" y="184" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.082"/><rect x="514" y="184" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.068"/><rect x="18" y="208" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.069"/><rect x="49" y="208" width="23" height="16" rx="3.5" fill="#9A5B2E" opacity="0.42"/><rect x="80" y="208" width="23" height="16" rx="3.5" fill="#9A5B2E" opacity="0.30"/><rect x="111" y="208" width="23" height="16" rx="3.5" fill="#9A5B2E" opacity="0.46"/><rect x="142" y="208" width="23" height="16" rx="3.5" fill="#9A5B2E" opacity="0.36"/><rect x="173" y="208" width="23" height="16" rx="3.5" fill="#9A5B2E" opacity="0.42"/><rect x="204" y="208" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.052"/><rect x="235" y="208" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.057"/><rect x="266" y="208" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.063"/><rect x="297" y="208" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.081"/><rect x="328" y="208" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.061"/><rect x="359" y="208" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.072"/><rect x="390" y="208" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.074"/><rect x="421" y="208" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.078"/><rect x="452" y="208" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.052"/><rect x="483" y="208" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.059"/><rect x="514" y="208" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.085"/><rect x="18" y="232" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.054"/><rect x="49" y="232" width="23" height="16" rx="3.5" fill="#9A5B2E" opacity="0.32"/><rect x="80" y="232" width="23" height="16" rx="3.5" fill="#9A5B2E" opacity="0.32"/><rect class="tf-live" x="111" y="232" width="23" height="16" rx="3.5" fill="#9A5B2E" style="animation-delay:0.63s"/><rect x="142" y="232" width="23" height="16" rx="3.5" fill="#9A5B2E" opacity="0.35"/><rect x="173" y="232" width="23" height="16" rx="3.5" fill="#9A5B2E" opacity="0.49"/><rect x="204" y="232" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.074"/><rect x="235" y="232" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.073"/><rect x="266" y="232" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.080"/><rect x="297" y="232" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.075"/><rect x="328" y="232" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.069"/><rect x="359" y="232" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.081"/><rect x="390" y="232" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.055"/><rect x="421" y="232" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.063"/><rect x="452" y="232" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.057"/><rect x="483" y="232" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.066"/><rect x="514" y="232" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.066"/><rect x="18" y="256" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.068"/><rect x="49" y="256" width="23" height="16" rx="3.5" fill="#9A5B2E" opacity="0.28"/><rect class="tf-live" x="80" y="256" width="23" height="16" rx="3.5" fill="#9A5B2E" style="animation-delay:1.15s"/><rect x="111" y="256" width="23" height="16" rx="3.5" fill="#9A5B2E" opacity="0.39"/><rect x="142" y="256" width="23" height="16" rx="3.5" fill="#9A5B2E" opacity="0.25"/><rect x="173" y="256" width="23" height="16" rx="3.5" fill="#9A5B2E" opacity="0.40"/><rect x="204" y="256" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.077"/><rect x="235" y="256" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.052"/><rect x="266" y="256" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.059"/><rect x="297" y="256" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.058"/><rect x="328" y="256" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.057"/><rect x="359" y="256" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.063"/><rect x="390" y="256" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.078"/><rect x="421" y="256" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.074"/><rect x="452" y="256" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.052"/><rect x="483" y="256" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.079"/><rect x="514" y="256" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.062"/><rect x="18" y="280" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.084"/><rect x="49" y="280" width="23" height="16" rx="3.5" fill="#9A5B2E" opacity="0.45"/><rect x="80" y="280" width="23" height="16" rx="3.5" fill="#9A5B2E" opacity="0.31"/><rect x="111" y="280" width="23" height="16" rx="3.5" fill="#9A5B2E" opacity="0.36"/><rect x="142" y="280" width="23" height="16" rx="3.5" fill="#9A5B2E" opacity="0.46"/><rect x="173" y="280" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.081"/><rect x="204" y="280" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.071"/><rect x="235" y="280" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.053"/><rect x="266" y="280" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.056"/><rect x="297" y="280" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.072"/><rect x="328" y="280" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.076"/><rect x="359" y="280" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.074"/><rect x="390" y="280" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.055"/><rect x="421" y="280" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.063"/><rect x="452" y="280" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.085"/><rect x="483" y="280" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.060"/><rect x="514" y="280" width="23" height="16" rx="3.5" fill="#1A1917" opacity="0.075"/>
+        <g class="tf-lbl">
+          <text x="18"  y="326">test/**</text>
+          <text x="205" y="326">client/**</text>
+          <text x="374" y="326">functions/**</text>
+        </g>
+      </svg>
+    </div>
+  </div>
+</header>
+
+<!-- ============================================================ the problem -->
+<section id="problem">
+  <div class="wrap">
+    <div class="s-head narrow">
+      <p class="eyebrow">The problem</p>
+      <h2>Two agents editing one repo is not two developers editing one repo.</h2>
+      <p class="sub">
+        The failure is never that one agent is bad. It is that nothing tells it what somebody
+        else already owns.
+      </p>
+    </div>
+    <figure class="il-frame">
+      <svg class="il" viewBox="0 0 1000 300" role="img" aria-labelledby="clash-t clash-d">
+        <title id="clash-t">Two agents reaching for the same file</title>
+        <desc id="clash-d">Two agents on separate branches both edit the same file. Neither is
+          told. The conflict only surfaces at the rebase, after both have finished their work.</desc>
+
+        <!-- two agents, working happily, unaware -->
+        <rect class="il-card" x="40" y="36" width="190" height="62" rx="10"/>
+        <text class="il-ttl" x="60" y="62">agent A</text>
+        <text class="il-lbl" x="60" y="86">backend</text>
+
+        <rect class="il-card" x="40" y="202" width="190" height="62" rx="10"/>
+        <text class="il-ttl" x="60" y="228">agent B</text>
+        <text class="il-lbl" x="60" y="252">frontend</text>
+
+        <!-- both reach for the same file -->
+        <path class="il-rail" d="M230 67h150c40 0 40 83 80 83"/>
+        <path class="il-rail" d="M230 233h150c40 0 40-83 80-83"/>
+
+        <rect class="il-card" x="490" y="118" width="230" height="64" rx="10"/>
+        <text class="il-lbl" x="512" y="146">functions/items/</text>
+        <text class="il-lbl" x="512" y="168">index.js</text>
+
+        <!-- the clash, discovered late -->
+        <path class="il-rail-d" d="M720 150h120"/>
+        <circle class="il-warn" cx="886" cy="150" r="30" fill-opacity=".08"/>
+        <g class="il-warn-s"><path d="M872 136l28 28M900 136l-28 28"/></g>
+        <text class="il-lbl" x="886" y="212" text-anchor="middle" style="fill:var(--red)">rebase</text>
+      </svg>
+      <figcaption class="il-cap">
+        Nothing told either agent the other was there. The cost lands at the rebase, after both
+        have finished.
+      </figcaption>
+    </figure>
+
+    <div class="grid g3" style="margin-top:28px">
+      <div class="tile"><span class="n">01</span><h3>Silent collisions</h3>
+        <p>Two agents, one file, no warning.</p></div>
+      <div class="tile"><span class="n">02</span><h3>No shared truth</h3>
+        <p>The API shape one agent chose lives on an unmerged branch.</p></div>
+      <div class="tile"><span class="n">03</span><h3>Rented sandboxes</h3>
+        <p>You pay for idle containers, and your code leaves the building.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ how it works -->
+<section id="how">
+  <div class="wrap">
+    <div class="s-head narrow">
+      <p class="eyebrow">How it works</p>
+      <h2>A shared board, a shared branch, and no agent on the network.</h2>
+      <p class="sub">
+        One rule underneath everything: agents never message each other. It is what keeps a long
+        session coherent instead of drowning every agent in everybody else&rsquo;s status updates.
+      </p>
+    </div>
+
+    <figure class="il-frame">
+      <svg class="il" viewBox="0 0 1000 430" role="img" aria-labelledby="arch-t arch-d">
+        <title id="arch-t">How Flotilla is wired</title>
+        <desc id="arch-d">Three laptops each run their own agent against their own local files. Each
+          laptop's bridge talks to a shared coordination store, which holds claims, locks and
+          presence. Code goes to GitHub. The agents never talk to each other: the dashed line
+          between them is the path that does not exist.</desc>
+
+        <!-- three laptops, side by side, each self-contained -->
+        <g>
+          <rect class="il-card" x="40"  y="40" width="230" height="132" rx="12"/>
+          <rect class="il-card" x="385" y="40" width="230" height="132" rx="12"/>
+          <rect class="il-card" x="730" y="40" width="230" height="132" rx="12"/>
+        </g>
+        <g class="il-ttl">
+          <text x="60"  y="68">your laptop</text>
+          <text x="405" y="68">teammate</text>
+          <text x="750" y="68">teammate</text>
+        </g>
+        <g class="il-lbl">
+          <text x="60"  y="96">claude code</text><text x="60"  y="120">.agentic/</text>
+          <text x="405" y="96">codex</text>      <text x="405" y="120">.agentic/</text>
+          <text x="750" y="96">your harness</text><text x="750" y="120">.agentic/</text>
+        </g>
+        <g class="il-lbl-t">
+          <text x="60"  y="152">flotilla bridge</text>
+          <text x="405" y="152">flotilla bridge</text>
+          <text x="750" y="152">flotilla bridge</text>
+        </g>
+
+        <!-- the path that does NOT exist. This is the whole coordination model. -->
+        <path class="il-rail-d" d="M270 106h115"/>
+        <path class="il-rail-d" d="M615 106h115"/>
+        <g class="il-warn-s">
+          <path d="M320 96l16 16M336 96l-16 16"/>
+          <path d="M665 96l16 16M681 96l-16 16"/>
+        </g>
+
+        <!-- down into the shared store -->
+        <path class="il-live" d="M155 172v46"/>
+        <path class="il-live" d="M500 172v46"/>
+        <path class="il-live" d="M845 172v46"/>
+
+        <rect class="il-card" x="40" y="218" width="920" height="82" rx="12"/>
+        <text class="il-ttl" x="60" y="248">coordination store</text>
+        <g class="il-lbl">
+          <text x="60"  y="278">claims &#183; scope locks &#183; presence &#183; task state</text>
+          <text x="700" y="278">ephemeral &#183; atomic</text>
+        </g>
+
+        <!-- and out to GitHub -->
+        <path class="il-live" d="M500 300v46"/>
+        <rect class="il-card-q" x="240" y="346" width="520" height="66" rx="12"/>
+        <text class="il-ttl" x="266" y="376">GitHub</text>
+        <g class="il-lbl"><text x="266" y="400">branches &#183; pull requests &#183; the git blackboard</text></g>
+      </svg>
+      <figcaption class="il-cap">
+        The dashed, crossed-out line is the point: agents never message each other. They append
+        facts to one store and read their own inbox off local disk.
+      </figcaption>
+    </figure>
+
+    <div class="grid g4" style="margin-top:32px">
+      <div class="tile"><h4>Store</h4><p style="margin-top:7px">Holds only what must be
+        atomic: claims, locks, presence.</p></div>
+      <div class="tile"><h4>Git</h4><p style="margin-top:7px">Holds what must be reviewable:
+        contracts, schemas, decisions.</p></div>
+      <div class="tile"><h4>No credential</h4><p style="margin-top:7px">The agent reads and
+        writes files. The bridge does the network.</p></div>
+      <div class="tile"><h4>Your compute</h4><p style="margin-top:7px">Your machines, your
+        subscriptions. Nothing to rent per agent.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ the board -->
+<section id="board">
+  <div class="wrap">
+    <div class="s-head narrow">
+      <p class="eyebrow">The board</p>
+      <h2>Six columns, one per state, and nothing you have to interpret.</h2>
+      <p class="sub">
+        Six columns, one per state. CI failure and blockage are visible without opening
+        anything.
+      </p>
+    </div>
+
+    <figure>
+      <div class="boardframe">
+        <div class="bf-nav">
+          <img class="mk" src="brand/flotilla-mark.svg" alt="" width="520" height="420" />
+          <span class="proj">Inventory Tracker</span>
+          <span class="repo">acme/inventory-tracker</span>
+          <span class="fresh"><span class="dot"></span>updated 3s ago</span>
+        </div>
+        <div class="bf-board">
+
+          <div class="bf-col">
+            <div class="bf-colhead"><h3>Open</h3><span class="count">2</span></div>
+            <div class="bf-card">
+              <div class="title">Smoke test create / list / update / delete</div>
+              <div class="row"><span class="kind" data-k="qa">qa</span></div>
+            </div>
+            <div class="bf-card">
+              <div class="title">Document the items API</div>
+              <div class="row"><span class="kind" data-k="docs">docs</span></div>
+            </div>
+          </div>
+
+          <div class="bf-col">
+            <div class="bf-colhead"><h3>Claimed</h3><span class="count">1</span></div>
+            <div class="bf-card">
+              <div class="title">Item detail view</div>
+              <div class="row">
+                <span class="kind" data-k="frontend">frontend</span>
+                <span class="who"><span class="av" style="background:#5B4A7D">RK</span></span>
+              </div>
+              <div class="branch">agent/frontend/item-detail</div>
+            </div>
+          </div>
+
+          <div class="bf-col">
+            <div class="bf-colhead"><h3>In progress</h3><span class="count">2</span></div>
+            <div class="bf-card" data-sel="true">
+              <div class="title">CRUD functions for items</div>
+              <div class="row">
+                <span class="kind" data-k="backend">backend</span>
+                <span class="verpill">items-api v2</span>
+                <span class="who"><span class="av" style="background:#0F766E">SG</span></span>
+              </div>
+              <div class="branch">agent/backend/items-crud</div>
+            </div>
+            <div class="bf-card">
+              <div class="title">Add item form validation</div>
+              <div class="row">
+                <span class="kind" data-k="frontend">frontend</span>
+                <span class="badge" data-t="blocked">blocked</span>
+                <span class="who"><span class="av" data-ring="blocked" style="background:#5B4A7D">AM</span></span>
+              </div>
+              <div class="branch">agent/frontend/add-item</div>
+            </div>
+          </div>
+
+          <div class="bf-col">
+            <div class="bf-colhead"><h3>Needs review</h3><span class="count">0</span></div>
+            <div class="empty">
+              <b>Nothing waiting</b>
+              Work lands here when an agent marks it ready.
+            </div>
+          </div>
+
+          <div class="bf-col">
+            <div class="bf-colhead"><h3>PR open</h3><span class="count">1</span></div>
+            <div class="bf-card">
+              <div class="title">Items table schema</div>
+              <div class="row">
+                <span class="kind" data-k="backend">backend</span>
+                <span class="badge" data-t="ci-failed">ci failed</span>
+                <span class="who"><span class="av" style="background:#0F766E">SG</span></span>
+              </div>
+              <div class="branch">agent/backend/items-schema</div>
+            </div>
+          </div>
+
+          <div class="bf-col">
+            <div class="bf-colhead"><h3>Merged</h3><span class="count">1</span></div>
+            <div class="bf-card" data-merged="true">
+              <div class="title">Project scaffolding</div>
+              <div class="row">
+                <span class="kind" data-k="devops">devops</span>
+                <span class="who"><span class="av" data-ring="offline" style="background:#8A857C">DV</span></span>
+              </div>
+              <div class="branch">agent/devops/scaffold</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+      <figcaption>
+        The board as it renders. Empty columns teach the command that fills them.
+      </figcaption>
+    </figure>
+
+    <div class="grid g4" style="margin-top:32px">
+      <div class="tile"><h4>Presence you can trust</h4>
+        <p style="margin-top:7px">Green working, red blocked, grey gone. Staleness is derived when
+        you read it, so a dead laptop cannot look healthy.</p></div>
+      <div class="tile"><h4>Honest freshness</h4>
+        <p style="margin-top:7px">The nav says how old the data is, and never shows live over
+        stale.</p></div>
+      <div class="tile"><h4>Blockage with a chain</h4>
+        <p style="margin-top:7px">A blocked card names what blocks it, all the way down.</p></div>
+      <div class="tile"><h4>Contracts in place</h4>
+        <p style="margin-top:7px">The published contract renders in the card, with what it
+        supersedes.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ roles -->
+<section id="roles">
+  <div class="wrap">
+    <div class="s-head narrow">
+      <p class="eyebrow">Roles and seats</p>
+      <h2>A role is a permission, not a paragraph asking nicely.</h2>
+      <p class="sub">
+        Every seat gets a generated prompt, and two real gates underneath it. No agent can merge.
+      </p>
+    </div>
+
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead>
+          <tr><th>Seat</th><th>Owns</th><th>Can</th><th>Cannot</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="k">Owner</td>
+            <td>The project</td>
+            <td>Create the project, invite, assign roles, triage suggestions, merge</td>
+            <td>&mdash;</td>
+          </tr>
+          <tr>
+            <td class="k">Architect</td>
+            <td>Contracts and decisions</td>
+            <td>Publish contracts and schemas, record decisions, turn suggestions into tasks</td>
+            <td>Merge unless granted</td>
+          </tr>
+          <tr>
+            <td class="k">Backend</td>
+            <td><code>functions/**</code>, <code>schema/**</code></td>
+            <td>Claim backend work, lock its own scope, push branches, open PRs</td>
+            <td>Edit the client, merge</td>
+          </tr>
+          <tr>
+            <td class="k">Frontend</td>
+            <td><code>client/**</code></td>
+            <td>Claim frontend work, lock its own scope, push branches, open PRs</td>
+            <td>Edit functions or schema, merge</td>
+          </tr>
+          <tr>
+            <td class="k">QA</td>
+            <td><code>test/**</code></td>
+            <td>Claim test work, push branches, open PRs, report failures</td>
+            <td>Edit production code, merge</td>
+          </tr>
+          <tr>
+            <td class="k">Client</td>
+            <td>Nothing in the repo</td>
+            <td>Read the board, ask a question, suggest a change</td>
+            <td>Claim, lock, deploy, publish, or run an agent</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <figure class="il-frame" style="margin-top:24px">
+      <svg class="il" viewBox="0 0 1000 226" role="img" aria-labelledby="terr-t terr-d">
+        <title id="terr-t">File scope is granted, and requests outside it are refused</title>
+        <desc id="terr-d">Three roles hold three non-overlapping regions of the repository. A
+          request for a path outside a role's region is refused when the lock is taken, not
+          discovered later.</desc>
+
+        <g class="il-lbl"><text x="40" y="34">role</text><text x="250" y="34">may edit</text></g>
+
+        <rect class="il-card" x="40" y="48" width="170" height="44" rx="8"/>
+        <text class="il-ttl" x="60" y="76">backend</text>
+        <rect x="250" y="48" width="300" height="44" rx="8" fill="var(--teal-soft)"/>
+        <text class="il-lbl-t" x="272" y="76">functions/** &#183; schema/**</text>
+
+        <rect class="il-card" x="40" y="104" width="170" height="44" rx="8"/>
+        <text class="il-ttl" x="60" y="132">frontend</text>
+        <rect x="250" y="104" width="190" height="44" rx="8" fill="#EFEAF6"/>
+        <text class="il-lbl" x="272" y="132" style="fill:#5B4A7D">client/**</text>
+
+        <rect class="il-card" x="40" y="160" width="170" height="44" rx="8"/>
+        <text class="il-ttl" x="60" y="188">qa</text>
+        <rect x="250" y="160" width="160" height="44" rx="8" fill="#FBF0E8"/>
+        <text class="il-lbl" x="272" y="188" style="fill:#9A5B2E">test/**</text>
+
+        <!-- the refusal: backend asking for a client path -->
+        <path class="il-rail-d" d="M550 70h214"/>
+        <rect x="764" y="46" width="196" height="48" rx="8" fill="var(--red-soft)"/>
+        <text class="il-lbl" x="786" y="76" style="fill:var(--red)">client/app.tsx</text>
+        <g class="il-warn-s"><path d="M648 60l16 20M664 60l-16 20"/></g>
+        <text class="il-lbl" x="656" y="112" text-anchor="middle">refused at claim</text>
+      </svg>
+      <figcaption class="il-cap">
+        A prompt is guidance. The lock is the gate: a request outside the role&rsquo;s scope is
+        refused when it is taken, and a client seat can never hold one at all.
+      </figcaption>
+    </figure>
+</section>
+
+<!-- ============================================================ cost -->
+<section id="cost" class="band">
+  <div class="wrap">
+    <div class="s-head narrow">
+      <p class="eyebrow">What it costs</p>
+      <h2>Nothing to rent, because there is nothing in the middle.</h2>
+      <p class="sub">
+        No agent hosting, no seats to license, and no server in the path you do not already own.
+      </p>
+    </div>
+    <figure class="il-frame">
+      <svg class="il" viewBox="0 0 1000 260" role="img" aria-labelledby="cost-t cost-d">
+        <title id="cost-t">A hosted platform rents a sandbox per agent; Flotilla has no middle</title>
+        <desc id="cost-d">A hosted agent platform puts a rented sandbox between every laptop and
+          the code, and bills for each one. Flotilla has nothing in that position: the laptops
+          already exist and talk to a free-tier store and to GitHub.</desc>
+
+        <text class="il-lbl" x="40" y="28">hosted platform</text>
+        <g>
+          <rect class="il-card-q" x="40" y="46" width="90" height="50" rx="9"/>
+          <rect class="il-card-q" x="40" y="106" width="90" height="50" rx="9"/>
+          <rect class="il-card-q" x="40" y="166" width="90" height="50" rx="9"/>
+        </g>
+        <g class="il-lbl" font-size="13">
+          <text x="58" y="76">laptop</text><text x="58" y="136">laptop</text>
+          <text x="58" y="196">laptop</text>
+        </g>
+        <path class="il-rail" d="M130 71h70M130 131h70M130 191h70"/>
+        <g>
+          <rect x="200" y="46" width="120" height="50" rx="9" fill="var(--red-soft)" stroke="#F3CFCF"/>
+          <rect x="200" y="106" width="120" height="50" rx="9" fill="var(--red-soft)" stroke="#F3CFCF"/>
+          <rect x="200" y="166" width="120" height="50" rx="9" fill="var(--red-soft)" stroke="#F3CFCF"/>
+          <g class="il-lbl" style="fill:var(--red)">
+            <text x="222" y="77">sandbox</text><text x="222" y="137">sandbox</text>
+            <text x="222" y="197">sandbox</text>
+          </g>
+        </g>
+        <text class="il-lbl" x="222" y="240" style="fill:var(--red)">billed per agent-hour</text>
+
+        <line x1="420" y1="20" x2="420" y2="240" class="il-rail"/>
+
+        <text class="il-lbl-t" x="470" y="28">Flotilla</text>
+        <g>
+          <rect class="il-card" x="470" y="46" width="90" height="50" rx="9"/>
+          <rect class="il-card" x="470" y="106" width="90" height="50" rx="9"/>
+          <rect class="il-card" x="470" y="166" width="90" height="50" rx="9"/>
+        </g>
+        <g class="il-lbl" font-size="13">
+          <text x="488" y="76">laptop</text><text x="488" y="136">laptop</text>
+          <text x="488" y="196">laptop</text>
+        </g>
+        <!-- deliberately empty column: this gap IS the product claim -->
+        <path class="il-live" d="M560 71h250M560 131h250M560 191h250"/>
+        <rect class="il-card" x="810" y="86" width="150" height="90" rx="10"/>
+        <text class="il-ttl" x="832" y="122">store</text>
+        <text class="il-lbl" x="832" y="148">+ GitHub</text>
+        <text class="il-lbl-t" x="640" y="240">nothing in the middle</text>
+      </svg>
+      <figcaption class="il-cap">
+        The empty column is the whole cost argument. There is no per-agent thing to provision, so
+        there is no per-agent thing to bill.
+      </figcaption>
+    </figure>
+
+    <div class="grid g3" style="margin-top:28px">
+      <div class="tile" style="background:#242320;border-color:#35332F">
+        <h3 style="color:#fff">Agent compute</h3>
+        <p style="color:#C9C4BC"><strong style="color:#5EC4B8">Your existing subscription.</strong>
+          Flotilla never launches a model for you.</p></div>
+      <div class="tile" style="background:#242320;border-color:#35332F">
+        <h3 style="color:#fff">Code and review</h3>
+        <p style="color:#C9C4BC"><strong style="color:#5EC4B8">GitHub, unchanged.</strong>
+          Nothing is mirrored anywhere you would have to trust.</p></div>
+      <div class="tile" style="background:#242320;border-color:#35332F">
+        <h3 style="color:#fff">Coordination</h3>
+        <p style="color:#C9C4BC"><strong style="color:#5EC4B8">A free tier you own.</strong>
+          Presence at ten agents measured 1.4% of the daily allowance.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ get started -->
+<section id="start">
+  <div class="wrap">
+    <div class="s-head narrow">
+      <p class="eyebrow">Get started</p>
+      <h2>Four commands to a live board.</h2>
+      <p class="sub">
+        One CLI, run from inside your repo. Creating the project is what writes the agent files.
+      </p>
+    </div>
+
+    <div class="split">
+      <div>
+        <div class="steps">
+          <div class="step">
+            <div>
+              <h4>Point the CLI at your backend</h4>
+              <p>
+                <code>flotilla init --project &lt;id&gt;</code> records which project this machine
+                talks to. No credentials needed &mdash; it runs before you sign in.
+              </p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h4>Sign in</h4>
+              <p>
+                <code>flotilla login</code> serves a sign-in page locally and opens it.
+                <code>--no-browser</code> just prints the URL.
+              </p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h4>Create the project in your repo</h4>
+              <p>
+                <code>flotilla new &lt;name&gt;</code> connects the repo, generates the role packs and
+                writes <code>.agentic/</code>. Teammates run <code>flotilla connect &lt;invite&gt;</code>.
+              </p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h4>Start the bridge, then start your agent</h4>
+              <p>
+                <code>flotilla start</code> drains the outbox, delivers the inbox and heartbeats.
+                Then open Claude Code as usual &mdash; it reads <code>AGENTS.md</code> and begins.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <p class="pre-label">a session, start to finish</p>
+<pre><span class="c"># once per machine</span>
+$ <b>flotilla init</b> --project my-flotilla
+$ <b>flotilla login</b>
+  <span class="c">signed in as sam@example.com</span>
+
+<span class="c"># in the repo you want to build</span>
+$ <b>flotilla new</b> "Inventory Tracker"
+  <span class="t">created</span> proj_inventory
+  <span class="c">wrote AGENTS.md and .agentic/</span>
+
+$ <b>flotilla start</b>
+  <span class="c">bridge up. draining outbox, delivering inbox.</span>
+
+<span class="c"># your teammate, on their laptop</span>
+$ <b>flotilla connect</b> inv_8f21c
+  <span class="c">connected as agent_frontend_1 (frontend)</span>
+$ <b>flotilla start</b>
+
+<span class="c"># anytime</span>
+$ <b>flotilla status</b>
+  <span class="c">3 agents live, 1 blocked, 2 open</span>
+$ <b>flotilla ls</b>
+$ <b>flotilla members</b> proj_inventory</pre>
+        <p class="fine muted" style="margin-top:14px;font-size:13px">
+          Offline is a normal state, not an error. Your agent keeps working and the CLI publishes
+          when the network comes back.
+        </p>
+      </div>
+    </div>
+
+    <div class="note warn" style="margin-top:36px">
+      <h4>Availability, stated plainly</h4>
+      Flotilla is pre-release. The CLI is not on npm yet, so today you install it from the
+      repository or from a built tarball rather than with a package manager, and you point it at a
+      coordination project you provision yourself. If you want to run it now, start from the
+      <a href="https://github.com/Sibhimanyu/multiplayer-agentic-builder">source repository</a>
+      &mdash; the setup steps live there and are kept current.
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ scope -->
+<section id="scope">
+  <div class="wrap">
+    <div class="s-head narrow">
+      <p class="eyebrow">Scope</p>
+      <h2>What Flotilla deliberately is not.</h2>
+      <p class="sub">
+        Every line below was a decision, not an omission.
+      </p>
+    </div>
+    <div class="grid g4">
+      <div class="tile"><h3>Not a host</h3><p>No sandboxes. Your code stays on your machines.</p></div>
+      <div class="tile"><h3>Not a merger</h3><p>Agents open pull requests. A human lands them.</p></div>
+      <div class="tile"><h3>Not a chat</h3><p>Agents exchange contracts and locks, not narration.</p></div>
+      <div class="tile"><h3>Not a SaaS</h3><p>You run the coordination project. No vendor holds your board.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ closing -->
+<section id="closing">
+  <div class="wrap narrow" style="text-align:center">
+    <img src="brand/flotilla-mark.svg" alt="" width="520" height="420"
+         style="height:54px;width:auto;margin:0 auto 26px" />
+    <h2>Independent vessels, separately crewed, moving together.</h2>
+    <p class="sub" style="margin:16px auto 0">
+      That is the shape of the system, and it is where the name comes from. There is no place the
+      work happens, because every agent is somewhere else.
+    </p>
+    <div class="btn-row" style="justify-content:center;margin-top:30px">
+      <a class="btn btn-p" href="#start">Get started</a>
+      <a class="btn btn-s" href="https://github.com/Sibhimanyu/multiplayer-agentic-builder">Read the source</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>
+      <img class="lockup" src="brand/flotilla-lockup.svg" alt="Flotilla" width="1060" height="260" />
+      <p class="muted" style="font-size:13px;margin-top:12px;max-width:34ch">
+        Coordinate parallel coding agents from one shared fleet view.
+      </p>
+    </div>
+    <div class="cols">
+      <div class="col">
+        <p class="eyebrow">Product</p>
+        <a href="#how">How it works</a>
+        <a href="#board">The board</a>
+        <a href="#roles">Roles and seats</a>
+        <a href="#cost">What it costs</a>
+      </div>
+      <div class="col">
+        <p class="eyebrow">Start</p>
+        <a href="#start">Install and run</a>
+        <a href="#scope">What it is not</a>
+        <a href="https://github.com/Sibhimanyu/multiplayer-agentic-builder">Source repository</a>
+      </div>
+    </div>
+    <p class="fine">
+      Flotilla &middot; open source &middot; pre-release. Agents run locally; GitHub holds the code;
+      nothing is hosted on your behalf.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

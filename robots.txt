@@ -1,0 +1,8 @@
+# NOTE: crawlers read robots.txt only at a DOMAIN root. Served from
+# sibhimanyu.github.io/flotilla/ this file is ignored -- the effective robots.txt
+# is sibhimanyu.github.io/robots.txt, which requires a repo named
+# "sibhimanyu.github.io" to control. This file becomes live if a custom domain
+# is ever attached to this site.
+User-agent: *
+Allow: /
+Sitemap: https://sibhimanyu.github.io/flotilla/sitemap.xml

@@ -1,0 +1,459 @@
+/* Flotilla site — public product page and internal reference page.
+   Design language is the dashboard's: docs/designs/dashboard.md.
+   Tokens are copied verbatim from client/src/tokens.css. Do not invent new colours here;
+   any divergence from the board is a bug, same rule the dashboard follows. */
+
+:root{
+  --paper:#FAF9F7; --card:#FFFFFF; --ink:#1A1917; --ink2:#4A4741;
+  --muted:#8A857C; --line:#E8E4DD; --line2:#D9D4CA;
+  --teal:#0F766E; --teal-soft:#E6F2F0;
+  --red:#B91C1C; --red-soft:#FDEDED;
+  --amber:#B45309; --amber-soft:#FDF4E7;
+  --sans:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --serif:'Fraunces',Georgia,serif;
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --r-card:12px; --r-ctl:8px; --r-tag:5px;
+  --shadow:0 1px 2px rgba(26,25,23,.04),0 1px 1px rgba(26,25,23,.02);
+  --page:1080px;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;scroll-padding-top:84px}
+body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:15.5px;
+     line-height:1.62;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+a{color:var(--teal);text-decoration:none}
+a:hover{text-decoration:underline;text-underline-offset:2px}
+img,svg{display:block;max-width:100%}
+code{font-family:var(--mono);font-size:.875em}
+:focus-visible{outline:2px solid var(--teal);outline-offset:3px;border-radius:3px}
+
+/* ---- layout ---- */
+.wrap{max-width:var(--page);margin:0 auto;padding:0 28px}
+section{padding:74px 0}
+section + section{border-top:1px solid var(--line)}
+.narrow{max-width:720px}
+
+/* ---- top nav: mirrors the dashboard nav, one row, hairline rule ---- */
+.nav{position:sticky;top:0;z-index:40;background:rgba(255,255,255,.97);
+     backdrop-filter:saturate(140%) blur(8px);border-bottom:1px solid var(--line)}
+.nav .wrap{height:62px;display:flex;align-items:center;gap:22px}
+.nav .lockup{height:26px;width:auto;flex:none}
+.nav .links{margin-left:auto;display:flex;align-items:center;gap:22px}
+.nav .links a{color:var(--ink2);font-size:13.5px;font-weight:500;white-space:nowrap}
+.nav .links a:hover{color:var(--ink);text-decoration:none}
+.nav .tag{font-family:var(--mono);font-size:11px;color:var(--teal);background:var(--teal-soft);
+     border-radius:var(--r-tag);padding:3px 8px;flex:none}
+.navtoggle{display:none}
+
+/* ---- buttons ---- */
+.btn{display:inline-flex;align-items:center;gap:8px;border-radius:var(--r-ctl);padding:10px 17px;
+     font:500 14px var(--sans);cursor:pointer;border:1px solid transparent;white-space:nowrap}
+.btn:hover{text-decoration:none}
+.btn-p{background:var(--teal);color:#fff}
+.btn-p:hover{background:#0C5F59}
+.btn-s{background:var(--card);color:var(--ink);border-color:var(--line2)}
+.btn-s:hover{border-color:var(--muted)}
+.btn-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+
+/* ---- type ---- */
+.eyebrow{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.11em;
+     color:var(--muted);margin-bottom:14px}
+/* Fraunces is already a compact face, so the negative tracking that suits a
+   grotesque made it cramped -- "agents." was crowding "One" at 51px. Relaxed to
+   roughly a quarter of what it was.
+
+   WONK 0 switches off Fraunces' quirky angled j/y/g terminals, which is what
+   made the headings read as fussy old-magazine rather than quiet editorial.
+   This axis only exists because the font URL now requests SOFT and WONK; with
+   the previous opsz,wght-only request this declaration was a silent no-op. */
+h1{font-family:var(--serif);font-weight:600;font-size:clamp(38px,5.6vw,60px);line-height:1.06;
+   letter-spacing:-.008em;font-variation-settings:'WONK' 0}
+h2{font-family:var(--serif);font-weight:600;font-size:clamp(26px,3.2vw,34px);line-height:1.18;
+   letter-spacing:-.010em;font-variation-settings:'WONK' 0}
+h3{font-family:var(--serif);font-weight:600;font-size:18.5px;line-height:1.3;
+   letter-spacing:-.008em;font-variation-settings:'WONK' 0}
+h4{font-family:var(--sans);font-weight:600;font-size:14.5px;letter-spacing:-.005em}
+.lead{font-size:18.5px;line-height:1.58;color:var(--ink2);max-width:62ch}
+.sub{color:var(--ink2);max-width:66ch}
+.sub + .sub{margin-top:14px}
+.muted{color:var(--muted)}
+.s-head{margin-bottom:34px}
+.s-head h2 + .sub{margin-top:14px}
+strong{font-weight:600;color:var(--ink)}
+
+/* ---- hero ---- */
+.hero{padding:88px 0 80px}
+.hero .lead{margin-top:22px}
+.hero .btn-row{margin-top:32px}
+.hero .fine{margin-top:18px;font-size:13px;color:var(--muted)}
+.hero .fine code{background:var(--card);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+/* Two columns: the copy carries the claim, the illustration states it. The one-column hero
+   left the right third of the page empty at desktop width. */
+.hero-grid{display:grid;grid-template-columns:1.08fr .92fr;gap:44px;align-items:center}
+.hero-copy h1{font-size:clamp(36px,4.1vw,51px);max-width:17ch}
+
+/* ---- hero illustration: the territory field ----
+   Deliberately NOT a diagram. The page already carries four of those below, so a
+   fifth flowchart in the hero gives the page no hierarchy and says nothing
+   specific to this product. This is a texture: one repository, three owners,
+   and the untouched gap between them. */
+.hero-illo svg{width:100%;height:auto;max-width:570px;margin-left:auto}
+@media (min-width:1200px){.hero-illo{margin-right:-86px}}
+.tf-lbl{font-family:var(--mono);font-size:14px;fill:var(--muted)}
+/* The hero cannot scroll the way the framed diagrams do, so its labels scale up
+   as the field shrinks. They are short enough (7-12 chars against 570 units)
+   that they still cannot collide at the largest step. */
+@media (max-width:900px){.tf-lbl{font-size:19px}}
+@media (max-width:640px){.tf-lbl{font-size:24px}}
+/* work landing right now. Reuses the board's own freshness pulse rather than
+   inventing a second idle motion for the page. */
+.tf-live{animation:pulse 2.6s infinite}
+@media (prefers-reduced-motion:reduce){.tf-live{animation:none}}
+
+/* ---- cards ---- */
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g4{grid-template-columns:repeat(4,1fr)}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);
+      padding:22px 22px 24px;box-shadow:var(--shadow)}
+.tile h3{margin-bottom:9px}
+.tile p{font-size:14px;color:var(--ink2);line-height:1.6}
+.tile .n{font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:13px;display:block}
+.tile ul{margin-top:10px}
+
+/* ---- numbered steps ---- */
+.steps{counter-reset:s;display:grid;gap:2px}
+.step{display:grid;grid-template-columns:34px 1fr;gap:16px;padding:18px 0;
+      border-bottom:1px solid var(--line)}
+.step:last-child{border-bottom:none}
+.step::before{counter-increment:s;content:counter(s);font-family:var(--mono);font-size:12px;
+      color:var(--teal);background:var(--teal-soft);border-radius:50%;width:26px;height:26px;
+      display:grid;place-items:center;margin-top:1px}
+.step h4{margin-bottom:5px}
+.step p{font-size:14px;color:var(--ink2)}
+.step code{background:var(--card);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+
+/* ---- lists ---- */
+ul.plain{list-style:none;display:grid;gap:9px}
+ul.plain li{position:relative;padding-left:17px;font-size:14px;color:var(--ink2)}
+ul.plain li::before{content:'';position:absolute;left:0;top:.62em;width:5px;height:5px;
+      border-radius:50%;background:var(--line2)}
+ul.plain li.yes::before{background:var(--teal)}
+ul.plain li.no::before{background:var(--line2)}
+
+/* ---- code ---- */
+pre{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);
+    padding:17px 19px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.72;
+    color:var(--ink2);box-shadow:var(--shadow)}
+pre b{color:var(--ink);font-weight:500}
+pre .c{color:var(--muted)}
+pre .t{color:var(--teal)}
+.pre-label{font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:8px}
+figure{margin:0}
+figcaption{font-size:12.5px;color:var(--muted);margin-top:10px}
+
+/* ---- tables ---- */
+.tbl{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);
+     border-radius:var(--r-card);overflow:hidden;box-shadow:var(--shadow)}
+.tbl th,.tbl td{text-align:left;padding:12px 16px;border-bottom:1px solid var(--line);
+     font-size:13.5px;vertical-align:top}
+.tbl th{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.09em;
+     color:var(--muted);background:var(--paper);white-space:nowrap}
+.tbl tr:last-child td{border-bottom:none}
+.tbl td code{font-size:12px;color:var(--ink2)}
+.tbl td.k{white-space:nowrap;font-weight:500}
+.scroll-x{overflow-x:auto;-webkit-overflow-scrolling:touch}
+/* narrow screens scroll the table rather than crushing five columns into 320px */
+.scroll-x .tbl{min-width:640px}
+
+/* ---- tags, badges, pills (dashboard idioms, reused verbatim) ---- */
+.kind{font-size:10.5px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;
+      border-radius:var(--r-tag);padding:2px 7px;display:inline-block}
+.kind[data-k="backend"]{background:var(--teal-soft);color:var(--teal)}
+.kind[data-k="frontend"]{background:#EFEAF6;color:#5B4A7D}
+.kind[data-k="qa"]{background:#FBF0E8;color:#9A5B2E}
+.kind[data-k="docs"],.kind[data-k="devops"]{background:#EEEDEA;color:var(--ink2)}
+.badge{font-size:10.5px;font-weight:600;border-radius:var(--r-tag);padding:2px 7px;white-space:nowrap;
+      display:inline-block}
+.badge[data-t="ci-failed"],.badge[data-t="blocked"]{background:var(--red-soft);color:var(--red)}
+.badge[data-t="review"]{background:var(--amber-soft);color:var(--amber)}
+.badge[data-t="ok"]{background:var(--teal-soft);color:var(--teal)}
+.verpill{font-family:var(--mono);font-size:10.5px;background:var(--teal-soft);color:var(--teal);
+      border-radius:var(--r-tag);padding:2px 7px;font-weight:500;display:inline-block}
+
+/* ---- the miniature board (a still of the real thing) ---- */
+.boardframe{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);
+      box-shadow:var(--shadow);overflow:hidden}
+.bf-nav{height:52px;border-bottom:1px solid var(--line);display:flex;align-items:center;
+      gap:12px;padding:0 16px}
+.bf-nav .mk{height:24px;width:auto}
+.bf-nav .proj{font-family:var(--serif);font-size:14.5px;font-weight:600;letter-spacing:-.015em}
+.bf-nav .repo{font-family:var(--mono);font-size:10.5px;color:var(--muted);background:var(--paper);
+      border:1px solid var(--line);border-radius:5px;padding:3px 7px}
+.bf-nav .fresh{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11.5px;
+      color:var(--muted)}
+.bf-nav .fresh .dot{width:6px;height:6px;border-radius:50%;background:var(--teal);
+      animation:pulse 2.6s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.32}}
+.bf-board{display:flex;gap:11px;padding:18px 14px 20px;overflow-x:auto;background:var(--paper)}
+.bf-col{width:156px;flex:none;display:grid;gap:9px;align-content:start}
+.bf-colhead{display:flex;align-items:center;gap:7px;padding:0 2px 2px}
+.bf-colhead h3{font-family:var(--serif);font-size:13px;font-weight:600;letter-spacing:-.01em}
+.count{font-family:var(--mono);font-size:10.5px;color:var(--muted);background:var(--card);
+      border:1px solid var(--line);border-radius:20px;padding:1px 7px}
+.bf-card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:11px 12px;
+      display:grid;gap:8px;box-shadow:var(--shadow)}
+.bf-card[data-sel="true"]{border-color:var(--teal);box-shadow:0 0 0 3px var(--teal-soft)}
+.bf-card[data-merged="true"]{opacity:.66}
+.bf-card .title{font-size:12.5px;font-weight:500;line-height:1.4}
+.row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.branch{font-family:var(--mono);font-size:10px;color:var(--muted);overflow:hidden;
+      text-overflow:ellipsis;white-space:nowrap}
+.bf-card .who{margin-left:auto;display:flex}
+.av{width:21px;height:21px;border-radius:50%;border:2px solid var(--card);margin-left:-6px;
+    display:grid;place-items:center;font-size:8.5px;font-weight:600;color:#fff;position:relative;
+    flex:none}
+.av:first-child{margin-left:0}
+.av::after{content:'';position:absolute;right:-1px;bottom:-1px;width:6.5px;height:6.5px;
+    border-radius:50%;border:2px solid var(--card);background:#3E9E4F}
+.av[data-ring="blocked"]::after{background:var(--red)}
+.av[data-ring="offline"]::after{background:#C4BFB6}
+.avs{display:flex;align-items:center}
+.empty{border:1.5px dashed var(--line2);border-radius:10px;padding:16px 12px;text-align:center;
+       color:var(--muted);font-size:11.5px;line-height:1.5}
+.empty b{display:block;color:var(--ink2);font-weight:500;font-size:12px;margin-bottom:2px}
+.empty code{font-size:10.5px}
+
+/* ---- callout ---- */
+.note{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--teal);
+      border-radius:var(--r-ctl);padding:16px 19px;font-size:14px;color:var(--ink2)}
+.note.warn{border-left-color:var(--amber)}
+.note.stop{border-left-color:var(--red)}
+.note h4{margin-bottom:6px;color:var(--ink)}
+
+/* ---- dark band (the one inversion; uses the white lockup per brand rules) ---- */
+.band{background:var(--ink);color:#F5F3F0;border-top:none}
+.band h2{color:#fff}
+.band .sub,.band .lead{color:#C9C4BC}
+.band .eyebrow{color:#8A857C}
+.band pre{background:#242320;border-color:#35332F;color:#D8D3CB}
+.band pre b{color:#fff}
+.band pre .t{color:#5EC4B8}
+.band pre .c{color:#7E7972}
+.band a{color:#5EC4B8}
+.band .btn-s{background:transparent;color:#fff;border-color:#45423D}
+.band .btn-s:hover{border-color:#6E6A63}
+
+/* ---- ASCII architecture diagram ---- */
+.arch{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);
+      padding:24px;overflow-x:auto;box-shadow:var(--shadow)}
+.arch pre{background:none;border:none;box-shadow:none;padding:0;font-size:12px;line-height:1.85;
+      color:var(--ink2)}
+
+/* ---- two-column prose + aside ---- */
+.split{display:grid;grid-template-columns:1.35fr 1fr;gap:42px;align-items:start}
+/* Grid items default to min-width:auto, so a white-space:pre block sets the track floor from
+   its longest line and the whole PAGE gains a horizontal scrollbar on narrow screens. The pre
+   already scrolls itself; the track just has to be allowed to shrink. */
+.split > *,.hero-grid > *{min-width:0}
+
+/* ---- reference page: sticky table of contents ---- */
+.doc{display:grid;grid-template-columns:216px 1fr;gap:52px;align-items:start}
+.toc{position:sticky;top:86px;display:grid;gap:2px}
+.toc .eyebrow{margin-bottom:8px}
+.toc a{display:block;font-size:13px;color:var(--ink2);padding:5px 0;line-height:1.4}
+.toc a:hover{color:var(--teal);text-decoration:none}
+.doc-body{min-width:0;display:grid;gap:58px}
+.doc-body > article > h2{padding-bottom:12px;border-bottom:1px solid var(--line);margin-bottom:22px}
+.doc-body > article > * + *{margin-top:18px}
+.doc-body > article > h3{margin-top:36px}
+.doc-body > article > h2 + h3{margin-top:2px}
+
+/* ---- internal banner ---- */
+.internal{background:var(--amber-soft);border-bottom:1px solid #F0E2CB}
+.internal .wrap{padding:11px 28px;display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
+.internal .k{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.09em;
+      color:var(--amber);flex:none}
+.internal p{font-size:13px;color:#7A4A12}
+
+/* ---- footer ---- */
+footer{border-top:1px solid var(--line);padding:44px 0 56px;background:var(--card)}
+footer .wrap{display:flex;gap:32px;flex-wrap:wrap;align-items:flex-start}
+footer .lockup{height:24px;width:auto}
+footer .cols{margin-left:auto;display:flex;gap:56px;flex-wrap:wrap}
+footer .col{display:grid;gap:8px}
+footer .col .eyebrow{margin-bottom:2px}
+footer .col a{font-size:13.5px;color:var(--ink2)}
+footer .col a:hover{color:var(--teal);text-decoration:none}
+footer .fine{width:100%;margin-top:30px;padding-top:22px;border-top:1px solid var(--line);
+      font-size:12.5px;color:var(--muted)}
+
+/* ---- responsive ---- */
+@media (max-width:920px){
+  .g4{grid-template-columns:repeat(2,1fr)}
+  .g3{grid-template-columns:1fr 1fr}
+  .split{grid-template-columns:1fr;gap:28px}
+  .hero-grid{grid-template-columns:1fr;gap:44px}
+  .hero-illo svg{margin:0 auto;max-width:440px}
+  .doc{grid-template-columns:1fr;gap:26px}
+  .toc{position:static;border:1px solid var(--line);background:var(--card);
+       border-radius:var(--r-card);padding:16px 18px}
+  .toc{grid-template-columns:repeat(2,1fr)}
+  .toc .eyebrow{grid-column:1/-1}
+}
+@media (max-width:640px){
+  body{font-size:15px}
+  section{padding:56px 0}
+  .hero{padding:60px 0 56px}
+  .hero-grid{gap:36px}
+  .hero-illo svg{max-width:340px}
+  .g2,.g3,.g4{grid-template-columns:1fr}
+  .wrap{padding:0 20px}
+  .nav .links{gap:15px}
+  .nav .links a.hide-sm,.nav .tag{display:none}
+  footer .cols{margin-left:0;gap:32px}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  .bf-nav .fresh .dot,.tf-live{animation:none}
+}
+
+/* ---- print ---- */
+@media print{
+  .nav,footer,.toc{display:none}
+  body{background:#fff}
+  section{padding:24px 0;break-inside:avoid}
+}
+
+
+/* ============================================================ brand splash
+   Ported from the HyperFrames logo sting. The boats fly in along the
+   formation's own -7deg axis (they sit inside the rotated group, so local
+   translateX IS that axis), squash as they land, and the name is uncovered by
+   a paper-coloured pane sliding off the same axis.
+
+   Budget: 1.5s total. The sting itself is 4.3s, which is fine for a video and
+   far too long to sit in front of a page on every visit.
+
+   The overlay's DEFAULT state is hidden; the animation is what reveals it.
+   That way a browser that never runs the keyframes shows no splash at all
+   rather than a permanent white cover. */
+.splash{
+  position:fixed;inset:0;z-index:200;
+  background:var(--paper);
+  display:grid;place-items:center;
+  overflow:hidden;                      /* the overlay is the frame: nothing paints outside it */
+  opacity:0;visibility:hidden;          /* fail-safe resting state */
+  animation:sp-life 1.5s linear forwards;
+}
+.splash-art{width:min(560px,62vw);height:auto;overflow:visible}
+
+/* visible for the first ~77%, then fades out and stays gone */
+@keyframes sp-life{
+  0%,77%{opacity:1;visibility:visible}
+  100%{opacity:0;visibility:hidden}
+}
+
+.sp-boat{
+  fill:var(--teal);
+  transform-box:fill-box;               /* origin resolves against the boat itself */
+  transform-origin:100% 50%;            /* nose holds, body catches up */
+  animation:sp-fly .62s cubic-bezier(.22,.61,.36,1) backwards;
+}
+/* travel -> squash at the landing -> rebound -> rest at exactly 0 and 1,1.
+   Note translateX here is in SVG USER units, so its pixel distance scales with
+   the art's rendered size -- at a wide viewport the start position is still
+   inside the frame. The opacity ramp is therefore the entry mechanism, not an
+   off-screen start: the boats materialise while already moving, which behaves
+   identically at every viewport width. */
+@keyframes sp-fly{
+  /* 0-12% is a guaranteed beat of nothing. Without it the fade starts at
+     t=0 and the very first painted frame can carry a ~2% ghost near the
+     left edge -- imperceptible, but "the first frame is empty" should be a
+     property, not a coincidence of paint timing. */
+  0%,12% {transform:translateX(-1520px) scale(1,1);opacity:0}
+  55%  {opacity:1}
+  62%  {transform:translateX(16px) scale(.93,1.06);opacity:1}
+  78%  {transform:translateX(4px) scale(1.025,.99)}
+  100% {transform:translateX(0) scale(1,1);opacity:1}
+}
+
+.sp-word{fill:var(--ink)}
+.sp-cover{
+  fill:var(--paper);
+  animation:sp-wipe .5s cubic-bezier(.33,1,.68,1) .42s both;
+}
+@keyframes sp-wipe{
+  from{transform:translateX(0)}
+  to{transform:translateX(860px)}
+}
+
+/* Reduced motion: no splash at all. Not a faster splash -- none. */
+@media (prefers-reduced-motion:reduce){
+  .splash{display:none}
+}
+
+
+/* ============================================ illustration system
+   One vocabulary for every diagram on the page, so they read as a family
+   rather than six unrelated pictures:
+
+     .il-rail    structure and flow      ink at 18%, 2px
+     .il-live    the active/committed path  teal, 2.6px
+     .il-card    a machine, file or repo    paper card + hairline
+     .il-node    a landed event            ink at 20%
+     .il-hot     the thing happening now   teal
+     .il-lbl     mono micro-label          replaces a sentence
+     .il-warn    a conflict                red
+
+   Strokes are declared once here. An illustration that needs a new weight or
+   colour is a sign the vocabulary is wrong, not that it needs an exception. */
+.il{width:100%;height:auto;display:block}
+.il-rail{fill:none;stroke:var(--ink);stroke-opacity:.18;stroke-width:2;stroke-linecap:round}
+.il-rail-d{fill:none;stroke:var(--ink);stroke-opacity:.2;stroke-width:2;stroke-linecap:round;
+      stroke-dasharray:5 6}
+.il-live{fill:none;stroke:var(--teal);stroke-width:2.6;stroke-linecap:round}
+.il-card{fill:var(--card);stroke:var(--line2);stroke-width:1.6}
+.il-card-q{fill:var(--paper);stroke:var(--line2);stroke-width:1.6}
+.il-glyph{fill:none;stroke:var(--ink);stroke-opacity:.26;stroke-width:2;stroke-linecap:round}
+.il-node{fill:var(--ink);fill-opacity:.2}
+.il-hot{fill:var(--teal)}
+.il-ring{fill:none;stroke:var(--teal);stroke-opacity:.3;stroke-width:2}
+.il-warn{fill:var(--red)}
+.il-warn-s{fill:none;stroke:var(--red);stroke-width:2.4;stroke-linecap:round}
+.il-lbl{font-family:var(--mono);font-size:16px;fill:var(--muted)}
+.il-lbl-t{font-family:var(--mono);font-size:16px;fill:var(--teal)}
+.il-ttl{font-family:var(--mono);font-size:16px;font-weight:500;fill:var(--ink2)}
+
+/* figure wrapper: an illustration is content, so it gets the card treatment
+   only where it needs a ground of its own */
+.il-frame{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);
+      padding:26px 24px;box-shadow:var(--shadow);overflow-x:auto;
+      -webkit-overflow-scrolling:touch}
+/* A 1000-unit viewBox squeezed into a 335px phone renders its 16px labels at
+   4.6px, which is not a diagram, it is a smudge. Hold a legible floor and let
+   the figure scroll instead -- the same trade the wide tables already make. */
+.il-frame svg.il{min-width:720px}
+.il-cap{font-size:13px;color:var(--muted);margin-top:12px;max-width:62ch}
+
+/* One-shot draw-in. Illustrations are below the fold except the hero, so this
+   is deliberately cheap: opacity and a short offset, no path-length tricks. */
+@keyframes il-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.il-frame{animation:il-in .5s ease both}
+@media (prefers-reduced-motion:reduce){
+  .il-frame{animation:none}
+}
+
+/* The dark band inverts the ground, so the illustration vocabulary needs the
+   same inversion rather than a white box dropped onto ink. */
+.band .il-frame{background:#242320;border-color:#35332F}
+.band .il-rail{stroke:#F5F3F0;stroke-opacity:.22}
+.band .il-rail-d{stroke:#F5F3F0;stroke-opacity:.26}
+.band .il-live{stroke:#5EC4B8}
+.band .il-card{fill:#2C2B27;stroke:#45423D}
+.band .il-card-q{fill:#242320;stroke:#45423D}
+.band .il-ttl{fill:#E8E4DD}
+.band .il-lbl{fill:#8A857C}
+.band .il-lbl-t{fill:#5EC4B8}
+.band .il-cap{color:#8A857C}
