@@ -50,7 +50,14 @@ const rule = (sel) => {
 const cssChecks = [
   ['.empty{', 'borderdashed or dashed border', (r) => /1?\.?5?pxdashed/.test(r) || r.includes('dashed')],
   ['.panel{', 'position:absolute;right:0;z-index:20', (r) => r.includes('position:absolute') && r.includes('right:0') && r.includes('z-index:20')],
-  ['.board{', 'padding-right 400px so the last column clears the panel', (r) => /padding:[^;]*400px/.test(r)],
+  // Locked pattern 3, order 0071. The clearance is now CONDITIONAL: present when the panel is
+  // open, absent when it is not. Both halves are asserted, because either one alone passes for
+  // the wrong reason -- a flat 400px passes the first and wastes 400px on every load, and
+  // deleting the rule entirely passes the second and puts the last column back under the panel.
+  ['.board[data-panel="true"]{', 'padding-right 400px WHEN the panel is open, so the last column clears it',
+    (r) => /padding-right:400px/.test(r)],
+  ['.board{', '(control) no unconditional 400px clearance -- it is the panel-open state that pays for it',
+    (r) => !/400px/.test(r)],
   ['.card .title{', 'wraps rather than truncating', (r) => r.includes('overflow-wrap:break-word') && !r.includes('nowrap') && !r.includes('text-overflow')],
 ];
 let cssFailed = 0;

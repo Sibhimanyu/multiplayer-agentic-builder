@@ -199,8 +199,14 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 /* ---- board ---- */
 /* padding-right lets the last column scroll clear of the overlay panel */
 .stage{position:relative;min-height:0;overflow:hidden}
-.board{display:flex;gap:16px;padding:22px 400px 22px 28px;overflow-x:auto;overflow-y:hidden;
-       height:100%;min-height:0}
+/* Locked pattern 3 says the board carries padding-right:400px so the last column can scroll
+   clear of the overlay panel. It said nothing about carrying it when no panel is open, and it
+   did: at 1440 inside the shell that was 400 of the 1204 hidden pixels, on every load, for a
+   panel nobody had opened. Conditional satisfies the pattern EXACTLY -- panel open, padding
+   present -- and gives the columns the space back the rest of the time. */
+.board{display:flex;gap:16px;padding:22px 28px;overflow-x:auto;overflow-y:hidden;
+       height:100%;min-height:0;scroll-behavior:smooth}
+.board[data-panel="true"]{padding-right:400px}
 .col{width:262px;flex:none;display:grid;grid-template-rows:auto 1fr;min-height:0}
 .col-head{display:flex;align-items:center;gap:8px;padding:0 4px 11px}
 .col-head h3{font-family:var(--serif);font-size:14.5px;font-weight:600;letter-spacing:-.01em}
@@ -545,3 +551,15 @@ pre{background:var(--paper);border:1px solid var(--line);border-radius:9px;paddi
 /* The switcher is a link but reads as a control; the default underline fights the border. */
 .switcher{text-decoration:none}
 .switcher:hover{text-decoration:none}
+
+/* The board spans the rail's column when the rail is gone, so dropping it actually buys width
+   instead of leaving a 320px hole. */
+.shell > .main[data-wide="true"]{grid-column:2/-1}
+
+/* Columns use the width they are given. 262px was a fixed value chosen when the board WAS the
+   page; inside the shell it forces scroll before the content needs it. The floor is what a task
+   card can still be read at. 176 is not a taste value: it is the width at which all six columns
+   fit a 1440 viewport beside the 244px sidebar, measured, with zero card overflow. It only binds
+   at 1440 and below -- at 1920 the columns grow back to ~256px and the max-width holds them
+   there. The cost is the longest title wrapping to four lines instead of three. */
+.col{width:auto;flex:1 1 262px;min-width:176px;max-width:300px}

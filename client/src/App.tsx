@@ -226,7 +226,7 @@ export function BoardView({
     <>
       {!chromeless && <TopNav snap={snap} freshness={freshness} session={session} onSignOut={onSignOut} />}
       <div className="stage">
-        <div className="board">
+        <div className="board" data-panel={Boolean(sel)}>
           {COLUMNS.map(({ status, label }) => {
             const tasks = snap.tasks.filter((t) => t.status === status);
             return (
@@ -380,7 +380,7 @@ function ProjectShell({
       </TopBar>
 
       {section === 'board' ? (
-        <main className="main">
+        <main className="main" data-wide={true}>
           <BoardView
             snap={snap} freshness={store.freshness} selected={selected} onSelect={setSelected}
             session={session} onSignOut={onSignOut} chromeless
@@ -415,7 +415,13 @@ function ProjectShell({
         <main className="main"><Unbuilt section={meta} /></main>
       )}
 
-      <ScopeRail agents={snap.agents} locks={locks} />
+      {/*
+        NO RAIL ON THE BOARD. Locked pattern 2: presence is an avatar with a status ring ON THE
+        CARD, not a separate panel. The rail beside the board is that separate panel, and it was
+        charging 320px to repeat what the cards already say. The queue keeps it, because the
+        queue has no cards carrying presence.
+      */}
+      {section !== 'board' && <ScopeRail agents={snap.agents} locks={locks} />}
     </div>
   );
 }
