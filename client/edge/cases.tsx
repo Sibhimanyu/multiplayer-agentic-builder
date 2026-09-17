@@ -10,7 +10,7 @@
 // Built and run by client/edge/run.mjs.
 
 import { renderToStaticMarkup } from 'react-dom/server';
-import { BoardView, ProjectsIndex, blockedChain, isLoginPath, projectIdFromPath } from '../src/App';
+import { BoardView, ProjectsIndex, blockedChain, isLoginPath, projectIdFromPath, projectRoute } from '../src/App';
 import { AccountChip, SignInView, TriagePanel, relativeTime } from '../src/components';
 import { loadProjects, type ProjectLister } from '../src/store/projects';
 import type { Session } from '../src/store/session';
@@ -249,8 +249,23 @@ const render = (snap: Snapshot, freshness: Freshness = LIVE, selected: string | 
   check(projectIdFromPath('/p/proj_inventory/') === 'proj_inventory', 'route: a trailing slash is the same route');
   // The control: a path that must NOT parse as a project, so "returns null" is not vacuous.
   check(projectIdFromPath('/p/') === null, 'route: /p/ with no id is not a project');
-  check(projectIdFromPath('/p/a/b') === null, 'route: a nested path is not a project');
+  // Order 0071: one nested segment is now a SECTION, so `/p/a/b` is project `a`. The control
+  // moves out one level rather than being deleted -- a suite that stops rejecting anything is
+  // the failure this line existed to prevent.
+  check(projectIdFromPath('/p/a/b/c') === null, 'route: a two-deep path is not a project');
   check(projectIdFromPath('/p/../etc') === null, 'route: traversal characters are rejected');
+
+  // ---- sections, order 0071 ----
+  check(projectRoute('/p/proj_inventory')?.section === 'queue',
+    'route: the bare project URL is the queue, not the board');
+  check(projectRoute('/p/proj_inventory/board')?.section === 'board',
+    'route: a known section is kept');
+  check(projectRoute('/p/proj_inventory/board')?.project_id === 'proj_inventory',
+    'route: the project id survives a section');
+  // A typo in a shared link lands somewhere useful instead of a dead end.
+  check(projectRoute('/p/proj_inventory/nonsense')?.section === 'queue',
+    'route: an unknown section falls back to the queue');
+  check(projectRoute('/p/a/b/c') === null, '(control) route: two-deep still does not parse');
 }
 
 // ---------------------------------------------------------------- triage surface (0047)

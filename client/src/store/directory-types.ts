@@ -38,3 +38,35 @@ export interface ProjectRollup {
   last_activity?: string;
   last_seq?: number;
 }
+
+/**
+ * What a role may do, mirrored from `shared/store/directory.ts`.
+ *
+ * COSMETIC, AND THAT IS THE POINT. This decides whether a button is rendered enabled; it does not
+ * decide anything. `functions/src/write-api.ts` maps each op to a required capability and refuses
+ * the request against the caller's server-side grant, so a wrong answer here shows a button that
+ * is then refused with a sentence — degraded, never unsafe.
+ *
+ * Mirrored rather than imported because the client build does not reach into `shared/` (see the
+ * note at the top of this file and in store/types.ts). Drift is therefore possible, which is
+ * exactly why the client's copy is not allowed to be the authority.
+ */
+export type Capability =
+  | 'claim' | 'acquire_scope' | 'publish_contract' | 'open_pr' | 'deploy' | 'triage'
+  | 'invite' | 'suggest';
+
+const CAPABILITIES: Record<RoleSlug, readonly Capability[]> = {
+  owner: ['claim', 'acquire_scope', 'publish_contract', 'open_pr', 'deploy', 'triage', 'invite', 'suggest'],
+  architect: ['claim', 'acquire_scope', 'publish_contract', 'triage', 'suggest'],
+  backend: ['claim', 'acquire_scope', 'publish_contract', 'open_pr', 'deploy', 'suggest'],
+  frontend: ['claim', 'acquire_scope', 'publish_contract', 'open_pr', 'deploy', 'suggest'],
+  qa: ['claim', 'acquire_scope', 'open_pr', 'suggest'],
+  // The client seat holds `suggest` and nothing else. It cannot claim and it cannot create a
+  // task, because creating a task IS the triage act -- decision 0005.
+  client: ['suggest'],
+};
+
+/** Unknown roles fall back to `client`, the least-privileged seat, exactly as the server does. */
+export function hasCapability(slug: string, cap: Capability): boolean {
+  return (CAPABILITIES[slug as RoleSlug] ?? CAPABILITIES.client).includes(cap);
+}

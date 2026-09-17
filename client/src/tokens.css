@@ -41,6 +41,12 @@
   /* Skeleton fill, from the existing warm greys rather than a new grey. */
   --sk-base:#EFECE6;
   --sk-sheen:#F7F5F1;
+
+  /* ---- order 0071. The shell's two fixed columns. ----
+     Named because both are referenced by the grid AND by the breakpoints that drop them, and a
+     literal in two places is a literal that will disagree with itself. */
+  --w-side:244px;
+  --w-rail:320px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body,#root{height:100%}
@@ -354,3 +360,188 @@ pre{background:var(--paper);border:1px solid var(--line);border-radius:9px;paddi
   .ghost:active{transform:none}
   .cta:active{transform:none}
 }
+
+/* ======================================================================================
+   THE SHELL — order 0071.
+   Home stopped being a board and became a personal queue. The six-column state machine is
+   unchanged and moves to a secondary view; what is new is the chrome around it.
+
+   Nothing above this line changed. The palette, the type pairing, the radii and the density are
+   Kanban Calm. A2 (the approved comp) was drawn in these same tokens for exactly that reason.
+   ====================================================================================== */
+
+/* Sidebar spans full height; the top bar covers only content and rail, so the brand sits with
+   navigation rather than floating above everything. */
+.shell{display:grid;grid-row:1/-1;height:100%;overflow:hidden;
+     grid-template-columns:var(--w-side) minmax(0,1fr) var(--w-rail);
+     grid-template-rows:60px minmax(0,1fr)}
+.shell > .side{grid-column:1;grid-row:1/-1}
+.shell > .topbar{grid-column:2/-1;grid-row:1}
+.shell > .main{grid-column:2;grid-row:2;overflow-y:auto}
+.shell > .rail{grid-column:3;grid-row:2;overflow-y:auto}
+/* The rail is context, the sidebar is navigation. Context goes first when width runs out --
+   losing where you are is worse than losing who holds what. */
+@media (max-width:1240px){
+  .shell{grid-template-columns:var(--w-side) minmax(0,1fr)}
+  .shell > .rail{display:none}
+  .shell > .topbar{grid-column:2}
+}
+@media (max-width:860px){
+  .shell{grid-template-columns:minmax(0,1fr)}
+  .shell > .side{display:none}
+  .shell > .topbar,.shell > .main{grid-column:1}
+}
+
+/* ---- sidebar ---- */
+.side{background:var(--card);border-right:1px solid var(--line);
+     display:flex;flex-direction:column;overflow-y:auto}
+.side .side-head{padding:16px 18px;display:flex;align-items:center}
+.side .side-sec{padding:16px 18px 7px;font-size:10.5px;font-weight:600;letter-spacing:.07em;
+     text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:8px}
+.side .side-sec .n{margin-left:auto;font-variant-numeric:tabular-nums;letter-spacing:0}
+.side-nav{display:flex;flex-direction:column;gap:1px;padding:0 10px}
+.side-nav a{display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:var(--r-ctl);
+     color:var(--ink2);text-decoration:none;font-size:13.5px;
+     transition:background var(--motion-fast) var(--ease),color var(--motion-fast) var(--ease)}
+.side-nav a:hover{background:var(--paper);color:var(--ink)}
+.side-nav a .ct{margin-left:auto;font-size:11.5px;color:var(--muted);
+     font-variant-numeric:tabular-nums}
+/* Current section. A left bar plus a tint plus weight: three signals, because one of them is
+   invisible to anyone who cannot distinguish the tint. */
+.side-nav a[aria-current="page"]{background:var(--teal-soft);color:var(--teal);font-weight:600;
+     box-shadow:inset 2px 0 0 var(--teal)}
+.side-nav a[aria-current="page"] .ct{color:var(--teal)}
+/* A section with nothing behind it yet. Dimmed and non-navigating, so the sidebar never promises
+   a room that does not exist. */
+.side-nav a[data-unbuilt="true"]{color:var(--muted);cursor:default}
+.side-nav a[data-unbuilt="true"]:hover{background:transparent;color:var(--muted)}
+.side-nav a[data-unbuilt="true"] .ct{font-size:10.5px}
+.side .side-foot{margin-top:auto;padding:14px 18px;border-top:1px solid var(--line);
+     font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:10px}
+.side .newproj{margin:8px 10px 0;padding:9px 10px;border-radius:var(--r-ctl);
+     border:1px dashed var(--line2);background:none;color:var(--ink2);cursor:pointer;
+     font:500 13px var(--sans);text-align:left;display:flex;align-items:center;gap:9px;
+     transition:border-color var(--motion-fast) var(--ease),color var(--motion-fast) var(--ease)}
+.side .newproj:hover{border-color:var(--teal);color:var(--teal)}
+
+/* ---- top bar ---- */
+.topbar{background:var(--card);border-bottom:1px solid var(--line);height:60px;
+     display:flex;align-items:center;gap:14px;padding:0 22px}
+.topbar .grow{margin-left:auto}
+.switcher{display:flex;align-items:center;gap:8px;padding:6px 11px;border-radius:var(--r-ctl);
+     border:1px solid var(--line);background:var(--paper);font-size:13px;color:var(--ink);
+     cursor:pointer;transition:border-color var(--motion-fast) var(--ease)}
+.switcher:hover{border-color:var(--line2)}
+.switcher .owner{color:var(--muted)}
+.switcher .repo-name{font-weight:600}
+
+/* ---- the queue ---- */
+.queue{padding:26px 28px 40px;max-width:1080px}
+.queue h1{font-family:var(--serif);font-size:25px;font-weight:600;letter-spacing:-.02em;
+     text-wrap:balance}
+.queue .lede{margin-top:7px;color:var(--ink2);font-size:13.5px;max-width:66ch;
+     text-wrap:pretty}
+.queue .grp{margin-top:28px}
+.queue .grp-head{display:flex;align-items:baseline;gap:10px;margin-bottom:11px}
+.queue .grp-head h2{font-family:var(--serif);font-size:15.5px;font-weight:600;
+     letter-spacing:-.01em}
+.queue .grp-head .note{font-size:12px;color:var(--muted);margin-left:auto;text-align:right}
+
+/* A task row. NOT a card: the group is the container, the rows are its contents, and a card
+   inside a card is the thing the floor bans. Hairlines between, radius only on the ends. */
+.qlist{border:1px solid var(--line);border-radius:var(--r-card);background:var(--card);
+     overflow:hidden}
+.qrow{display:grid;grid-template-columns:52px minmax(0,1fr) auto;gap:0 14px;
+     padding:15px 17px;border-bottom:1px solid var(--line);
+     transition:background var(--motion-fast) var(--ease)}
+.qrow:last-child{border-bottom:none}
+.qrow:hover{background:var(--paper)}
+.qrow .id{font-family:var(--mono);font-size:11px;color:var(--muted);padding-top:2px;
+     font-variant-numeric:tabular-nums}
+.qrow .t{font-size:14px;font-weight:500;line-height:1.4;text-wrap:pretty}
+.qrow .meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
+.qrow .why{margin-top:7px;font-size:12px;color:var(--muted);text-wrap:pretty}
+.qrow .why b{color:var(--amber);font-weight:500}
+.qrow .act{grid-column:3;grid-row:1;align-self:start;display:flex;flex-direction:column;
+     align-items:flex-end;gap:6px}
+.qrow .act .sub{font-size:11.5px;color:var(--muted);text-align:right;max-width:190px;
+     text-wrap:pretty}
+.qrow[data-blocked="true"]{background:var(--amber-soft)}
+.qrow[data-blocked="true"]:hover{background:var(--amber-soft)}
+
+/* Scope and agent chips. Mono here is measurement, not costume: these are literal glob patterns
+   and process names, and alignment between rows is the point. */
+.chip{display:inline-flex;align-items:center;gap:6px;border-radius:var(--r-tag);
+     padding:3px 7px;font-size:11px;border:1px solid var(--line);background:var(--paper);
+     color:var(--ink2)}
+.chip.scope{font-family:var(--mono);font-size:10.5px}
+.chip.scope .k{color:var(--muted)}
+.chip.agent{font-family:var(--sans);font-size:11px}
+.chip.kind{font-weight:500;text-transform:capitalize}
+.chip.kind::before{content:'';width:5px;height:5px;border-radius:50%;background:var(--muted)}
+.chip.kind[data-k="bug"]::before{background:var(--red)}
+.chip.kind[data-k="feature"]::before{background:var(--teal)}
+.chip.kind[data-k="docs"]::before{background:var(--amber)}
+
+/* ---- right rail ---- */
+.rail{background:var(--paper);border-left:1px solid var(--line);padding:18px 18px 34px}
+.rail h3{font-size:10.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;
+     color:var(--muted);margin-bottom:10px}
+.rail h3:not(:first-child){margin-top:24px}
+.holder{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);
+     padding:13px 14px;margin-bottom:9px}
+.holder .who{display:flex;align-items:center;gap:9px}
+.holder .who .nm{font-size:13.5px;font-weight:600}
+.holder .who .you{font-size:10px;background:var(--teal-soft);color:var(--teal);
+     border-radius:var(--r-tag);padding:2px 6px;font-weight:600}
+.holder .role{font-size:11.5px;color:var(--muted);margin-top:3px}
+.holder .scopes{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}
+.holder .since{font-size:11px;color:var(--muted);margin-top:9px;
+     font-variant-numeric:tabular-nums}
+
+/* ---- a section that is not built yet ---- */
+/* NOT the dashed empty state. "No file locks held" and "file locks are not built" are different
+   claims, and the dashed block already means the first one. This says the second. */
+.stub{padding:56px 28px;max-width:620px}
+.stub h1{font-family:var(--serif);font-size:22px;font-weight:600;letter-spacing:-.02em}
+.stub p{margin-top:11px;color:var(--ink2);font-size:13.5px;line-height:1.65;text-wrap:pretty}
+.stub .now{margin-top:18px;padding:14px 15px;background:var(--card);
+     border:1px solid var(--line);border-radius:var(--r-card)}
+.stub .now .lbl{font-size:11.5px;color:var(--muted)}
+.stub .now code{display:block;margin-top:7px;font-family:var(--mono);font-size:12.5px;
+     color:var(--ink);user-select:all}
+
+/* ---- new task ---- */
+.newtask{display:grid;gap:13px;padding:18px;background:var(--card);
+     border:1px solid var(--line);border-radius:var(--r-card);margin-top:14px;max-width:620px}
+.newtask label{display:grid;gap:6px;font-size:12px;color:var(--ink2)}
+.newtask input,.newtask select{font:400 13.5px var(--sans);color:var(--ink);
+     background:var(--paper);border:1px solid var(--line2);border-radius:var(--r-ctl);
+     padding:9px 11px}
+.newtask input::placeholder{color:var(--muted)}
+.newtask .row{display:flex;gap:10px;align-items:center}
+.newtask .err{font-size:12.5px;color:var(--red)}
+
+/* Browser surfaces carry the design too. */
+::selection{background:var(--teal-soft);color:var(--teal)}
+:root{color-scheme:light}
+/* The new-task form sits above the queue and shares its gutter, so the form and the list it will
+   add to line up on the same left edge. */
+.compose{padding:26px 28px 0;max-width:1080px}
+.main{overflow-y:auto}
+
+/* ---- disabled, order 0071 ---- */
+/* A DISABLED CONTROL THAT LOOKS ENABLED IS WORSE THAN NO CONTROL. The blocked rows rendered a
+   full-strength teal Claim button that did nothing when clicked; the reason was printed beside it
+   and the button contradicted the reason. Not opacity on the whole element -- that dims the label
+   below contrast. The surface goes flat and the text stays readable. */
+.cta:disabled{background:var(--line);color:var(--muted);cursor:not-allowed}
+.cta:disabled:hover{background:var(--line)}
+.cta:disabled:active{transform:none}
+.ghost:disabled{color:var(--muted);border-color:var(--line);cursor:not-allowed}
+.ghost:disabled:hover{background:var(--card);color:var(--muted);border-color:var(--line)}
+.newtask input:disabled,.newtask select:disabled{color:var(--muted);cursor:not-allowed}
+
+/* The switcher is a link but reads as a control; the default underline fights the border. */
+.switcher{text-decoration:none}
+.switcher:hover{text-decoration:none}

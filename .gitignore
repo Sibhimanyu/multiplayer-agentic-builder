@@ -44,3 +44,6 @@ client/.env.local
 
 # Design-hook cache. Session-scoped tool state keyed by session id, not project source.
 .impeccable/
+
+# Bundled edge render, rebuilt on demand.
+client/edge/.*-shot.mjs

@@ -104,7 +104,6 @@ export function TopNav({
       <Presence agents={snap.agents} />
       <FreshnessPill freshness={freshness} generatedAt={snap.generated_at} />
       {session && onSignOut && <AccountChip session={session} onSignOut={onSignOut} />}
-      <button className="cta">Invite teammate</button>
     </nav>
   );
 }
