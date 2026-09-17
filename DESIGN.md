@@ -64,6 +64,114 @@ second elevation scale nobody decided on.
 states cannot drift apart. Animate `transform` and `opacity` only — never `width`, `height`,
 `top` or `left`.
 
+### Spacing
+
+One scale. Every new margin, padding and gap comes from it.
+
+| Token | Value | Typical use |
+|---|---|---|
+| `--sp-1` | `2px` | hairline nudges, label offsets |
+| `--sp-2` | `4px` | inside a tag or badge |
+| `--sp-3` | `6px` | icon to its own label |
+| `--sp-4` | `8px` | related lines in a stack |
+| `--sp-5` | `12px` | inside a card, control padding |
+| `--sp-6` | `16px` | between grouped blocks |
+| `--sp-7` | `24px` | between groups |
+| `--sp-8` | `32px` | between sections in a panel |
+| `--sp-9` | `48px` | page section padding |
+| `--sp-10` | `64px` | major page breaks |
+
+**This scale is new and the shipped CSS does not yet conform.** `client/src/tokens.css` currently
+carries 28 distinct pixel spacing values and the marketing site carries 38 more, including 9, 11,
+13, 15, 17, 19, 34, 58, 74 and 86 — improvised one at a time. Migrate on touch; do not open a
+sweep commit that rewrites every rule at once, because a spacing sweep is indistinguishable from
+a spacing regression in review.
+
+---
+
+## Logo spacing
+
+**The problem this section exists to solve.** `flotilla-mark.svg` and `flotilla-lockup.svg` are
+not tightly cropped. Each carries dead space inside its own `viewBox`, so a CSS `gap` or
+`margin` next to a logo is always **larger than the number says**, by an amount that scales with
+the logo's rendered size. The old rule — "keep at least 20% of the mark's height clear on every
+side" — could not be applied, because the box hides how much clearance the asset already
+contains. Measured from the path geometry:
+
+| Asset | viewBox | left | right | top | bottom |
+|---|---|---|---|---|---|
+| `flotilla-mark.svg` | 520 × 420 | 9.1% | **18.0%** | 9.0% | 6.9% |
+| `flotilla-lockup.svg` | 1060 × 260 | 2.5% | 1.6% | **13.7%** | **11.5%** |
+| `flotilla-lockup-stacked.svg` | 760 × 540 | 3.3% | 3.4% | 6.1% | 5.0% |
+
+Percentages are of the box, so they are size-independent: multiply by the rendered width (for
+left/right) or height (for top/bottom).
+
+Two consequences, both of which were live bugs:
+
+- **`margin:0 auto` does not centre the mark.** Its art sits 4.5% of its own width left of the
+  box centre, because the right padding is double the left. At 67px wide that is 3px off.
+- **A gap next to the mark is inflated by 18% of its width.** The board's lockup specified a
+  10px gap and rendered a 17.25px one.
+
+### The rules
+
+1. **Gaps are optical.** A logo spacing number means ink to ink — the mark's artwork to the
+   glyph's cap, not box to box. Verify by measuring rendered pixels, never by reading the CSS.
+2. **Cancel the asset's padding at the call site**, so the gap you write is the gap you get:
+   `margin-right: calc(var(--mark-w) * -0.18)`. Derive the factor from the table above. Do not
+   re-crop the published assets — `exports/`, the favicons, the OG master and `client/edge/run.mjs`
+   all assume the current boxes.
+3. **Mark next to wordmark uses the ratio the authored lockup already uses**, not a scale step.
+   Measured off the art in the assets themselves:
+
+   | Pairing | Authored in | Gap |
+   |---|---|---|
+   | mark left of wordmark | `flotilla-lockup.svg` | **0.34 × the mark's ink height** |
+   | mark above wordmark | `flotilla-lockup-stacked.svg` | **0.21 × the mark's ink height** |
+
+   One ratio per axis, taken from the artwork, so a hand-built lockup cannot disagree with the
+   supplied one.
+4. **Everything else next to a logo uses the spacing scale.** A mark above a section heading, a
+   lockup above a tagline, a lockup beside a version badge — those are layout, not lockup
+   construction, and the ratios in rule 3 do not apply to them. Rule 1 still does.
+5. **Line boxes inflate a gap too.** Text sits below its own half-leading, so the optical gap
+   under a logo is the margin plus the asset's bottom padding plus the leading above the caps.
+   For a 34px `h2` at `line-height:1.18` that last term is about 7px. This is why these numbers
+   have to be measured.
+
+### Measured call sites
+
+Measured in Chromium at `deviceScaleFactor: 4`, one method for every row: screenshot each
+element alone, take its background from its own modal pixel colour (the nav is translucent white
+and the footer is `--card`, so a `--paper`-referenced threshold reports every pixel as ink), find
+the first and last ink line, and subtract in page coordinates.
+
+| Surface | Pair | CSS | Before | After | Target |
+|---|---|---|---|---|---|
+| board nav | `.brand-lockup` mark → "Flotilla" | `gap:var(--sp-4)` + cancel | 17.25px | **8.50px** | 0.33 × 24.5px ink = 8.1 |
+| board sign-in | `[data-size=lg]` mark → "Flotilla" | `gap:var(--sp-5)` + cancel | 23.75px | **13.00px** | 0.33 × 37.25px ink = 12.3 |
+| site nav | lockup → `pre-release` badge | `gap:var(--sp-5)` | 24.00px | **14.00px** | `--sp-5` + 2.0px asset padding |
+| site closing | mark → `h2` | `margin-bottom:5px` | 36.25px | **15.25px** | `--sp-6` |
+| site footer | lockup → tagline | `margin-top:4px` | 20.00px | **12.00px** | `--sp-5` |
+
+Ratios against the authored `flotilla-lockup.svg`, rendered at matched ink heights and measured
+the same way: **0.330** and **0.333**. The board lockup was at **0.704** and **0.638** — roughly
+double the brand's own gap — and is now at **0.347** and **0.349**.
+
+Optical centring, `#closing` mark against its heading's centre: **−2.42px → +0.43px**.
+
+Two accepted exceptions, recorded so they are not mistaken for drift:
+
+- **The `.mark-text` fallback sits at ratio 1.54.** When `flotilla-mark.svg` 404s, `BrandLockup`
+  swaps in a styled "FL" that deliberately keeps the mark's box (order 0065), so ~9px of that box
+  is empty on each side and the gap widens. The padding cancel is scoped to `img.mark` for the
+  same reason — applied to the glyphs it would pull them 10px too close. Keeping the box is the
+  older decision and it wins: a 404 must not also move the layout.
+- **The site nav lands at 14.00px, not 12.00px.** `flotilla-lockup.svg` carries 1.6% of its width
+  as padding on the right, which is 2.0px at `height:26px`. Below the size where anyone can see
+  it, and cancelling it would put an un-scale-like number in the CSS for no visible gain.
+
 ---
 
 ## Locked patterns

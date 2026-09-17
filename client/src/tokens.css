@@ -47,6 +47,13 @@
      literal in two places is a literal that will disagree with itself. */
   --w-side:244px;
   --w-rail:320px;
+
+  /* ---- the spacing scale. DESIGN.md "Spacing". ----
+     There was never a first scale, only 28 improvised pixel values, which is why two gaps next
+     to the same logo could differ by 5px and nobody could say which was wrong. Every new
+     margin, padding and gap comes from here. */
+  --sp-1:2px;  --sp-2:4px;  --sp-3:6px;   --sp-4:8px;   --sp-5:12px;
+  --sp-6:16px; --sp-7:24px; --sp-8:32px;  --sp-9:48px;  --sp-10:64px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body,#root{height:100%}
@@ -77,8 +84,18 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
    div containing the letters "FL". Scoped to the COMPONENT rather than to .nav, because the
    signed-out card carries the same lockup and a nav-only rule is how it went missing in three
    places at once. */
-.brand-lockup{display:flex;align-items:center;gap:10px;flex:none}
-.brand-lockup .mark{display:block;width:36px;height:29px;object-fit:contain;flex:none}
+/* The gap is the OPTICAL gap -- mark ink to glyph cap -- which means cancelling the dead space
+   inside flotilla-mark.svg first. The asset carries 18.0% of its width as transparent padding on
+   the right and 9.1% on the left (DESIGN.md "Logo spacing" has the measured table). Uncancelled,
+   gap:10px rendered as 17.25px and the wordmark looked detached from the mark. The factors are
+   expressed against --mark-w so the two sizes cannot drift apart. */
+.brand-lockup{display:flex;align-items:center;gap:var(--sp-4);flex:none}
+.brand-lockup .mark{--mark-w:36px;display:block;width:var(--mark-w);height:29px;
+     object-fit:contain;flex:none}
+/* img only. The .mark-text fallback below is glyphs, not the asset, so it has no dead space to
+   cancel -- given these margins it would sit 10px too close to the wordmark. */
+.brand-lockup img.mark{margin-left:calc(var(--mark-w) * -.091);
+     margin-right:calc(var(--mark-w) * -.18)}
 .brand-lockup .brand{font-family:var(--brand-serif);font-size:18px;font-weight:600;line-height:1;
      font-optical-sizing:auto;font-kerning:normal;font-feature-settings:'kern' 1;
      letter-spacing:-.015em}
@@ -88,8 +105,8 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
      font-size:15px;font-weight:600;line-height:1;letter-spacing:.02em;color:var(--teal)}
 /* One larger size, for the screen where the lockup IS the page furniture rather than a corner of
    it. A size attribute rather than a second component, so both stay one thing. */
-.brand-lockup[data-size="lg"]{gap:13px}
-.brand-lockup[data-size="lg"] .mark{width:54px;height:44px}
+.brand-lockup[data-size="lg"]{gap:var(--sp-5)}
+.brand-lockup[data-size="lg"] .mark{--mark-w:54px;height:44px}
 .brand-lockup[data-size="lg"] .brand{font-size:26px}
 .brand-lockup[data-size="lg"] .mark-text{font-size:22px}
 
