@@ -39,7 +39,7 @@ import { materialise, publishToBlackboard } from './blackboard.ts';
 import { serve } from './mcp.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
 import { LAYER_OF, TASK_KINDS, type Event, type EventKind, type TaskKind } from '../shared/store/types.ts';
-import { ROLE_SLUGS } from '../shared/store/directory.ts';
+import { ROLE_SLUGS, roleFor } from '../shared/store/directory.ts';
 import type { Logger } from '../shared/log.ts';
 
 /**
@@ -469,9 +469,25 @@ function detectHarness(): string {
   return 'manual';
 }
 
+/**
+ * Read .agentic/project.json, NORMALISED.
+ *
+ * `flotilla new` writes {project_id, project_name, repo_url} and `connect` writes
+ * {project_id, name, repo_url, brief, protocol_version}. A cast pretended those were the same
+ * object, so `claim` in a `new`-created project reached sanitizeText with brief=undefined and
+ * died on "input is not iterable" -- AFTER the claim had already landed on the server, which is
+ * the worst place to fail. Every field is defaulted here rather than asserted.
+ */
 async function projectFile(root: string): Promise<ProjectFile> {
   const raw = await fs.readFile(path.join(root, LAYOUT.project), 'utf8');
-  return JSON.parse(raw) as ProjectFile;
+  const j = JSON.parse(raw) as Partial<ProjectFile> & { project_name?: string };
+  return {
+    project_id: j.project_id ?? '',
+    name: j.name ?? j.project_name ?? j.project_id ?? '',
+    repo_url: j.repo_url ?? '',
+    brief: j.brief ?? '',
+    protocol_version: j.protocol_version ?? '0.2',
+  };
 }
 
 
@@ -641,15 +657,30 @@ function rolePackFor(me: WhoAmI): RolePack {
       what: 'You own the written documentation for this project.',
     },
   };
-  const s = SCOPES[me.role_slug] ?? {
+  // THE SCOPE COMES FROM THE SHARED ROLE TABLE, NOT FROM SCOPES ABOVE.
+  //
+  // SCOPES was keyed on slugs that no longer exist -- 'backend-builder' where the real slug is
+  // 'backend', and no 'owner' at all -- so every role except architect fell through to the
+  // fail-closed default and was told, in AGENTS.md and in my_assignment, that it may write
+  // NOTHING. An owner whose file_scope is ['**'] read "(nothing — read only)".
+  //
+  // The comment on this function already said scope must not come from a table duplicated here.
+  // It was duplicated anyway, and it drifted. Prose still comes from SCOPES, because a title and
+  // a sentence are not facts the server owns; the globs are, so they come from roleFor().
+  const shared = roleFor(me.role_slug);
+  const prose = SCOPES[me.role_slug] ?? {
     edit: [],
     not: ['**'],
     prefix: `agent/${me.role_slug || 'unknown'}/`,
     title: me.role_slug || 'Unknown role',
-    // Fail closed and say so, rather than inventing a scope for a role nobody defined.
-    what:
-      'This role has no file scope defined. Do not edit anything; ask the project owner to ' +
-      'assign a known role.',
+    what: `You are acting as ${me.role_slug || 'an unknown role'} on this project.`,
+  };
+  const s = {
+    ...prose,
+    edit: shared.file_scope,
+    // Fail closed only when the SERVER says the role has no scope, not when this file has no
+    // prose for it.
+    not: shared.file_scope.length > 0 ? prose.not : ['**'],
   };
   return {
     role_slug: me.role_slug,
