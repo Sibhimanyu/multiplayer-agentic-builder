@@ -12,8 +12,8 @@ import {
 } from './components';
 import { LoginPage } from './Login';
 import {
-  boardAuth, consumeRedirect, explainAuthError, persistSession, signInAnonymous, signInWithGoogle,
-  signOutOf, watchSession, type Session,
+  boardAuth, consumeRedirect, explainAuthError, persistSession, signInWithGoogle,
+  signOutOf, watchSession, type Session, type SignInMethod,
 } from './store/session';
 import { loadProjects, type ProjectRow } from './store/projects';
 import { Sidebar, TopBar, Unbuilt, ScopeRail, SECTIONS, QUEUE_SECTION, type Section } from './Shell';
@@ -491,7 +491,7 @@ export function useSession(): {
   session: Session | null | undefined;
   error: { code: string; detail: string } | null;
   busy: boolean;
-  signIn: (how: 'google' | 'anonymous') => void;
+  signIn: (how: SignInMethod) => void;
   signOut: () => void;
 } {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -508,15 +508,14 @@ export function useSession(): {
     return watchSession(auth, (s) => setSession(s));
   }, [auth]);
 
-  const signIn = (how: 'google' | 'anonymous') => {
+  const signIn = (how: SignInMethod) => {
     setError(null);
     setBusy(true);
     void (async () => {
       try {
-        // Google resolves to null because the document is navigating away; the flow resumes in
-        // consumeRedirect on the next load. Anonymous resolves here and watchSession fires.
+        // Resolves to null because the document is navigating away; the flow resumes in
+        // consumeRedirect on the next load.
         if (how === 'google') await signInWithGoogle(auth);
-        else await signInAnonymous(auth);
       } catch (err) {
         setError(explainAuthError(err));
       } finally {
@@ -604,13 +603,18 @@ function SignedIn({ pathname, navigate }: { pathname: string; navigate: (to: str
   // top-left, because it occupies the same empty page the card is about to.
   if (session === undefined) return <AskingWhoYouAre />;
   // NO NAV. SignInView is the whole page and carries the lockup itself -- order 0065 point 2.
-  if (session === null) {
+  // A SESSION THAT EXISTS BUT IS ANONYMOUS IS NOT A SESSION ANY MORE. Order 0073 removed the
+  // anonymous option, and browsers that took it before still hold the credential. Refusing it
+  // silently would render the sign-in screen forever with no hint why, so the screen SAYS what
+  // happened. The stale credential is not signed out eagerly: doing that would throw away the
+  // very state the message is explaining. Signing in with Google replaces it.
+  if (session === null || session.anonymous) {
     return (
       <SignInView
         onGoogle={() => signIn('google')}
-        onAnonymous={() => signIn('anonymous')}
         error={error}
         busy={busy}
+        staleAnonymous={session?.anonymous}
       />
     );
   }

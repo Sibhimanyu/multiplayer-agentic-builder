@@ -450,20 +450,26 @@ export function AccountChip({
 /**
  * The board's sign-in screen. Order 0064.
  *
- * TWO BUTTONS, NEITHER PRE-CLICKED. Anonymous stays available because the denied-state
- * onboarding path depends on it -- that is the path where you sign in, get refused by the rules,
- * read your own uid off the screen and get admitted -- and the edge harness asserts it. But it is
- * a CHOICE now. As a silent default it was the bug.
+ * ONE WAY IN: GOOGLE. The anonymous escape hatch is gone (order 0073).
+ *
+ * It existed for the denied-state onboarding path -- sign in, get refused by the rules, read your
+ * own uid off the screen, get admitted out of band. That path still works; it just starts from a
+ * Google account now, which is strictly better, because the uid an owner admits then belongs to a
+ * person they can name instead of to a browser profile that vanishes when the cache is cleared.
+ *
+ * Every anonymous session was also a member of nothing, so the only screen it could ever reach
+ * was an empty index explaining why it was empty.
  *
  * Pure: the page renders from props alone, so both states can be asserted without a browser.
  */
 export function SignInView({
-  onGoogle, onAnonymous, error, busy,
+  onGoogle, error, busy, staleAnonymous,
 }: {
   onGoogle: () => void;
-  onAnonymous: () => void;
   error?: { code: string; detail: string } | null;
   busy?: boolean;
+  /** This browser holds an anonymous session from before order 0073. Say so, do not just refuse. */
+  staleAnonymous?: boolean;
 }) {
   return (
     // `.centered`, not `.stage`. The stage is the board's scroll area and centres nothing; this
@@ -490,17 +496,12 @@ export function SignInView({
         <button className="cta" onClick={onGoogle} disabled={busy}>
           {busy ? 'Taking you to Google…' : 'Continue with Google'}
         </button>
-        {/*
-          ONE LINE. This was three lines of grey prose about throwaway identities and being
-          admitted to boards -- so the escape hatch carried more visual weight than the button
-          anyone actually wants to press. The explanation did not disappear: it moved to the two
-          places where it is load-bearing, which are the denied state and the anonymous empty
-          index. Nobody needs to read it before signing in.
-        */}
-        <p className="note">
-          Or <button className="linkish" onClick={onAnonymous} disabled={busy}>continue
-          anonymously</button>.
-        </p>
+        {staleAnonymous && (
+          <p className="note">
+            This browser was signed in anonymously. Anonymous sessions are no longer accepted —
+            sign in with the Google account that owns your projects.
+          </p>
+        )}
         {error && (
           <>
             <h2 className="bad">Sign-in failed.</h2>
