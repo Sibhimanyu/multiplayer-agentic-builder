@@ -66,7 +66,15 @@ export function globsIntersect(globA: string, globB: string): boolean {
     else if (j === b.length) result = allDoubleStars(a.slice(i));
     else if (a[i] === '**') result = go(i + 1, j) || go(i, j + 1);
     else if (b[j] === '**') result = go(i, j + 1) || go(i + 1, j);
-    else result = segmentsIntersect(a[i], b[j]) && go(i + 1, j + 1);
+    else {
+      // Bound, not asserted. Both indices are in range on this branch -- every earlier branch
+      // returned when they were not -- but a length check does not narrow an index for the
+      // compiler, and the functions build runs with noUncheckedIndexedAccess.
+      const ai = a[i];
+      const bj = b[j];
+      result = ai !== undefined && bj !== undefined
+        && segmentsIntersect(ai, bj) && go(i + 1, j + 1);
+    }
 
     memo.set(key, result);
     return result;

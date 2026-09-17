@@ -29,5 +29,16 @@
   // of the tsconfig directory, so "**/*.test.ts" alone leaves ../shared's test files in the
   // deploy artifact — including the TCP-cutting proxy in shared/store/testing, which has no
   // business shipping to production.
-  "exclude": ["**/*.test.ts", "../shared/**/*.test.ts", "../shared/store/testing/**"]
+  "exclude": [
+    "**/*.test.ts",
+    "../shared/**/*.test.ts",
+    "../shared/store/testing/**",
+    // Test scaffolding, for the same reason testing/ is excluded: no deployed function imports
+    // the in-memory store or the conformance suites, they are the harness for the REAL stores.
+    // They were being compiled into the deploy artifact purely by the include glob, and their
+    // type errors under noUncheckedIndexedAccess are why `api` and `reapClaims` never shipped
+    // while `write` did.
+    "../shared/store/memory.ts",
+    "../shared/store/*conformance*.ts"
+  ]
 }

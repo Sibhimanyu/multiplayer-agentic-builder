@@ -24,10 +24,13 @@ import type { Auth } from 'firebase-admin/auth';
 import type { Firestore } from 'firebase-admin/firestore';
 
 import {
+  ROLE_SLUGS,
   RoleDeniedError,
   hasCapability,
   type Capability,
+  type RoleSlug,
 } from '../../shared/store/directory.ts';
+import { hashToken, mintToken } from './authority.ts';
 import { assertDeployAllowed, assertScopeAllowed } from '../../shared/store/roles.ts';
 import { TASK_KINDS, isTaskKind } from '../../shared/store/tasks.ts';
 import type { NewTask } from '../../shared/store/tasks.ts';
@@ -38,7 +41,7 @@ export interface WriteRequest {
   project_id: string;
   op:
     | 'claim' | 'release' | 'acquire_scope' | 'release_scope' | 'append_event' | 'heartbeat'
-    | 'deploy' | 'create_project' | 'create_task';
+    | 'deploy' | 'create_project' | 'create_task' | 'create_invite';
   /** Operation payload. Shape depends on `op`. */
   body: Record<string, unknown>;
 }
@@ -76,6 +79,9 @@ const REQUIRES: Partial<Record<WriteRequest["op"], Capability>> = {
   // architect hold it; the client seat does not, which is the whole point of that seat. See
   // docs/decisions/0005-work-appears-by-triage.md.
   create_task: 'triage',
+  // Minting an invite is how a project gains a member, so it is gated by the capability that
+  // already means exactly that. Only the owner holds it.
+  create_invite: 'invite',
   claim: 'claim',
   release: 'claim',
   acquire_scope: 'acquire_scope',
@@ -272,6 +278,43 @@ export async function handleWrite(
         // An existing task is 200 with ok:false, NOT 409 -- same reasoning as a lost claim. It
         // is the normal outcome of a retry and a 4xx would make every HTTP client log it red.
         return { status: 200, body: { ...r } as Record<string, unknown> };
+      }
+      case 'create_invite': {
+        const role_slug = typeof req.body.role_slug === 'string' ? req.body.role_slug : '';
+        if (!ROLE_SLUGS.includes(role_slug as RoleSlug)) {
+          return {
+            status: 400,
+            body: { error: `role_slug must be one of ${ROLE_SLUGS.join(', ')}`, roles: [...ROLE_SLUGS] },
+          };
+        }
+        const member_label = typeof req.body.member_label === 'string' && req.body.member_label.trim()
+          ? req.body.member_label.trim()
+          : role_slug;
+        // Seven days. Long enough to send a teammate a code and have them act on it, short
+        // enough that a code left in a chat log stops working.
+        const ttl_ms = 7 * 24 * 60 * 60 * 1000;
+
+        // The plaintext code is returned ONCE and never stored: Firestore holds only its
+        // sha256, exactly as the agent token does. A code that can be read back out of the
+        // database is a credential the database now owns.
+        const code = mintToken();
+        await deps.db
+          .collection('projects').doc(req.project_id)
+          .collection('invites').doc()
+          .set({
+            code_sha256: hashToken(code),
+            role_slug,
+            member_label,
+            expires_at_ms: Date.now() + ttl_ms,
+            consumed: false,
+            created_by: caller.uid,
+            created_at_ms: Date.now(),
+          });
+
+        deps.log.info('api.invite_created', 'invite minted', {
+          project_id: req.project_id, uid: caller.uid, role_slug,
+        });
+        return { status: 200, body: { ok: true, invite: code, role_slug, member_label, expires_at_ms: Date.now() + ttl_ms } };
       }
       case 'claim': {
         const r = await deps.store.claimTask(req.project_id, String(req.body.task_id ?? ''), agent_id);

@@ -763,10 +763,16 @@ export class MemoryStore implements CoordinationStore {
 }
 
 function initialsOf(label: string): string {
+  // Indexed access is narrowed rather than asserted. The root tsconfig does not set
+  // `noUncheckedIndexedAccess` and the functions one does, so this compiled at the root and
+  // failed the functions build -- which is why `api` and `reapClaims` were never deployed while
+  // `write` was. A length check does not narrow an index for the compiler; a binding does.
   const parts = label.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return '??';
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  const first = parts[0];
+  if (first === undefined) return '??';
+  const last = parts[parts.length - 1];
+  if (last === undefined || parts.length === 1) return first.slice(0, 2).toUpperCase();
+  return `${first[0] ?? ''}${last[0] ?? ''}`.toUpperCase();
 }
 
 export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {

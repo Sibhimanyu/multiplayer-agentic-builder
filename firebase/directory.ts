@@ -251,8 +251,10 @@ export class FirestoreDirectory implements ProjectDirectory {
         const activeOwners = all.docs.filter(
           (d) => d.get('role') === 'owner' && d.get('revoked') !== true,
         );
-        const isTheOnlyOwner =
-          activeOwners.length === 1 && activeOwners[0].id === uid && self.get('revoked') !== true;
+        // Bound rather than indexed twice: `length === 1` does not narrow `[0]` for the
+        // compiler under noUncheckedIndexedAccess, which the functions build enables.
+        const onlyOwner = activeOwners.length === 1 ? activeOwners[0] : undefined;
+        const isTheOnlyOwner = onlyOwner?.id === uid && self.get('revoked') !== true;
         if (isTheOnlyOwner) throw new LastOwnerError(project_id, uid);
       }
       mutate(tx, ref);

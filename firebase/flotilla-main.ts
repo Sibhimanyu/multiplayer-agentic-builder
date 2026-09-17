@@ -270,6 +270,50 @@ registerProjectCommands({
    * The project comes from `.agentic/project.json`, so the command works where the user already
    * is -- in the repo -- rather than needing a project id pasted from the board.
    */
+  /**
+   * Mint a single-use invite code.
+   *
+   * THE COMMAND THAT MAKES THIS A MULTIPLAYER PRODUCT. `connect` has always consumed an invite
+   * document; nothing has ever written one, so every project had exactly one member -- whoever
+   * ran `flotilla new`. Gated server-side by the `invite` capability, which only the owner holds.
+   *
+   * The code is printed ONCE. Firestore stores only its sha256, so it cannot be read back out:
+   * lose it and mint another.
+   */
+  async invite(root, role_slug, label) {
+    const cfg = await loadConfig();
+    const raw = await readFile(join(root, '.agentic/project.json'), 'utf8').catch(() => '');
+    if (!raw) {
+      console.error('\nno .agentic/project.json here. Run `flotilla new <name>` in your repo first.');
+      return 1;
+    }
+    const project_id = (JSON.parse(raw) as { project_id?: string }).project_id ?? '';
+    if (!project_id) {
+      console.error('\n.agentic/project.json names no project_id.');
+      return 1;
+    }
+
+    const client = new WriteClient({
+      api_url: writeUrl(cfg), api_key: cfg.api_key, log: consoleLogger,
+    });
+    const res = await client.write(project_id, 'create_invite', {
+      role_slug, ...(label ? { member_label: label } : {}),
+    });
+    if (!res.ok) {
+      console.error(`\n${String(res.body.error ?? `write refused (HTTP ${res.status})`)}`);
+      return 1;
+    }
+
+    const code = String(res.body.invite ?? '');
+    console.log(`\ninvite for ${String(res.body.role_slug ?? role_slug)}`);
+    console.log(`  label    ${String(res.body.member_label ?? role_slug)}`);
+    console.log(`  expires  in 7 days`);
+    console.log('\nSend them this, once:\n');
+    console.log(`  flotilla connect ${code}\n`);
+    console.log('It works one time. This is the only time the code is shown.');
+    return 0;
+  },
+
   async task(root, title, kind, task_id) {
     const cfg = await loadConfig();
     const raw = await readFile(join(root, '.agentic/project.json'), 'utf8').catch(() => '');

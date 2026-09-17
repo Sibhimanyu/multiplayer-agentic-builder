@@ -39,6 +39,7 @@ import { materialise, publishToBlackboard } from './blackboard.ts';
 import { serve } from './mcp.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
 import { LAYER_OF, TASK_KINDS, type Event, type EventKind, type TaskKind } from '../shared/store/types.ts';
+import { ROLE_SLUGS } from '../shared/store/directory.ts';
 import type { Logger } from '../shared/log.ts';
 
 /**
@@ -686,6 +687,8 @@ const USAGE = `flotilla — agentic coordination CLI
   flotilla new <name>           create a project here, connect this repo, write .agentic/
   flotilla ls                   projects you are a member of
   flotilla members <project_id> the roster
+  flotilla invite <role>        mint a single-use invite code for a teammate
+                                --label "Their Name"
 
   flotilla connect <invite>     write AGENTS.md + .agentic/, store the agent token
   flotilla status               what the board thinks is happening
@@ -727,6 +730,12 @@ export interface ProjectCommands {
    * triage act and triage is a member capability. See docs/decisions/0005-work-appears-by-triage.md.
    */
   task: (root: string, title: string, kind: TaskKind, task_id?: string) => Promise<number>;
+  /**
+   * `flotilla invite`. The one command that turns a one-person project into a team, and the
+   * reason membership was unreachable until now: the invite document `connect` consumes was
+   * read by the API and written by nothing.
+   */
+  invite: (root: string, role_slug: string, label?: string) => Promise<number>;
 }
 
 let projectCommands: ProjectCommands | null = null;
@@ -858,6 +867,16 @@ export async function main(argv: string[]): Promise<number> {
     }
     case 'start':
       return cmdStart(root);
+    case 'invite': {
+      const role = rest.find((a) => !a.startsWith('--'));
+      if (!role) {
+        log.warn('cli.usage_flotilla_invite', `usage: flotilla invite <${ROLE_SLUGS.join('|')}> [--label "Name"]`);
+        return 1;
+      }
+      if (!projectCommands) return needsBackend();
+      const li = rest.indexOf('--label');
+      return projectCommands.invite(root, role, li > -1 ? rest[li + 1] : undefined);
+    }
     case 'mcp':
       return cmdMcp(root);
     case 'work':
