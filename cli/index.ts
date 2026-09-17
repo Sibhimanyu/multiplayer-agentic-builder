@@ -558,9 +558,12 @@ async function cmdWork(root: string, rest: string[]): Promise<number> {
     'Start by telling me my assignment and what the rest of the fleet is doing.',
   ].join('\n');
 
+  // THE PROMPT GOES FIRST. `--mcp-config` is variadic (`<configs...>`), so anything after it is
+  // read as another config file: putting the prompt there made claude try to open the prompt
+  // TEXT as a path and die with ENAMETOOLONG. Found by running it, not by reading the help.
   const args = agent === 'claude'
-    ? ['--mcp-config', configPath, opening]
-    : ['--config', `mcp_servers.flotilla.command=${process.execPath}`, opening];
+    ? [opening, '--mcp-config', configPath]
+    : [opening, '--config', `mcp_servers.flotilla.command=${process.execPath}`];
 
   if (rest.includes('--print')) {
     out(`${agent} ${args.map((a) => (a.includes(' ') ? JSON.stringify(a) : a)).join(' ')}`);
