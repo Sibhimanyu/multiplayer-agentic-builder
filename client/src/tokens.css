@@ -1,46 +1,67 @@
 /* Approved design language. Source of truth: docs/designs/dashboard.md
    Any visual divergence between the two builds is a bug. */
-/* Self-hosted, latin subset (order 0067). Replaces the render-blocking
-   fonts.googleapis.com stylesheet that cost 3031ms on a cold load. */
-@font-face{font-family:'Fraunces';src:url('/brand/fonts/Fraunces-var.woff2') format('woff2');
-  font-weight:100 900;font-style:normal;font-display:swap}
-@font-face{font-family:'Inter';src:url('/brand/fonts/Inter-var.woff2') format('woff2');
-  font-weight:100 900;font-style:normal;font-display:swap}
-@font-face{font-family:'JetBrains Mono';src:url('/brand/fonts/JetBrainsMono-var.woff2') format('woff2');
-  font-weight:100 900;font-style:normal;font-display:swap}
+/* Self-hosted, latin subset. IBM Plex, one superfamily.
+   NOT Inter, Fraunces, Geist, Plus Jakarta or Space Grotesk: every one of those is on the
+   overused list the design detector flags by name, and the old pairing (Fraunces display on a
+   cream ground with one desaturated accent) was AI look #1 exactly. Plex was drawn for technical
+   interfaces, its sans and mono are one family, and the mono here is content -- globs, branches,
+   ids -- not costume. */
+@font-face{font-family:'Plex Sans';src:url('/brand/fonts/PlexSans-400.woff2') format('woff2');
+  font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:'Plex Sans';src:url('/brand/fonts/PlexSans-500.woff2') format('woff2');
+  font-weight:500;font-style:normal;font-display:swap}
+@font-face{font-family:'Plex Sans';src:url('/brand/fonts/PlexSans-600.woff2') format('woff2');
+  font-weight:600;font-style:normal;font-display:swap}
+@font-face{font-family:'Plex Mono';src:url('/brand/fonts/PlexMono-400.woff2') format('woff2');
+  font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:'Plex Mono';src:url('/brand/fonts/PlexMono-500.woff2') format('woff2');
+  font-weight:500;font-style:normal;font-display:swap}
 :root{
-  --paper:#FAF9F7; --card:#FFFFFF; --ink:#1A1917; --ink2:#4A4741;
-  --muted:#8A857C; --line:#E8E4DD; --line2:#D9D4CA;
-  --teal:#0F766E; --teal-soft:#E6F2F0;
-  --red:#B91C1C; --red-soft:#FDEDED;
-  --amber:#B45309; --amber-soft:#FDF4E7;
-  --sans:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-  --serif:'Fraunces',Georgia,serif;
-  --brand-serif:'Fraunces',Georgia,serif;
-  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  /* ---- Instrument panel. Replaces Kanban Calm, order 0077. ----
+     Dark is chosen from the USE SCENE, not from the category: this sits beside a terminal while
+     agents run. Every value below is measured against both surfaces, not picked by eye.
+       ink   16.02 on paper / 14.64 on card
+       ink2   9.58 / 8.75
+       muted  5.23 / 4.78   (#768390 was 4.46 on card and was rejected for it)
+       teal  10.17 / 9.29    red 7.51 / 6.86    amber 9.72 / 8.89
+     All ≥4.5:1, so every one is legal as body text rather than large-text-only. */
+  --paper:#0D1117; --card:#161B22; --ink:#E6EDF3; --ink2:#ADBAC7;
+  --muted:#7C8894; --line:#21262D; --line2:#30363D;
+  --teal:#2DD4BF; --teal-soft:rgba(45,212,191,.13);
+  --red:#FF7B72; --red-soft:rgba(255,123,114,.13);
+  --amber:#E3B341; --amber-soft:rgba(227,179,65,.13);
+  --sans:'Plex Sans',ui-sans-serif,system-ui,sans-serif;
+  /* --serif and --brand-serif are kept as NAMES so no call site breaks, and both resolve to the
+     sans. There is no serif in this world; a display serif on an operations panel was the single
+     loudest thing making it read as generated. */
+  --serif:'Plex Sans',ui-sans-serif,system-ui,sans-serif;
+  --brand-serif:'Plex Sans',ui-sans-serif,system-ui,sans-serif;
+  --mono:'Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
   --r-card:12px; --r-ctl:8px; --r-tag:5px;
-  --shadow:0 1px 2px rgba(26,25,23,.04),0 1px 1px rgba(26,25,23,.02);
+  /* On dark, a drop shadow is invisible: there is nothing darker to cast onto. Depth is a
+     lighter surface plus a 1px inner highlight, which is how real panels catch light. */
+  --shadow:inset 0 1px 0 rgba(255,255,255,.04);
 
-  /* ---- order 0066. Additive: nothing above this line changed. ----
-     The palette, the type pairing, the radii and the density are the Kanban Calm direction
-     chosen in docs/designs/dashboard.md after comparing three. These are the things that
-     direction specified in spirit and never got. */
+  /* ---- order 0066. The interaction states Kanban Calm specified and never got. ----
+     They outlived the world they were written for: focus, lift, press and reduced-motion are
+     structural, so order 0077 changed their VALUES for dark and kept every rule. */
 
   /* The keyboard focus ring. --teal at an offset, so it reads on both --paper and --card
      without needing a second colour for each surface. */
   --focus-ring:2px solid var(--teal);
   --focus-offset:2px;
-  /* The hover lift. The EXISTING shadow token, doubled in offset -- not a new shadow with a new
-     colour, which is how a system grows a second elevation scale nobody decided on. */
-  --shadow-lift:0 3px 8px rgba(26,25,23,.07),0 1px 2px rgba(26,25,23,.04);
+  /* The hover lift. On dark it is not a bigger shadow but a brighter edge: the inner highlight
+     strengthens and a hairline of the accent appears. Same principle as before -- one elevation
+     idea, expressed twice -- just the one that is actually visible on this ground. */
+  --shadow-lift:inset 0 1px 0 rgba(255,255,255,.07),0 0 0 1px rgba(45,212,191,.18);
   --lift:-1px;
   --press:.985;
   /* 150-200ms per the order. One duration, so two interactive states cannot drift apart. */
   --motion-fast:160ms;
   --ease:cubic-bezier(.2,0,.2,1);
-  /* Skeleton fill, from the existing warm greys rather than a new grey. */
-  --sk-base:#EFECE6;
-  --sk-sheen:#F7F5F1;
+    /* Skeleton fill: one step up from --card, not a new grey. */
+  --sk-base:#1B222B;
+  --sk-sheen:#232C37;
 
   /* ---- order 0071. The shell's two fixed columns. ----
      Named because both are referenced by the grid AND by the breakpoints that drop them, and a
@@ -118,7 +139,10 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .nav .repo{font-family:var(--mono);font-size:11.5px;color:var(--muted);background:var(--paper);
      border:1px solid var(--line);border-radius:6px;padding:4px 9px}
 .nav .grow{margin-left:auto}
-.cta{background:var(--teal);color:#fff;border:none;border-radius:var(--r-ctl);padding:8px 15px;
+/* DARK LABEL ON A BRIGHT ACCENT. White on #2DD4BF measures 1.86:1 -- unreadable. The ground
+   colour on it measures 10.17:1. On a dark UI the accent is the light, so the text on it is the
+   dark; carrying the light-theme habit over is how a primary button ends up illegible. */
+.cta{background:var(--teal);color:var(--paper);border:none;border-radius:var(--r-ctl);padding:8px 15px;
      font:500 13px var(--sans);cursor:pointer;transition:background 180ms ease}
 
 /* ---- presence ---- */
@@ -127,9 +151,11 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
     display:grid;place-items:center;font-size:10.5px;font-weight:600;color:#fff;position:relative}
 .av:first-child{margin-left:0}
 .av::after{content:'';position:absolute;right:-1px;bottom:-1px;width:8px;height:8px;
-    border-radius:50%;border:2px solid var(--card);background:#3E9E4F}
+    border-radius:50%;border:2px solid var(--card);background:#3FB950}
 .av[data-ring="blocked"]::after{background:var(--red)}
-.av[data-ring="offline"]::after{background:#C4BFB6}
+/* Offline is the QUIETEST state, so on dark it is the dimmest -- the old #C4BFB6 was light-page
+   grey and became the brightest ring on the board. */
+.av[data-ring="offline"]::after{background:#6C757F}
 .av.sm{width:22px;height:22px;font-size:9px;border-width:2px;margin-left:-6px}
 .av.sm::after{width:6.5px;height:6.5px}
 .avs .more{font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:6px}
@@ -278,7 +304,7 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 /* ---- detail panel: OVERLAYS, never displaces ---- */
 .panel{position:absolute;top:0;right:0;bottom:0;width:372px;z-index:20;background:var(--card);
        border-left:1px solid var(--line);display:grid;grid-template-rows:auto 1fr;min-height:0;
-       box-shadow:-16px 0 44px rgba(26,25,23,.11)}
+       box-shadow:-18px 0 48px rgba(0,0,0,.55)}
 .p-head{padding:20px 24px 15px;border-bottom:1px solid var(--line);display:grid;gap:9px}
 .p-head .up{display:flex;align-items:center;gap:8px}
 .p-head .id{font-family:var(--mono);font-size:11px;color:var(--muted)}
@@ -307,7 +333,7 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .sect p{font-size:13px;color:var(--ink2);line-height:1.6;text-wrap:pretty}
 .dep{display:flex;align-items:center;gap:9px;padding:9px 11px;background:var(--paper);
      border:1px solid var(--line);border-radius:9px;font-size:12.5px}
-.dep .d{width:7px;height:7px;border-radius:50%;flex:none;background:#3E9E4F}
+.dep .d{width:7px;height:7px;border-radius:50%;flex:none;background:#3FB950}
 .dep .d[data-blk="true"]{background:var(--red)}
 .dep .nm{font-family:var(--mono);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;
      white-space:nowrap}
@@ -374,9 +400,10 @@ pre{background:var(--paper);border:1px solid var(--line);border-radius:9px;paddi
 .ghost{background:var(--card);color:var(--ink2);border:1px solid var(--line2);
      border-radius:999px;padding:5px 12px;font:500 12px var(--sans);cursor:pointer;
      transition:background 180ms ease,color 180ms ease,border-color 180ms ease}
-.ghost:hover{background:var(--ink);color:var(--card);border-color:var(--ink)}
+.ghost:hover{background:var(--line2);color:var(--ink);border-color:var(--muted)}
 .ghost:active{transform:translateY(1px)}
-.cta:hover{background:#0B5F58}
+/* Brighten on hover, not darken: on a dark ground, closer means lighter. */
+.cta:hover{background:#5EE3D2}
 .cta:active{transform:translateY(1px)}
 @media (prefers-reduced-motion: reduce){
   .ghost{transition:none}
@@ -460,25 +487,34 @@ pre{background:var(--paper);border:1px solid var(--line);border-radius:9px;paddi
 
 /* ---- the queue ---- */
 .queue{padding:26px 28px 40px;max-width:1080px}
-.queue h1{font-family:var(--serif);font-size:25px;font-weight:600;letter-spacing:-.02em;
+/* 25px next to 15.5px next to 14px was three sizes that barely differed, so the page had no
+   voice. The step is now large enough to be a decision. Tracking tightens as size grows, which
+   is what keeps a big line from looking loose. */
+.queue h1{font-size:34px;font-weight:600;letter-spacing:-.033em;line-height:1.08;
      text-wrap:balance}
-.queue .lede{margin-top:7px;color:var(--ink2);font-size:13.5px;max-width:66ch;
+.queue .lede{margin-top:var(--sp-4);color:var(--ink2);font-size:14px;max-width:64ch;
      text-wrap:pretty}
 .queue .grp{margin-top:28px}
 .queue .grp-head{display:flex;align-items:baseline;gap:10px;margin-bottom:11px}
-.queue .grp-head h2{font-family:var(--serif);font-size:15.5px;font-weight:600;
-     letter-spacing:-.01em}
+/* Section heads are the MONO voice, small and tracked out: on an instrument panel the label is
+   a legend, not a headline. This is also what stops them competing with the h1. */
+.queue .grp-head h2{font-family:var(--mono);font-size:11.5px;font-weight:500;
+     letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .queue .grp-head .note{font-size:12px;color:var(--muted);margin-left:auto;text-align:right}
 
 /* A task row. NOT a card: the group is the container, the rows are its contents, and a card
    inside a card is the thing the floor bans. Hairlines between, radius only on the ends. */
-.qlist{border:1px solid var(--line);border-radius:var(--r-card);background:var(--card);
-     overflow:hidden}
+/* NOT A CARD. A bordered, rounded, filled box wrapping a list of rows is the container habit the
+   craft floor rejects -- and with the rail doing the same thing the page was five nested boxes.
+   The rows sit on the page ground, separated by the hairline that already separates them. What
+   is left is layout. */
+.qlist{border-top:1px solid var(--line)}
 .qrow{display:grid;grid-template-columns:52px minmax(0,1fr) auto;gap:0 14px;
      padding:15px 17px;border-bottom:1px solid var(--line);
      transition:background var(--motion-fast) var(--ease)}
-.qrow:last-child{border-bottom:none}
-.qrow:hover{background:var(--paper)}
+/* The last rule stays: it closes the list, the way a table's bottom rule does. */
+/* Hover lifts the row off the ground rather than tinting it a second colour. */
+.qrow:hover{background:var(--card)}
 .qrow .id{font-family:var(--mono);font-size:11px;color:var(--muted);padding-top:2px;
      font-variant-numeric:tabular-nums}
 .qrow .t{font-size:14px;font-weight:500;line-height:1.4;text-wrap:pretty}
@@ -489,8 +525,8 @@ pre{background:var(--paper);border:1px solid var(--line);border-radius:9px;paddi
      align-items:flex-end;gap:6px}
 .qrow .act .sub{font-size:11.5px;color:var(--muted);text-align:right;max-width:190px;
      text-wrap:pretty}
-.qrow[data-blocked="true"]{background:var(--amber-soft)}
-.qrow[data-blocked="true"]:hover{background:var(--amber-soft)}
+.qrow[data-blocked="true"]{background:rgba(227,179,65,.055)}
+.qrow[data-blocked="true"]:hover{background:rgba(227,179,65,.085)}
 
 /* Scope and agent chips. Mono here is measurement, not costume: these are literal glob patterns
    and process names, and alignment between rows is the point. */
@@ -511,8 +547,10 @@ pre{background:var(--paper);border:1px solid var(--line);border-radius:9px;paddi
 .rail h3{font-size:10.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;
      color:var(--muted);margin-bottom:10px}
 .rail h3:not(:first-child){margin-top:24px}
-.holder{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);
-     padding:13px 14px;margin-bottom:9px}
+/* Three identical cards stacked is the shape that reads as generated. They are entries in a
+   list now: hairline-separated, no box, no radius. The rail is a legend, not a deck. */
+.holder{padding:var(--sp-5) 0;border-bottom:1px solid var(--line)}
+.holder:last-child{border-bottom:none}
 .holder .who{display:flex;align-items:center;gap:9px}
 .holder .who .nm{font-size:13.5px;font-weight:600}
 .holder .who .you{font-size:10px;background:var(--teal-soft);color:var(--teal);
@@ -547,7 +585,10 @@ pre{background:var(--paper);border:1px solid var(--line);border-radius:9px;paddi
 
 /* Browser surfaces carry the design too. */
 ::selection{background:var(--teal-soft);color:var(--teal)}
-:root{color-scheme:light}
+/* Tells the browser to theme its OWN surfaces dark: scrollbars, form controls, the caret and
+   the default selection. Without it the scrollbar in every column stays light and the page looks
+   like a dark theme bolted onto a light app. */
+:root{color-scheme:dark}
 /* The new-task form sits above the queue and shares its gutter, so the form and the list it will
    add to line up on the same left edge. */
 .compose{padding:26px 28px 0;max-width:1080px}
@@ -558,8 +599,8 @@ pre{background:var(--paper);border:1px solid var(--line);border-radius:9px;paddi
    full-strength teal Claim button that did nothing when clicked; the reason was printed beside it
    and the button contradicted the reason. Not opacity on the whole element -- that dims the label
    below contrast. The surface goes flat and the text stays readable. */
-.cta:disabled{background:var(--line);color:var(--muted);cursor:not-allowed}
-.cta:disabled:hover{background:var(--line)}
+.cta:disabled{background:var(--line2);color:var(--muted);cursor:not-allowed}
+.cta:disabled:hover{background:var(--line2)}
 .cta:disabled:active{transform:none}
 .ghost:disabled{color:var(--muted);border-color:var(--line);cursor:not-allowed}
 .ghost:disabled:hover{background:var(--card);color:var(--muted);border-color:var(--line)}
@@ -580,3 +621,6 @@ pre{background:var(--paper);border:1px solid var(--line);border-radius:9px;paddi
    at 1440 and below -- at 1920 the columns grow back to ~256px and the max-width holds them
    there. The cost is the longest title wrapping to four lines instead of three. */
 .col{width:auto;flex:1 1 262px;min-width:176px;max-width:300px}
+
+/* ---- selection, order 0077 ---- */
+::selection{background:rgba(45,212,191,.28);color:var(--ink)}

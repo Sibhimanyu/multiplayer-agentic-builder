@@ -1,14 +1,25 @@
 # Flotilla — Design System
 
-**Direction: Kanban Calm.** Chosen 2026-08-25 after comparing three directions (agent-axis,
-task-axis, event-axis) and organising by **task**. The reasoning is in
-`docs/designs/dashboard.md`; that file stays the source of truth for the board's pixels. This
-file is the system: what the tokens are, what is locked, and what must never drift.
+**Direction: Instrument panel.** Chosen 2026-09-17, replacing Kanban Calm.
 
-This system was **derived from the shipped artifact**, not proposed fresh. It already passes the
-usual audit: warm paper rather than `#000`, one desaturated accent rather than a purple gradient,
-consistently warm greys, tinted shadows, varied radii, a real type pairing. **Do not "modernise"
-it.** Everything here is additive.
+Kanban Calm was cream ground, Fraunces display, one desaturated accent. That is not a neutral
+description: it is *precisely* the first of the three looks AI-built interfaces land in, and both
+of its typefaces are on the overused list the design detector flags by name. The user's read —
+"it looks too AI generated" — was correct and specific. The old direction is recorded in
+`docs/designs/dashboard.md`, which now describes a **superseded** world; its *locked patterns*
+survive unchanged and are restated below.
+
+**Dark is chosen from the use scene, not the category.** This sits beside a terminal while agents
+run. Cream paper is a document aesthetic on an operations product.
+
+Three rules carried over from the replacement, because they are what stopped the new world
+becoming the second and third AI looks:
+
+- **Cards are not the default container.** A bordered, rounded, filled box wrapping a list is the
+  habit; rows on the ground separated by a rule are layout. The queue and the rail are lists.
+- **The mono is content, not costume.** Globs, branches and ids *are* the material, and the
+  section legends are set in it because an instrument labels rather than headlines.
+- **Every colour value here was measured, not picked.** The numbers are in the table.
 
 ---
 
@@ -19,22 +30,34 @@ spacing scale, no second elevation scale.
 
 ### Surface and ink
 
-| Token | Value | Use |
-|---|---|---|
-| `--paper` | `#FAF9F7` | warm off-white page |
-| `--card` | `#FFFFFF` | raised surface |
-| `--ink` | `#1A1917` | primary text |
-| `--ink2` | `#4A4741` | secondary text |
-| `--muted` | `#8A857C` | tertiary, labels |
-| `--line` | `#E8E4DD` | hairline |
-| `--line2` | `#D9D4CA` | stronger hairline, control borders |
+| Token | Value | Use | on `--paper` | on `--card` |
+|---|---|---|---|---|
+| `--paper` | `#0D1117` | page ground | — | — |
+| `--card` | `#161B22` | raised surface | — | — |
+| `--ink` | `#E6EDF3` | primary text | 16.02 | 14.64 |
+| `--ink2` | `#ADBAC7` | secondary text | 9.58 | 8.75 |
+| `--muted` | `#7C8894` | tertiary, labels | 5.23 | 4.78 |
+| `--line` | `#21262D` | hairline | — | — |
+| `--line2` | `#30363D` | stronger hairline, control borders | — | — |
 
-Light mode only. Density: low, generous whitespace.
+Dark only. `color-scheme: dark` is set, so the browser's own scrollbars, caret and form controls
+theme with the page instead of staying light.
+
+**`--muted` is `#7C8894` and not `#768390` because the latter measures 4.46 on `--card`.** A
+near-miss is a miss; it was rejected for 0.04.
+
+Measured again in the rendered page with alpha composited down to the root, because a first pass
+that read `rgba(...,.13)` as a solid colour reported two failures that did not exist.
 
 ### Accent and semantics
 
-One accent. `--teal` `#0F766E` with `--teal-soft` `#E6F2F0`. Semantic only beyond that:
-`--red` `#B91C1C` / `--red-soft` `#FDEDED`, `--amber` `#B45309` / `--amber-soft` `#FDF4E7`.
+One accent. `--teal` `#2DD4BF` (10.17 / 9.29) with `--teal-soft` `rgba(45,212,191,.13)`.
+Semantic only beyond that: `--red` `#FF7B72` (7.51 / 6.86), `--amber` `#E3B341` (9.72 / 8.89),
+each with a `.13` alpha soft variant rather than a second opaque tint.
+
+**On a dark ground the accent is the light, so text ON it is the dark.** `.cta` carries
+`color: var(--paper)`: white on `#2DD4BF` measures **1.86:1** and would have shipped an unreadable
+primary button. Hover *brightens* to `#5EE3D2`; on dark, nearer means lighter.
 
 Amber is not decorative — it is reserved for **an anonymous session**, the state that silently
 produced an empty board. Do not spend it on anything else.
@@ -43,10 +66,17 @@ produced an empty board. Do not spend it on anything else.
 
 | Token | Family | Scope |
 |---|---|---|
-| `--sans` | Inter | body and UI |
-| `--serif` | Fraunces | headings, project name, column titles |
-| `--brand-serif` | Fraunces | the wordmark |
-| `--mono` | JetBrains Mono | branches, ids, code **only** |
+| `--sans` | IBM Plex Sans | body, UI, headings |
+| `--mono` | IBM Plex Mono | globs, branches, ids, and the section legends |
+| `--serif`, `--brand-serif` | IBM Plex Sans | kept as names so no call site breaks; **there is no serif** |
+
+One superfamily. Not Inter, Fraunces, Geist, Plus Jakarta or Space Grotesk — every one of those is
+on the detector's overused list, and swapping one for another would have traded a generic choice
+for a generic choice. Plex was drawn for technical interfaces.
+
+**Type carries real contrast now.** 34px h1 at `-0.033em`, body at 14px, and section heads as
+11.5px uppercase mono at `+0.08em`. The old scale was 25 / 15.5 / 14 — three sizes that barely
+differed, which is why the page had no voice.
 
 **Self-hosted, latin subset, same-origin** (`/brand/fonts/*.woff2`, order 0067). There is no
 `fonts.googleapis.com` request: as a render-blocking third-party stylesheet it cost 3031 ms on a
@@ -56,9 +86,10 @@ cold load and 3572 ms to first paint. Preload Inter and Fraunces; they are on th
 
 `--r-card:12px` `--r-ctl:8px` `--r-tag:5px`. Radii vary by nesting; they are not one value.
 
-`--shadow` is the resting elevation. `--shadow-lift` is the hover elevation and is the **same
-token doubled in offset**, not a new shadow with a new colour — that is how a system grows a
-second elevation scale nobody decided on.
+**Depth is light, not shadow.** On a dark ground a drop shadow is invisible: there is nothing
+darker to cast onto. `--shadow` is `inset 0 1px 0 rgba(255,255,255,.04)` — a highlight along the
+top edge, the way a real panel catches light. `--shadow-lift` strengthens that highlight and adds
+an accent hairline. One elevation idea, expressed in the terms this ground can actually show.
 
 `--motion-fast:160ms` with `--ease:cubic-bezier(.2,0,.2,1)`. One duration, so two interactive
 states cannot drift apart. Animate `transform` and `opacity` only — never `width`, `height`,

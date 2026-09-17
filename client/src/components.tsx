@@ -19,7 +19,13 @@ export function truncPath(p: string, max = 34): string {
 }
 
 const RING: Record<string, string> = { blocked: 'blocked', offline: 'offline', revoked: 'offline' };
-const AV_BG = ['#7C6A9C', '#2E7D6F', '#B5714A', '#B9B4AB', '#4A6E9C', '#8C6A3F'];
+// Tuned for the dark ground (order 0077). The previous set was mixed for a white page.
+//
+// SOLVED, NOT PICKED. Each hue was darkened until white initials clear 4.5:1 on it -- the first
+// attempt at this list looked right and failed on four of six, which is exactly the kind of thing
+// that ships when a palette is chosen by eye. Measured: white contrast 5.69, 4.69, 4.66, 4.68,
+// 4.71, 4.65; and every one clears 3:1 against --card so the chip reads as an object.
+const AV_BG = ['#6E5AA8', '#2A8171', '#A36635', '#6C757F', '#4575B4', '#9D684C'];
 
 export function Avatar({ agent, small, idx }: { agent: AgentPresence; small?: boolean; idx: number }) {
   return (
