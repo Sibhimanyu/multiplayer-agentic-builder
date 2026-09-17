@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Several AI coding agents build one app together, without stepping on each other.",
   "scripts": {
-    "test": "node --test \"shared/**/*.test.ts\"",
+    "test": "node --test \"shared/**/*.test.ts\" \"cli/**/*.test.ts\"",
     "test:memory": "node --test shared/store/memory.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "build:cli": "node scripts/build-cli.mjs",

@@ -17,8 +17,11 @@
 //   2  not connected yet
 
 import fs from 'node:fs/promises';
+import nodeFs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { spawn } from 'node:child_process';
 
 import {
   LAYOUT,
@@ -33,6 +36,7 @@ import {
 import { appendOutbox, drain, isConnected, readCursor, type OutboxRecord } from './outbox.ts';
 import { ApiClient, connectWithInvite, type WhoAmI } from './client.ts';
 import { materialise, publishToBlackboard } from './blackboard.ts';
+import { serve } from './mcp.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
 import { LAYER_OF, TASK_KINDS, type Event, type EventKind, type TaskKind } from '../shared/store/types.ts';
 import type { Logger } from '../shared/log.ts';
@@ -469,6 +473,125 @@ async function projectFile(root: string): Promise<ProjectFile> {
   return JSON.parse(raw) as ProjectFile;
 }
 
+
+/**
+ * `flotilla mcp` — the MCP server, on stdio.
+ *
+ * Not meant to be typed by a human: `flotilla work` wires it into the agent. It is a real
+ * command rather than a hidden flag because `claude --mcp-config` has to name something it can
+ * spawn, and a documented command is easier to debug than a private one.
+ *
+ * NOTHING MAY WRITE TO STDOUT HERE except the protocol. `out()` and the logger both go to stdout
+ * elsewhere in this file; a single stray line corrupts the JSON-RPC stream and the server
+ * disappears from Claude Code with no error anywhere.
+ */
+async function cmdMcp(root: string): Promise<number> {
+  if (!(await isConnected(root))) {
+    // stderr, deliberately. stdout belongs to the protocol.
+    process.stderr.write('flotilla mcp: not connected; run `flotilla connect <invite>` first\n');
+    return 2;
+  }
+  const cfg = await loadConfig(root);
+  const token = await readToken(root);
+  const client = new ApiClient({ base_url: cfg.api_base, token, log });
+
+  await serve({
+    client,
+    root,
+    log,
+    // The API's own answer, not a table duplicated here -- the same rule rolePackFor follows.
+    allowedScope: async () => rolePackFor(await client.whoami()).may_edit,
+  });
+  return 0;
+}
+
+/**
+ * `flotilla work` — open the agent you already have, with live fleet context.
+ *
+ * This is the whole point of the design: Flotilla does not host the conversation, it FURNISHES
+ * one. Claude Code keeps its own UX -- tool display, permission prompts, diff review -- and
+ * gains four tools that answer what it could not know: your task, your scope, who holds what
+ * right now, and how to report back.
+ *
+ * The agent runs on this machine under this user's own subscription. Flotilla never holds a
+ * model key; it spawns a binary the user already installed.
+ */
+async function cmdWork(root: string, rest: string[]): Promise<number> {
+  if (!(await isConnected(root))) {
+    log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
+    return 2;
+  }
+  const i = rest.indexOf('--agent');
+  const want = i > -1 ? rest[i + 1] : undefined;
+  const agent = want ?? (whichAgent('claude') ? 'claude' : whichAgent('codex') ? 'codex' : undefined);
+  if (!agent) {
+    log.warn('cli.no_agent_found', 'no coding agent found on PATH. Install Claude Code or Codex, or pass --agent <name>.');
+    return 1;
+  }
+  if (!whichAgent(agent)) {
+    log.warn('cli.agent_not_on_path', `${agent} is not on your PATH.`);
+    return 1;
+  }
+
+  // A per-invocation config file rather than `claude mcp add`: adding a global server would
+  // outlive this repo and follow the user into unrelated projects. This one is scoped to the
+  // run and thrown away with the temp directory.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'flotilla-mcp-'));
+  const configPath = path.join(dir, 'mcp.json');
+  const self = process.argv[1] ?? 'flotilla';
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify({
+      mcpServers: {
+        flotilla: { command: process.execPath, args: [self, 'mcp'], cwd: root },
+      },
+    }, null, 2)}\n`,
+  );
+
+  const opening = [
+    'You are working inside a Flotilla project, where several coding agents share one repository.',
+    '',
+    'Before you edit anything, call `my_assignment` to learn your task and which file globs your',
+    'role may write, and `fleet_status` to see which files other agents currently hold. Never edit',
+    'a glob another agent holds. Use `report` for decisions and blockers a teammate would want.',
+    '',
+    'Start by telling me my assignment and what the rest of the fleet is doing.',
+  ].join('\n');
+
+  const args = agent === 'claude'
+    ? ['--mcp-config', configPath, opening]
+    : ['--config', `mcp_servers.flotilla.command=${process.execPath}`, opening];
+
+  if (rest.includes('--print')) {
+    out(`${agent} ${args.map((a) => (a.includes(' ') ? JSON.stringify(a) : a)).join(' ')}`);
+    out(`\nmcp config: ${configPath}`);
+    return 0;
+  }
+
+  out(`flotilla work — launching ${agent} with live fleet context`);
+  const child = spawn(agent, args, { stdio: 'inherit' });
+  return await new Promise<number>((resolve) => {
+    child.on('error', (err) => {
+      log.warn('cli.agent_spawn_failed', `could not start ${agent}`, { error: err.message });
+      resolve(1);
+    });
+    child.on('exit', (code) => resolve(code ?? 0));
+  });
+}
+
+/** Is this agent binary on PATH? Synchronous and cheap; used before spawning. */
+function whichAgent(bin: string): boolean {
+  const dirs = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
+  return dirs.some((d) => {
+    try {
+      nodeFs.accessSync(path.join(d, bin), nodeFs.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
 /**
  * Build the role pack the generated files describe.
  *
@@ -568,6 +691,10 @@ const USAGE = `flotilla — agentic coordination CLI
   flotilla claim <task_id>      atomic claim, then acquire the declared file scope
   flotilla report "<message>"   queue one progress line in the outbox
   flotilla start                drain the outbox, deliver the inbox, heartbeat
+
+  flotilla work                 open your agent with live fleet context
+                                --agent <claude|codex>, --print to show the command only
+  flotilla mcp                  speak MCP on stdio; work wires this up for you
 
 Environment:
   FLOTILLA_UID         your member id; defaults to uid_$USER
@@ -728,6 +855,10 @@ export async function main(argv: string[]): Promise<number> {
     }
     case 'start':
       return cmdStart(root);
+    case 'mcp':
+      return cmdMcp(root);
+    case 'work':
+      return cmdWork(root, rest);
     // `--version` fell through to `default`, which printed 'unknown command: --version'
     // followed by the whole help text. The installer's own success line runs
     // `flotilla --version`, so the last thing a new install said was the help screen with the
