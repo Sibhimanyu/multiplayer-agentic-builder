@@ -36,6 +36,21 @@
         }
       ],
       "__comment__": "connect() finds an invite by collectionGroup(\"invites\").where(\"code_sha256\",\"==\",hash) — it cannot know which project the code belongs to until it finds it. Same trap as members.uid: automatic single-field indexes are COLLECTION-scoped only, so production answered FAILED_PRECONDITION while the emulator, which does not enforce indexes at all, was happy. Found by reading the api function log, not by testing."
+    },
+    {
+      "collectionGroup": "agents",
+      "fieldPath": "token_sha256",
+      "indexes": [
+        {
+          "order": "ASCENDING",
+          "queryScope": "COLLECTION"
+        },
+        {
+          "order": "ASCENDING",
+          "queryScope": "COLLECTION_GROUP"
+        }
+      ],
+      "__comment__": "resolveAgent() authenticates every agent request by collectionGroup(\"agents\").where(\"token_sha256\",\"==\",digest) — it cannot know the project before it knows the agent. Third instance of the same trap after members.uid and invites.code_sha256, which is why cli/indexes.test.ts now derives the required set from the source instead of anyone remembering."
     }
   ],
   "__comment__": "readEvents is a single-field range+order on `seq`, served by the automatic single-field index. No composite index is required, which is why `indexes` is empty rather than unwritten."
