@@ -90,6 +90,12 @@ export function TopNav({
 }) {
   return (
     <nav className="nav">
+      {/*
+        Flotilla, decision 0002. The UI BRAND only: the repo, the branches and the project ids
+        deliberately keep their old names, because they are live infrastructure and the
+        comparison record has to stay readable. Renaming a project id would invalidate every
+        measurement that names it.
+      */}
       <BrandLockup />
       <div className="sep" />
       <div className="proj">{snap.project_name}</div>
@@ -139,6 +145,90 @@ export function TaskCard({
         </div>
       )}
     </button>
+  );
+}
+
+/**
+ * The board, before it has any data. Order 0066 point 3.
+ *
+ * A cold load showed "Connecting…" as bare text on an empty page for up to fifteen seconds. The
+ * user read that as a broken app twice, and they were right to — bare text on white is what a
+ * crashed SPA looks like.
+ *
+ * THIS RENDERS THE REAL CHROME, not a picture of it. The same `.nav`, the same `.stage`, the same
+ * `.board`, and six real `.col` elements carrying the real column labels. Only the leaf content is
+ * a grey block. That is what makes the swap to real data a CONTENT change rather than a BOX
+ * change, which is locked pattern 7 in dashboard.md: a refresh must not shift layout, and a
+ * skeleton that resizes on arrival would break that rule in a new place.
+ *
+ * The labels are real rather than blanked because they are known before any data arrives — a
+ * skeleton should withhold what it does not know yet, not what it does.
+ */
+export function BoardSkeleton() {
+  // Uneven on purpose. Three identical blocks per column reads as a loading bar; an uneven set
+  // reads as cards, which is what is about to be there.
+  const blocks: Record<string, ('' | 'tall')[]> = {
+    Open: ['', 'tall', ''],
+    Claimed: ['tall', ''],
+    'In progress': ['', ''],
+    'Needs review': [''],
+    'PR open': ['tall'],
+    Merged: [''],
+  };
+  return (
+    <>
+      <nav className="nav">
+        <BrandLockup />
+        <div className="sep" />
+        <span className="sk sk-proj" />
+        <span className="sk sk-repo" />
+        <span className="grow" />
+        <span className="sk sk-line" />
+      </nav>
+      <div className="stage">
+        <div className="board sk-board" aria-busy="true" aria-label="Loading the board">
+          {COLUMNS.map(({ status, label }) => (
+            <section className="col" key={status}>
+              <div className="col-head">
+                <h3>{label}</h3><span className="sk sk-count" />
+              </div>
+              <div className="col-body">
+                {(blocks[label] ?? ['']).map((tall, i) => (
+                  <div className={`sk sk-card ${tall}`.trim()} key={i} />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** The projects index, before its rows arrive. Same argument, one column instead of six. */
+export function ProjectsSkeleton() {
+  return (
+    <>
+      <nav className="nav">
+        <BrandLockup />
+        <span className="grow" />
+        <span className="sk sk-line" />
+      </nav>
+      <div className="stage">
+        <div className="board sk-board" aria-busy="true" aria-label="Loading your projects">
+          <section className="col">
+            <div className="col-head">
+              <h3>Projects</h3><span className="sk sk-count" />
+            </div>
+            <div className="col-body">
+              {['tall', 'tall', ''].map((tall, i) => (
+                <div className={`sk sk-card ${tall}`.trim()} key={i} />
+              ))}
+            </div>
+          </section>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -288,6 +378,39 @@ export function ProjectsEmpty({ anonymous }: { anonymous?: boolean } = {}) {
 }
 
 /**
+ * The mark and the wordmark, together, in ONE component.
+ *
+ * ORDER 0065, AND THE REGRESSION IS MINE. Order 0054 replaced `<div className="mark">FL</div>`
+ * with an `<img>` of /brand/flotilla-mark.svg. Consolidating the branches, I kept the product
+ * components.tsx because it had ProjectCard and the blockedChain prop — and the brand work came
+ * back only as far as TopNav. Three other places went on rendering the literal string "FL" in
+ * whatever typeface the browser felt like, and the asset has been serving HTTP 200 to nobody
+ * since.
+ *
+ * One component rather than four call sites, so there is no fourth place to forget.
+ *
+ * THE TEXT FALLBACK STAYS, because an `<img>` whose source 404s renders as a broken-image glyph,
+ * which is worse than two letters. But it is STYLED now — brand serif, mark colour, the mark's
+ * own box — rather than raw default type. A missing asset should not also change the typeface.
+ */
+export function BrandLockup({ size = 'sm' }: { size?: 'sm' | 'lg' }) {
+  const [broken, setBroken] = useState(false);
+  return (
+    <div className="brand-lockup" data-size={size} data-broken={broken} aria-label="Flotilla">
+      {broken
+        ? <span className="mark mark-text" aria-hidden="true">FL</span>
+        : (
+          <img
+            className="mark" src="/brand/flotilla-mark.svg" alt="" aria-hidden="true"
+            onError={() => setBroken(true)}
+          />
+        )}
+      <div className="brand">Flotilla</div>
+    </div>
+  );
+}
+
+/**
  * WHOSE BOARD IS THIS. The nav chip, with a way out.
  *
  * Order 0064, point 4: "a board that cannot tell you which account it is showing is how this bug
@@ -314,34 +437,13 @@ export function AccountChip({
       <span className="account-av" aria-hidden="true">{initial}</span>
       <span className="who-label" title={session.uid}>{who}</span>
       {/*
-        A BUTTON THAT LOOKS LIKE A BUTTON. This was `.linkish` -- teal and underlined -- which
-        rendered sign-out as a bare anchor floating at the edge of the nav, the one destructive
-        control on the page styled as the lightest thing on it.
+        A BUTTON THAT LOOKS LIKE A BUTTON, order 0069. This was `.linkish` -- teal and underlined
+        -- which rendered sign-out as a bare anchor floating at the edge of the nav: the one
+        destructive control on the page styled as the lightest thing on it.
       */}
       <button className="ghost" onClick={onSignOut}>
         {session.anonymous ? 'Sign in' : 'Sign out'}
       </button>
-    </div>
-  );
-}
-
-/**
- * The brand, in one place.
- *
- * THREE NAV BARS HAD DRIFTED. Only the board's TopNav rendered the real mark; the projects
- * index, the board's sign-in screen and /login each hardcoded `<div className="mark">FL</div>`,
- * a two-letter text stand-in that predates the SVG existing. Whichever page you landed on first
- * decided whether Flotilla appeared to have a logo at all.
- *
- * The UI BRAND only, decision 0002: the repo, the branches and the project ids deliberately keep
- * their old names, because they are live infrastructure and the comparison record has to stay
- * readable. Renaming a project id would invalidate every measurement that names it.
- */
-export function BrandLockup() {
-  return (
-    <div className="brand-lockup" aria-label="Flotilla">
-      <img className="mark" src="/brand/flotilla-mark.svg" alt="" aria-hidden="true" />
-      <div className="brand">Flotilla</div>
     </div>
   );
 }
@@ -365,20 +467,40 @@ export function SignInView({
   busy?: boolean;
 }) {
   return (
-    <div className="stage">
+    // `.centered`, not `.stage`. The stage is the board's scroll area and centres nothing; this
+    // page was rendering as content pinned to the top-left of an otherwise empty 1440px viewport.
+    // The container is one named thing in tokens.css -- see the note there about why it is not an
+    // inline style and not a second set of spacing values.
+    <div className="centered">
       <div className="login" data-signin="board">
-        <h2>Sign in to Flotilla</h2>
-        <p>
-          Your projects are listed by the account that owns them. Sign in with the Google account
-          you used to create them.
-        </p>
+        {/*
+          THE LOCKUP LIVES IN THE CARD, and there is no nav above it. A 60px bar carrying only a
+          brand mark, on a page with no navigation to offer, is chrome for its own sake -- and it
+          was pushing the one thing this screen exists for off-centre.
+        */}
+        <BrandLockup size="lg" />
+        {/*
+          "Sign in", not "Sign in to Flotilla". The lockup directly above it already says
+          Flotilla, so the longer heading read the word twice in adjacent lines. The probes that
+          used to wait on this string now wait on `.login[data-signin="board"]` instead -- a
+          synchronisation point that is a structure rather than a sentence cannot be broken by
+          rewording the sentence.
+        */}
+        <h2>Sign in</h2>
+        <p>Your projects are listed by the account that owns them.</p>
         <button className="cta" onClick={onGoogle} disabled={busy}>
           {busy ? 'Taking you to Google…' : 'Continue with Google'}
         </button>
+        {/*
+          ONE LINE. This was three lines of grey prose about throwaway identities and being
+          admitted to boards -- so the escape hatch carried more visual weight than the button
+          anyone actually wants to press. The explanation did not disappear: it moved to the two
+          places where it is load-bearing, which are the denied state and the anonymous empty
+          index. Nobody needs to read it before signing in.
+        */}
         <p className="note">
           Or <button className="linkish" onClick={onAnonymous} disabled={busy}>continue
-          anonymously</button> — a throwaway identity that is a member of nothing until someone
-          admits it. Useful for looking at a board you have been invited to see.
+          anonymously</button>.
         </p>
         {error && (
           <>

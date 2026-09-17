@@ -7,7 +7,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { COLUMNS, type AgentPresence, type Freshness, type Snapshot, type TaskView } from './store/types';
 import { createFirestoreStore, type StoreStatus } from './store/firebase';
 import {
-  AccountChip, BrandLockup, DetailPanel, EmptyColumn, ProjectCard, ProjectsEmpty, SignInView, TaskCard, TopNav,
+  AccountChip, BoardSkeleton, BrandLockup, DetailPanel, EmptyColumn, ProjectCard, ProjectsEmpty,
+  ProjectsSkeleton, SignInView, TaskCard, TopNav,
 } from './components';
 import { LoginPage } from './Login';
 import {
@@ -78,41 +79,6 @@ export function ProjectsIndex({
 }
 
 /**
- * Waiting, with a deadline and a name for what is being waited on.
- *
- * TWO DIFFERENT HANGS USED TO RENDER THE SAME PIXELS: the session gate waiting on
- * onAuthStateChanged, and the projects route waiting on a collection-group query. Both printed
- * "Connecting…" in the same grey, so a screenshot of a stuck board could not say which half was
- * stuck -- the ambiguity store/firebase.ts already argues is a bug, reintroduced one layer up.
- *
- * After `after_ms` it stops pretending progress is being made and says what did not arrive. It
- * cannot recover on its own (neither Firebase call has a timeout to cancel), but it turns a blank
- * page into a report, and a reload is a real option the user could not see before.
- */
-function Connecting({ what, after_ms = 8000 }: { what: string; after_ms?: number }) {
-  const [stalled, setStalled] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setStalled(true), after_ms);
-    return () => clearTimeout(t);
-  }, [after_ms]);
-
-  const base = { padding: 28, color: 'var(--muted)', maxWidth: 620, lineHeight: 1.6 } as const;
-  if (!stalled) return <div style={base}>Connecting…</div>;
-  return (
-    <div style={base}>
-      <p style={{ color: 'var(--ink)' }}>Still waiting on {what}.</p>
-      <p>
-        This usually means the browser could not hold the connection open. Safari with
-        cross-site tracking prevention, or a proxy that buffers responses, both do this.
-      </p>
-      <p style={{ marginTop: 12 }}>
-        <button className="cta" onClick={() => window.location.reload()}>Reload</button>
-      </p>
-    </div>
-  );
-}
-
-/**
  * The pre-board states, rendered as themselves.
  *
  * Deliberately the same shape as the "Connecting…" placeholder this replaces -- a padded block
@@ -123,13 +89,16 @@ function Connecting({ what, after_ms = 8000 }: { what: string; after_ms?: number
 function Notice({ status }: { status: StoreStatus }) {
   const base = { padding: 28, color: 'var(--muted)', maxWidth: 620, lineHeight: 1.6 } as const;
 
-  if (status.state === 'signing-in') return <div style={base}>Connecting…</div>;
-
-  if (status.state === 'live') {
-    // Signed in and allowed, but no snapshot yet. Distinct from signing-in on purpose: it tells
-    // you the rules are not the problem.
-    return <div style={base}>Loading the board…</div>;
-  }
+  // BOTH LOADING STATES ARE NOW THE SKELETON. Order 0066 point 3: these two rendered bare text
+  // on an empty page for up to fifteen seconds, which the user twice read as a broken app.
+  //
+  // The two states are no longer distinguished on screen, and that is a deliberate loss. The
+  // distinction ("the rules are not the problem") was written for whoever is debugging the
+  // board, not for whoever is using it, and it cost every user the one thing that actually
+  // tells them the app is alive. The state is still on `status` for anyone who needs it, and
+  // every state that a user can DO something about — denied, auth-unavailable, error — still
+  // says exactly what it is, below.
+  if (status.state === 'signing-in' || status.state === 'live') return <BoardSkeleton />;
 
   if (status.state === 'auth-unavailable') {
     return (
@@ -148,6 +117,14 @@ function Notice({ status }: { status: StoreStatus }) {
         <div style={{ marginTop: 8 }}>
           Signed in, but the security rules do not grant this browser read access to{' '}
           <code>{status.project_id}</code>. This is the rules working, not an outage.
+        </div>
+        {/*
+          THE SENTENCE THAT USED TO SIT IN FRONT OF EVERYONE SIGNING IN. Order 0065 point 3: the
+          sign-in screen carried three lines about throwaway identities before anyone had chosen
+          one. It belongs here, where someone is actually looking at the consequence.
+        */}
+        <div style={{ marginTop: 8 }}>
+          An identity is a member of nothing until someone admits it — including an anonymous one.
         </div>
         <div style={{ marginTop: 8 }}>Admit this browser by running:</div>
         <div style={{ marginTop: 6, color: 'var(--ink)', userSelect: 'all' }}>
@@ -391,27 +368,54 @@ export default function App() {
  * the data layer signed itself in anonymously on the way past. Now the identity is established
  * once, above the routes, and both of them are handed a uid they did not choose.
  */
+/**
+ * Waiting on onAuthStateChanged, with a deadline. Order 0068.
+ *
+ * The OTHER two waits in this app are skeletons (order 0066 point 3) because their shape is known
+ * before the data is. This one's is not: until the session resolves we do not know whether the
+ * next screen is a board, an index or a sign-in card, and a skeleton of the wrong page is a worse
+ * lie than a line of text.
+ *
+ * So it stays a line of text -- but a line of text with a deadline. Firebase Auth puts no timeout
+ * on its initialisation, so a Safari session whose auth iframe never loads sat on this word
+ * forever, which is indistinguishable from a slow network. After 8s it says what did not arrive
+ * and offers the one action that helps.
+ */
+function AskingWhoYouAre({ after_ms = 8000 }: { after_ms?: number }) {
+  const [stalled, setStalled] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setStalled(true), after_ms);
+    return () => clearTimeout(t);
+  }, [after_ms]);
+
+  if (!stalled) return <div className="centered"><p className="muted-note">Connecting…</p></div>;
+  return (
+    <div className="centered">
+      <p>Still waiting on the sign-in check.</p>
+      <p className="muted-note">
+        The browser could not hold the connection open. Safari with cross-site tracking
+        prevention, or a proxy that buffers responses, both do this.
+      </p>
+      <p><button className="cta" onClick={() => window.location.reload()}>Reload</button></p>
+    </div>
+  );
+}
+
 function SignedIn({ pathname, navigate }: { pathname: string; navigate: (to: string) => void }) {
   const { session, error, busy, signIn, signOut } = useSession();
 
-  // Still asking. NOT the sign-in screen -- see useSession.
-  if (session === undefined) {
-    return <Connecting what="the sign-in check" />;
-  }
+  // Still asking. NOT the sign-in screen -- see useSession. Centred rather than pinned to the
+  // top-left, because it occupies the same empty page the card is about to.
+  if (session === undefined) return <AskingWhoYouAre />;
+  // NO NAV. SignInView is the whole page and carries the lockup itself -- order 0065 point 2.
   if (session === null) {
     return (
-      <>
-        <nav className="nav">
-          <BrandLockup />
-          <span className="grow" />
-        </nav>
-        <SignInView
-          onGoogle={() => signIn('google')}
-          onAnonymous={() => signIn('anonymous')}
-          error={error}
-          busy={busy}
-        />
-      </>
+      <SignInView
+        onGoogle={() => signIn('google')}
+        onAnonymous={() => signIn('anonymous')}
+        error={error}
+        busy={busy}
+      />
     );
   }
 
@@ -465,7 +469,9 @@ export function ProjectsIndexRoute({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.uid]);
 
-  if (!ready) return <Connecting what="your project list" />;
+  // The index's own skeleton. Same argument as the board's: this route rendered a line of grey
+  // text and nothing else while a collection-group query ran.
+  if (!ready) return <ProjectsSkeleton />;
   return (
     <ProjectsIndex
       projects={projects} onOpen={onOpen} session={session} onSignOut={onSignOut}
