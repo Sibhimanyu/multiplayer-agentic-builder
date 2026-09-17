@@ -66,6 +66,9 @@
           }
         ]
       }
+    ],
+    "predeploy": [
+      "sh scripts/predeploy.sh"
     ]
   },
   "emulators": {

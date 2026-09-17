@@ -7,7 +7,10 @@
   "scripts": {
     "test": "node --test \"shared/**/*.test.ts\"",
     "test:memory": "node --test shared/store/memory.test.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build:cli": "node scripts/build-cli.mjs",
+    "verify:published": "node scripts/verify-published.mjs",
+    "build:all": "sh scripts/build-all.sh"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

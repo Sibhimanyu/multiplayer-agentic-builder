@@ -539,6 +539,16 @@ function rolePackFor(me: WhoAmI): RolePack {
 
 // ---- entry ------------------------------------------------------------------------------
 
+/**
+ * The version this binary reports.
+ *
+ * INJECTED BY THE BUILD from packaging/package.json (scripts/build-cli.mjs), so a published
+ * binary cannot disagree with the tarball it shipped in. Running from source has no define, and
+ * says so rather than claiming a release number it is not.
+ */
+declare const __FLOTILLA_VERSION__: string | undefined;
+const CLI_VERSION = typeof __FLOTILLA_VERSION__ === 'string' ? __FLOTILLA_VERSION__ : '0.1.0-dev';
+
 const USAGE = `flotilla — agentic coordination CLI
 
   flotilla init --project <id>  point this install at a Firebase project
@@ -718,6 +728,14 @@ export async function main(argv: string[]): Promise<number> {
     }
     case 'start':
       return cmdStart(root);
+    // `--version` fell through to `default`, which printed 'unknown command: --version'
+    // followed by the whole help text. The installer's own success line runs
+    // `flotilla --version`, so the last thing a new install said was the help screen with the
+    // word flotilla in front of it. Order 0074.
+    case '-v':
+    case '--version':
+      out(CLI_VERSION);
+      return 0;
     case undefined:
     case '-h':
     case '--help':
