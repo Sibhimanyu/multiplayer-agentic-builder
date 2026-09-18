@@ -37,6 +37,7 @@ import { appendOutbox, drain, isConnected, readCursor, type OutboxRecord } from 
 import { ApiClient, connectWithInvite, type WhoAmI } from './client.ts';
 import { materialise, publishToBlackboard } from './blackboard.ts';
 import { serve } from './mcp.ts';
+import { openBrowser } from './browser.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
 import { LAYER_OF, TASK_KINDS, type Event, type EventKind, type TaskKind } from '../shared/store/types.ts';
 import { ROLE_SLUGS, roleFor } from '../shared/store/directory.ts';
@@ -567,17 +568,7 @@ async function cmdWork(root: string, rest: string[]): Promise<number> {
   // A per-invocation config file rather than `claude mcp add`: adding a global server would
   // outlive this repo and follow the user into unrelated projects. This one is scoped to the
   // run and thrown away with the temp directory.
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'flotilla-mcp-'));
-  const configPath = path.join(dir, 'mcp.json');
-  const self = process.argv[1] ?? 'flotilla';
-  await fs.writeFile(
-    configPath,
-    `${JSON.stringify({
-      mcpServers: {
-        flotilla: { command: process.execPath, args: [self, 'mcp'], cwd: root },
-      },
-    }, null, 2)}\n`,
-  );
+  const configPath = await writeMcpConfig(root);
 
   const opening = [
     'You are working inside a Flotilla project, where several coding agents share one repository.',
@@ -623,6 +614,81 @@ function whichAgent(bin: string): boolean {
     } catch {
       return false;
     }
+  });
+}
+
+/**
+ * Write the per-invocation MCP config both `work` and `chat` hand to the agent.
+ *
+ * ONE WRITER, because two copies of this object would eventually give the terminal and the
+ * browser different tools, and the whole point of phase 2 is that they share an engine.
+ *
+ * Per-invocation rather than `claude mcp add`: a globally registered server would follow the
+ * user into unrelated repositories.
+ */
+async function writeMcpConfig(root: string): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'flotilla-mcp-'));
+  const configPath = path.join(dir, 'mcp.json');
+  const self = process.argv[1] ?? 'flotilla';
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify({
+      mcpServers: {
+        flotilla: { command: process.execPath, args: [self, 'mcp'], cwd: root },
+      },
+    }, null, 2)}\n`,
+  );
+  return configPath;
+}
+
+/**
+ * `flotilla chat` — the same conversation, in a browser.
+ *
+ * FOR THE PEOPLE WHO WILL NOT OPEN A TERMINAL. `work` hands the terminal to Claude Code, which
+ * serves developers and nobody else; a ui designer holds a real file scope in this product and
+ * cannot use it. This serves the same four tools over loopback with a fleet rail beside the
+ * conversation.
+ *
+ * The agent still runs here, under this user's own subscription. Flotilla holds no model key.
+ */
+async function cmdChat(root: string, rest: string[]): Promise<number> {
+  if (!(await isConnected(root))) {
+    log.warn('cli.not_connected_run_flotilla', 'not connected: run \`flotilla connect <invite>\` first');
+    return 2;
+  }
+  const i = rest.indexOf('--agent');
+  const want = i > -1 ? rest[i + 1] : undefined;
+  const agent = want ?? (whichAgent('claude') ? 'claude' : whichAgent('codex') ? 'codex' : undefined);
+  if (!agent || !whichAgent(agent)) {
+    log.warn('cli.no_agent_found', 'no coding agent found on PATH. Install Claude Code or Codex.');
+    return 1;
+  }
+
+  const cfg = await loadConfig(root);
+  const client = new ApiClient({ base_url: cfg.api_base, token: await readToken(root), log });
+  const pi = rest.indexOf('--port');
+  const port = pi > -1 ? Number(rest[pi + 1]) || 0 : 0;
+
+  const { serveChat } = await import('./chat.ts');
+  const { url, close } = await serveChat({
+    client, root, log,
+    mcpConfig: await writeMcpConfig(root),
+    agent,
+    allowedScope: async () => rolePackFor(await client.whoami()).may_edit,
+  }, port);
+
+  out(`flotilla chat — ${agent}, on this machine`);
+  out('');
+  out(`  ${url}`);
+  out('');
+  out('The link carries a one-time secret: this endpoint can run your agent, so anything');
+  out('without it is refused. Leave this terminal open; ctrl-c stops the server.');
+  if (!rest.includes('--no-browser')) void openBrowser(url);
+
+  return await new Promise<number>((resolve) => {
+    const stop = () => { close(); resolve(0); };
+    process.on('SIGINT', stop);
+    process.on('SIGTERM', stop);
   });
 }
 
@@ -743,8 +809,10 @@ const USAGE = `flotilla — agentic coordination CLI
   flotilla report "<message>"   queue one progress line in the outbox
   flotilla start                drain the outbox, deliver the inbox, heartbeat
 
-  flotilla work                 open your agent with live fleet context
+  flotilla work                 open your agent with live fleet context, in this terminal
                                 --agent <claude|codex>, --print to show the command only
+  flotilla chat                 the same conversation in a browser, with a fleet rail
+                                --port <n>, --no-browser, --agent <claude|codex>
   flotilla mcp                  speak MCP on stdio; work wires this up for you
 
 Environment:
@@ -931,6 +999,8 @@ export async function main(argv: string[]): Promise<number> {
       const li = rest.indexOf('--label');
       return projectCommands.invite(root, role, li > -1 ? rest[li + 1] : undefined);
     }
+    case 'chat':
+      return cmdChat(root, rest);
     case 'mcp':
       return cmdMcp(root);
     case 'work':
