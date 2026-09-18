@@ -72,9 +72,23 @@ interface Config {
 }
 
 async function loadConfig(root: string): Promise<Config> {
-  // Backend URL comes from the environment, never from .agentic/ — putting it there would let
-  // the agent see which platform it is on and break the byte-identical tree (B2).
-  const api_base = process.env.BUILDER_API_URL ?? '';
+  // NEVER FROM .agentic/ -- putting it there would let the agent see which platform it is on and
+  // break the byte-identical tree (B2). That constraint is about the AGENT's tree, though, and it
+  // was being honoured by reading an environment variable that nothing on earth sets: a user who
+  // installed from the curl one-liner and ran `flotilla status` got "offline" and no reason.
+  //
+  // ~/.flotilla/config.json is the install's own config, written by `flotilla init` and by
+  // `login`. It is not the agent's tree, so deriving the URL from it keeps B2 intact. The env
+  // var still wins, for pointing a machine at an emulator or a second project.
+  let api_base = process.env.BUILDER_API_URL ?? '';
+  if (!api_base) {
+    try {
+      const { loadConfig: installConfig, apiUrl } = await import('./config.ts');
+      api_base = apiUrl(await installConfig());
+    } catch {
+      // Not configured yet. The commands that need it report that themselves, with the fix.
+    }
+  }
   let repo = process.env.BUILDER_REPO ?? '';
   if (!repo) {
     const raw = await fs.readFile(path.join(root, LAYOUT.project), 'utf8').catch(() => '');
@@ -93,7 +107,7 @@ async function readToken(root: string): Promise<string> {
 async function cmdConnect(root: string, invite: string): Promise<number> {
   const cfg = await loadConfig(root);
   if (!cfg.api_base) {
-    log.warn('cli.flotilla_api_url_is', 'BUILDER_API_URL is not set; nothing to connect to');
+    log.warn('cli.not_configured', 'this install is not pointed at a project yet: run `flotilla init --project <firebase-project-id>`');
     return 1;
   }
 

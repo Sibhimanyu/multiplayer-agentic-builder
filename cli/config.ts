@@ -48,6 +48,17 @@ export const writeUrl = (cfg: Pick<FlotillaConfig, 'project_id' | 'region'>): st
   `https://${cfg.region}-${cfg.project_id}.cloudfunctions.net/write`;
 
 /** The hosted board, also derived. */
+/**
+ * The read/agent API for this install.
+ *
+ * Derived from the same two values `writeUrl` uses, so the two can never point at different
+ * projects. It exists because `flotilla status`, `start`, `work` and `mcp` used to read
+ * `BUILDER_API_URL` from the environment and nothing ever set it: a user who installed from the
+ * curl one-liner and ran `flotilla status` got "offline" with no way to know why.
+ */
+export const apiUrl = (cfg: Pick<FlotillaConfig, 'project_id' | 'region'>): string =>
+  `https://${cfg.region}-${cfg.project_id}.cloudfunctions.net/api`;
+
 export const boardUrl = (cfg: Pick<FlotillaConfig, 'project_id'>): string =>
   `https://${cfg.project_id}.web.app`;
 
