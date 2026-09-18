@@ -32,12 +32,23 @@ export interface GitResult {
  * spawn with an argument array, not exec with a string: a contract named
  * `items-api.v2.yaml; rm -rf ~` is a filename the agent controls, and a shell would run it.
  */
-export function git(args: string[], cwd: string, timeout_ms = 60_000): Promise<GitResult> {
+export function git(
+  args: string[],
+  cwd: string,
+  timeout_ms = 60_000,
+  /**
+   * Extra environment for this call. `ship` needs GIT_INDEX_FILE to stage into a scratch index
+   * instead of the user's: the agent is editing this tree right now, and borrowing .git/index
+   * would show up as phantom staged files in their own `git status`.
+   */
+  env: Record<string, string> = {},
+): Promise<GitResult> {
   return new Promise((resolve, reject) => {
     const child = spawn('git', args, {
       cwd,
       env: {
         ...process.env,
+        ...env,
         // Never block on a credential or editor prompt: a CLI run from an agent harness has
         // no terminal to answer it, and the process would hang until killed.
         GIT_TERMINAL_PROMPT: '0',

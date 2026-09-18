@@ -224,6 +224,15 @@ export interface DrainResult {
   remaining: number;
   cursor_before: number;
   cursor_after: number;
+  /**
+   * Task ids whose `task_completed` was published in THIS drain.
+   *
+   * `flotilla start` ships the agent's branch off this. It is the published set rather than the
+   * pending set on purpose: a task whose completion never reached the board must not produce a
+   * branch claiming it did. Duplicates are excluded for the same reason a re-drain after a crash
+   * should not push twice.
+   */
+  completed: string[];
 }
 
 export type Publisher = (
@@ -260,13 +269,20 @@ export async function drain(
   let published = 0;
   let duplicates = 0;
   let stopped = false;
+  const completed: string[] = [];
 
   for (const rec of pending) {
     if (stopped) break;
     try {
       const r = await publish(rec);
       if (r.duplicate) duplicates++;
-      else published++;
+      else {
+        published++;
+        // Only a completion that actually landed. See DrainResult.completed.
+        if (rec.kind === 'task_completed' && typeof rec.body.task_id === 'string') {
+          completed.push(rec.body.task_id);
+        }
+      }
 
       if (rec.source.type === 'jsonl') {
         // Advance past this line only now.
@@ -296,6 +312,7 @@ export async function drain(
     remaining: pending.length - published - duplicates,
     cursor_before,
     cursor_after: cursor,
+    completed,
   };
 }
 

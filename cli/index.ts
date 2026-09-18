@@ -35,8 +35,9 @@ import {
 } from './agentic.ts';
 import { appendOutbox, drain, isConnected, readCursor, type OutboxRecord } from './outbox.ts';
 import { ApiClient, connectWithInvite, type WhoAmI } from './client.ts';
-import { materialise, publishToBlackboard } from './blackboard.ts';
-import { serve } from './mcp.ts';
+import { git, materialise, publishToBlackboard } from './blackboard.ts';
+import { serve, currentTask } from './mcp.ts';
+import { ShipError, branchFor, classifyChanges, parseStatus, scopeForTask, shipScope } from './ship.ts';
 import { openBrowser } from './browser.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
 import { LAYER_OF, TASK_KINDS, type Event, type EventKind, type TaskKind } from '../shared/store/types.ts';
@@ -335,6 +336,36 @@ async function cmdStart(root: string): Promise<number> {
       if (r.published > 0 || r.duplicates > 0) {
         out(`published ${r.published}, deduped ${r.duplicates}, ${r.remaining} remaining`);
         offline = false;
+      }
+
+      // THE PROMISE, KEPT. AGENTS.md tells every agent "never run git — the bridge does both for
+      // you. A branch named above is pushed on your behalf." The agent's only way to say it is
+      // done is to append task_completed to the outbox, so that is the trigger.
+      //
+      // ON COMPLETION, NOT ON EVERY LOOP. This loop runs every 30s; shipping unconditionally
+      // would put a commit on the branch every half minute and turn the history into a
+      // keystroke log. Not on task_progress either: progress is a sentence, not a checkpoint.
+      //
+      // A FAILED SHIP DOES NOT STOP THE LOOP. The event is already published and the agent has
+      // moved on; the work is still in the tree, and `flotilla ship` retries it by hand. Killing
+      // the heartbeat over a push rejection would take the whole fleet's presence down with it.
+      if (r.completed.length > 0) {
+        for (const task_id of r.completed) {
+          try {
+            const { me, task, scope } = await shipContext(root, client);
+            const res = await shipScope({
+              root, branch: branchFor(me.role_slug, task.task_id), scope,
+              agent_id: me.agent_id, role_slug: me.role_slug,
+              task_id: task.task_id, task_title: task.title,
+            }, log);
+            if (res.unchanged) out(`${task_id} completed — nothing new to push`);
+            else out(`${task_id} completed — pushed ${res.files.length} file(s) to ${res.branch}`);
+          } catch (err) {
+            log.warn('cli.ship_on_complete_failed', 'could not ship the completed task; run `flotilla ship` to retry', {
+              task_id, error: (err as Error).message,
+            });
+          }
+        }
       }
     } catch (err) {
       if (err instanceof StoreAuthError) {
@@ -820,6 +851,103 @@ export function rolePackFor(me: WhoAmI): RolePack {
 declare const __FLOTILLA_VERSION__: string | undefined;
 const CLI_VERSION = typeof __FLOTILLA_VERSION__ === 'string' ? __FLOTILLA_VERSION__ : '0.1.0-dev';
 
+/**
+ * Everything `flotilla ship` needs, read from the board rather than from a flag.
+ *
+ * The task and the scope are facts the server owns. Asking the human to name them on the
+ * command line would let them name a task they do not hold and a glob they never acquired, and
+ * the branch would then claim work under an assignment that was never theirs.
+ */
+async function shipContext(root: string, client: ApiClient) {
+  const me = await client.whoami();
+  const read = await client.readSnapshot();
+  if (!read) throw new ShipError('the board returned no snapshot', 'you may be offline');
+  const task = currentTask(read.snapshot, me.agent_id);
+  if (!task) {
+    throw new ShipError(
+      'no task is claimed on this machine',
+      'run `flotilla claim <task_id>` first — a branch is named after a task',
+    );
+  }
+  const scope = scopeForTask(read.snapshot.locks, me.agent_id, task.task_id);
+  if (scope.length === 0) {
+    throw new ShipError(
+      `task ${task.task_id} is claimed but holds no file scope`,
+      'nothing can be committed under a lock that was never acquired',
+    );
+  }
+  return { me, task, scope };
+}
+
+async function cmdShip(root: string, rest: string[]): Promise<number> {
+  if (!(await isConnected(root))) {
+    log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
+    return 2;
+  }
+  const cfg = await loadConfig(root);
+  const client = new ApiClient({ base_url: cfg.api_base, token: await readToken(root), log });
+
+  let ctx;
+  try {
+    ctx = await shipContext(root, client);
+  } catch (err) {
+    if (err instanceof ShipError) {
+      log.warn('cli.ship_not_ready', err.message);
+      return 1;
+    }
+    throw err;
+  }
+  const { me, task, scope } = ctx;
+  const branch = branchFor(me.role_slug, task.task_id);
+
+  // --dry-run BEFORE anything is pushed, because the first question anyone asks of a command
+  // that commits on their behalf is "what exactly are you about to commit".
+  if (rest.includes('--dry-run')) {
+    const status = await git(['status', '--porcelain', '-z', '-uall'], root);
+    // The SAME classifier shipScope uses. A preview computed a second way is a preview that
+    // will eventually disagree with the commit it claims to describe.
+    const { files, skipped } = classifyChanges(parseStatus(status.stdout), scope);
+    out(`branch:  ${branch}`);
+    out(`scope:   ${scope.join(', ')}`);
+    out('');
+    out(files.length > 0 ? 'would commit:' : 'would commit: (nothing in scope has changed)');
+    for (const f of files) out(`  ${f}`);
+    if (skipped.length > 0) {
+      out('');
+      out('would NOT commit — outside your scope:');
+      for (const f of skipped) out(`  ${f}`);
+    }
+    return 0;
+  }
+
+  try {
+    const r = await shipScope({
+      root, branch, scope,
+      agent_id: me.agent_id, role_slug: me.role_slug,
+      task_id: task.task_id, task_title: task.title,
+    }, log);
+
+    if (r.unchanged) {
+      out(`nothing to ship — ${branch} already holds your in-scope work`);
+      return 0;
+    }
+    out(`pushed ${branch}`);
+    out(`  ${r.commit_sha.slice(0, 12)}  ${r.files.length} file${r.files.length === 1 ? '' : 's'}`);
+    for (const f of r.files) out(`    ${f}`);
+    if (cfg.repo) {
+      out('');
+      out(`  open a PR: https://github.com/${cfg.repo}/compare/${branch}?expand=1`);
+    }
+    return 0;
+  } catch (err) {
+    if (err instanceof ShipError) {
+      log.warn('cli.ship_failed', err.message);
+      return 1;
+    }
+    throw err;
+  }
+}
+
 const USAGE = `flotilla — agentic coordination CLI
 
   flotilla init --project <id>  point this install at a Firebase project
@@ -840,7 +968,10 @@ const USAGE = `flotilla — agentic coordination CLI
                                 create a task on the board; --id overrides the derived id
   flotilla claim <task_id>      atomic claim, then acquire the declared file scope
   flotilla report "<message>"   queue one progress line in the outbox
+  flotilla ship                 commit your in-scope changes to agent/<role>/<task> and push
+                                --dry-run lists what would be committed and stops
   flotilla start                drain the outbox, deliver the inbox, heartbeat
+                                ships automatically when the agent reports the task complete
 
   flotilla work                 open your agent with live fleet context, in this terminal
                                 --agent <claude|codex>, --print to show the command only
@@ -1020,6 +1151,8 @@ export async function main(argv: string[]): Promise<number> {
       }
       return cmdReport(root, message);
     }
+    case 'ship':
+      return cmdShip(root, rest);
     case 'start':
       return cmdStart(root);
     case 'invite': {
