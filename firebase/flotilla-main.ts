@@ -314,7 +314,7 @@ registerProjectCommands({
     return 0;
   },
 
-  async task(root, title, kind, task_id) {
+  async task(root, title, kind, task_id, file_scope) {
     const cfg = await loadConfig();
     const raw = await readFile(join(root, '.agentic/project.json'), 'utf8').catch(() => '');
     if (!raw) {
@@ -332,6 +332,7 @@ registerProjectCommands({
     });
     const res = await client.write(project_id, 'create_task', {
       title, kind, ...(task_id ? { task_id } : {}),
+      ...(file_scope && file_scope.length > 0 ? { file_scope } : {}),
     });
     if (!res.ok) {
       console.error(`\n${String(res.body.error ?? `write refused (HTTP ${res.status})`)}`);
@@ -352,6 +353,7 @@ registerProjectCommands({
     console.log(`created ${id}`);
     console.log(`  title  ${title}`);
     console.log(`  kind   ${kind}`);
+    console.log(`  locks  ${file_scope && file_scope.length > 0 ? file_scope.join(', ') : '(nothing — no --scope given)'}`);
     console.log(`\nAn agent can take it now:  flotilla claim ${id}`);
     return 0;
   },

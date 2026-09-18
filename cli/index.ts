@@ -737,7 +737,7 @@ const USAGE = `flotilla — agentic coordination CLI
 
   flotilla connect <invite>     write AGENTS.md + .agentic/, store the agent token
   flotilla status               what the board thinks is happening
-  flotilla task <title> --kind <${TASK_KINDS.join('|')}>
+  flotilla task <title> --kind <${TASK_KINDS.join('|')}> --scope "<globs>"
                                 create a task on the board; --id overrides the derived id
   flotilla claim <task_id>      atomic claim, then acquire the declared file scope
   flotilla report "<message>"   queue one progress line in the outbox
@@ -774,7 +774,7 @@ export interface ProjectCommands {
    * deployed function with the USER's token, not an agent token, because creating work is a
    * triage act and triage is a member capability. See docs/decisions/0005-work-appears-by-triage.md.
    */
-  task: (root: string, title: string, kind: TaskKind, task_id?: string) => Promise<number>;
+  task: (root: string, title: string, kind: TaskKind, task_id?: string, file_scope?: string[]) => Promise<number>;
   /**
    * `flotilla invite`. The one command that turns a one-person project into a team, and the
    * reason membership was unreachable until now: the invite document `connect` consumes was
@@ -872,7 +872,7 @@ export async function main(argv: string[]): Promise<number> {
         return i > -1 ? rest[i + 1] : undefined;
       };
       const flagged = new Set<number>();
-      for (const name of ['--kind', '--id']) {
+      for (const name of ['--kind', '--id', '--scope']) {
         const i = rest.indexOf(name);
         if (i > -1) { flagged.add(i); flagged.add(i + 1); }
       }
@@ -880,7 +880,7 @@ export async function main(argv: string[]): Promise<number> {
       const kind = flag('--kind');
 
       if (!title || !kind) {
-        log.warn('cli.usage_flotilla_task', `usage: flotilla task "<title>" --kind <${TASK_KINDS.join('|')}> [--id <task_id>]`);
+        log.warn('cli.usage_flotilla_task', `usage: flotilla task "<title>" --kind <${TASK_KINDS.join('|')}> [--scope "glob glob"] [--id <task_id>]`);
         return 1;
       }
       if (!(TASK_KINDS as readonly string[]).includes(kind)) {
@@ -890,7 +890,16 @@ export async function main(argv: string[]): Promise<number> {
         return 1;
       }
       if (!projectCommands) return needsBackend();
-      return projectCommands.task(root, title, kind as TaskKind, flag('--id'));
+      // A TASK WITH NO SCOPE LOCKS NOTHING, which makes the collision prevention this product
+      // exists for inert. The board's form has always had the field; the CLI did not, so every
+      // task created from a terminal was unlockable. Comma or whitespace separated, because a
+      // person typing two globs will use either.
+      const scope = (flag('--scope') ?? '').split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+      if (scope.length === 0) {
+        log.warn('cli.task_without_scope',
+          'no --scope given: this task will lock no files, so two agents can edit the same code');
+      }
+      return projectCommands.task(root, title, kind as TaskKind, flag('--id'), scope);
     }
     case 'status':
       return cmdStatus(root);
