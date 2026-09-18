@@ -20,7 +20,7 @@ import { randomUUID, randomBytes } from 'node:crypto';
 import type { ApiClient } from './client.ts';
 import type { Logger } from '../shared/log.ts';
 import { chatPage } from './chatpage.ts';
-import { TOOLS } from './mcp.ts';
+import { TOOLS, currentTask } from './mcp.ts';
 
 export interface ChatDeps {
   client: ApiClient;
@@ -51,7 +51,8 @@ export async function readContext(deps: ChatDeps): Promise<ChatContext> {
   for (const l of snap?.locks ?? []) {
     holds.set(l.agent_id, [...(holds.get(l.agent_id) ?? []), ...l.globs]);
   }
-  const task = snap?.tasks.find((t) => t.claimed_by === me.agent_id) ?? null;
+  // The same resolver the MCP tool uses. Two answers to "what am I on" is a bug.
+  const task = snap ? currentTask(snap, me.agent_id) : null;
   return {
     project: snap?.project_name ?? me.project_id,
     role: me.role_slug,

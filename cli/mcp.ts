@@ -118,6 +118,28 @@ export function renderFleet(snap: Snapshot, me: string): string {
   return `${snap.agents.length} agent(s) on ${snap.project_name}:\n\n${lines.join('\n\n')}${warn}`;
 }
 
+/**
+ * WHICH of my claimed tasks am I actually on.
+ *
+ * `.find(claimed_by === me)` returned an arbitrary one as soon as an agent held more than one
+ * task, and nothing stops `flotilla claim` taking a second. The rail said I was on a task I had
+ * claimed an hour earlier while I was working on the one I had just taken.
+ *
+ * The agent's own presence record is the authority: `current_task` is what the heartbeat reports
+ * it is working on. Falling back to the most recently updated claim, because a claim with no
+ * heartbeat yet is still better than the oldest one.
+ */
+export function currentTask(snap: Snapshot, me: string): TaskView | null {
+  const mine = snap.tasks.filter((t) => t.claimed_by === me && t.status !== 'merged');
+  if (mine.length === 0) return null;
+  const agent = snap.agents.find((a) => a.agent_id === me);
+  const named = agent?.current_task
+    ? mine.find((t) => t.task_id === agent.current_task)
+    : undefined;
+  if (named) return named;
+  return [...mine].sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1))[0] ?? null;
+}
+
 export function renderAssignment(
   who: { agent_id: string; role_slug: string },
   allowed: string[],
@@ -169,7 +191,7 @@ async function callTool(name: string, args: Record<string, unknown>, deps: McpDe
     case 'my_assignment': {
       const me = await deps.client.whoami();
       const read = await deps.client.readSnapshot();
-      const task = read?.snapshot.tasks.find((t) => t.claimed_by === me.agent_id) ?? null;
+      const task = read ? currentTask(read.snapshot, me.agent_id) : null;
       return text(renderAssignment(me, await deps.allowedScope(), task));
     }
     case 'report': {
