@@ -10,6 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { connect } from 'node:net';
 import { serveChat, readContext, type ChatDeps } from './chat.ts';
+import { chatPage } from './chatpage.ts';
 import type { Logger } from '../shared/log.ts';
 
 const nullLog: Logger = { debug() {}, info() {}, warn() {}, error() {} };
@@ -118,4 +119,100 @@ test('an empty message is rejected before the agent is spawned', async () => {
     });
     assert.equal(res.status, 400);
   } finally { close(); }
+});
+
+// ---- order 0083. The design review's findings, as assertions. ----
+
+test('the fonts are served without a nonce, because a browser cannot send one', async () => {
+  const { url, close } = await serveChat(deps());
+  try {
+    const base = url.split('?')[0]!;
+    // NO NONCE, NO HEADER -- exactly what a browser sends for a font referenced from CSS. The
+    // first version of this route sat behind the nonce check and 403'd every request, so the
+    // page rendered in system-ui and looked like the fix had not been applied.
+    const res = await fetch(`${base}brand/fonts/PlexSans-400.woff2`);
+    assert.equal(res.status, 200, 'a font must not need the nonce');
+    assert.equal(res.headers.get('content-type'), 'font/woff2');
+    const buf = new Uint8Array(await res.arrayBuffer());
+    // BYTES, NOT STATUS. A 200 proves nothing here: the same trap as the catch-all rewrite that
+    // served index.html for a missing install.sh for a day. wOF2 is the woff2 magic number.
+    assert.ok(buf.length > 5_000, `expected real font bytes, got ${buf.length}`);
+    assert.deepEqual([...buf.slice(0, 4)], [0x77, 0x4f, 0x46, 0x32], 'must start with wOF2');
+  } finally { close(); }
+});
+
+test('the font route cannot be walked out of, and is not a general file server', async () => {
+  const { url, close } = await serveChat(deps());
+  try {
+    const base = url.split('?')[0]!;
+    for (const p of [
+      'brand/fonts/../../../etc/passwd',
+      'brand/fonts/..%2f..%2fpackage.json',
+      'brand/fonts/PlexSans-400.woff2.map',
+      'brand/fonts/Inter-400.woff2',
+      'brand/fonts/',
+    ]) {
+      const res = await fetch(`${base}${p}`);
+      assert.notEqual(res.status, 200, `${p} must not be served`);
+    }
+  } finally { close(); }
+});
+
+test('the board link is present when configured and absent when not', async () => {
+  const withBoard = await readContext({ ...deps(), boardUrl: 'https://p1.web.app' });
+  assert.equal(withBoard.board_url, 'https://p1.web.app');
+  // A project with no hosting has no board. The page hides the button rather than rendering a
+  // link that 404s, so the field must be absent rather than an empty string.
+  const without = await readContext(deps());
+  assert.equal('board_url' in without, false, 'no board must mean no key, not an empty one');
+});
+
+test('the page holds no font-size below the 11px floor, and no half-pixel', async () => {
+  const html = chatPage('n');
+  // DESIGN.md "Type": integers only, 11px floor. This page is the one surface written entirely
+  // against the scale, so it is the one that can be asserted rather than migrated -- the board
+  // still carries known half-pixel debt.
+  const sizes = [...html.matchAll(/font-size:\s*([0-9.]+)px/g)].map((m) => Number(m[1]));
+  // The control FIRST: a regex that matches nothing would pass every assertion below.
+  assert.ok(sizes.length === 0 || sizes.every((s) => Number.isInteger(s) && s >= 11),
+    `off-scale literals: ${sizes.filter((s) => !Number.isInteger(s) || s < 11).join(', ')}`);
+  const tokens = [...html.matchAll(/--t-([0-7]):(\d+)px/g)].map((m) => Number(m[2]));
+  assert.ok(tokens.length >= 6, `expected the scale to be declared, found ${tokens.length} steps`);
+  assert.ok(tokens.every((t) => Number.isInteger(t) && t >= 11), `below the floor: ${tokens}`);
+  // And every font-size goes through the scale rather than a literal.
+  assert.equal(sizes.length, 0, `literal font-size values remain: ${sizes.join(', ')}`);
+});
+
+test('the opening screen is starter prompts, not a welcome paragraph', async () => {
+  const html = chatPage('n');
+  // The old page opened with "Your agent is on this machine, and it knows where it stands." and
+  // three lines explaining what it could do -- happy talk above 600px of dead void, with no
+  // action in it. The replacement is buttons written from live state.
+  assert.ok(!/knows where it stands/.test(html), 'the happy-talk welcome must be gone');
+  assert.match(html, /id="prompts"/, 'the starter prompts container must exist');
+  assert.match(html, /function starters/, 'the prompts must be generated from context');
+  // And it must say upfront that it cannot edit, rather than letting the user find out by
+  // being refused. Being honest about a limit replenishes goodwill; discovering it drains it.
+  assert.match(html, /cannot edit files/);
+  // Nothing in the starter set may offer an edit, because the agent would be refused.
+  assert.ok(!/\bEdit the\b|\bFix the bug and\b/.test(html));
+});
+
+test('a failed poll blanks every region, not just the header', async () => {
+  const html = chatPage('n');
+  // It used to set the header to "offline" and leave the rail reading "loading…" forever: two
+  // different answers to "is this connected" on one screen.
+  assert.match(html, /function paintOffline/);
+  for (const id of ['task', 'fleet', 'contested']) {
+    assert.ok(new RegExp(`el\\('${id}'\\)\\.innerHTML`).test(html)
+      || new RegExp(`'${id}'`).test(html), `paintOffline must reset #${id}`);
+  }
+});
+
+test('the rail survives a narrow window instead of being deleted', async () => {
+  const html = chatPage('n');
+  // `aside{display:none}` under 860px silently removed the live fleet context -- the reason the
+  // page exists -- from any split screen. It moves above the conversation now.
+  assert.ok(!/aside\{display:none\}/.test(html), 'the rail must not be display:none anywhere');
+  assert.match(html, /overflow-wrap:anywhere/, 'the task id must be allowed to break');
 });

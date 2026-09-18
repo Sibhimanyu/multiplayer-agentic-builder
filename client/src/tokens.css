@@ -75,6 +75,39 @@
      margin, padding and gap comes from here. */
   --sp-1:2px;  --sp-2:4px;  --sp-3:6px;   --sp-4:8px;   --sp-5:12px;
   --sp-6:16px; --sp-7:24px; --sp-8:32px;  --sp-9:48px;  --sp-10:64px;
+
+  /* ---- the type scale. DESIGN.md "Type". ----
+     DESIGN.md pinned the FAMILIES and forbade five fonts by name, then pinned no sizes at all.
+     So the shipped CSS carried 18 distinct font-size values -- 9, 10, 10.5, 11, 11.5, 12, 12.5,
+     13, 13.5, 14, 14.5, 15, 18, 19, 20, 22, 26, 34 -- twelve of them half-pixels chosen one rule
+     at a time. Twelve of the eighteen sit inside a 5px band, which is why nothing on the board
+     reads as more important than anything else: a 13.5px title beside a 12.5px label is not a
+     hierarchy, it is noise. The design detector found the same thing from the other side and
+     called it flat-type-hierarchy.
+
+     INTEGERS ONLY. Every half-pixel above got there because someone nudged an existing rule by
+     .5 rather than moving a step, and .5px is below the threshold anyone can see -- it buys no
+     hierarchy and costs a scale.
+
+     11px IS THE FLOOR and it is not a preference: below it the detector fails functional text
+     outright, and .av.sm shipped at 9px. Anything that "needs" to be smaller needs less to say.
+
+     Steps are ~1.15, integer-rounded. Eight of them is enough for a panel; if a ninth seems
+     necessary, the layout is doing the job type should be doing. */
+  --t-0:11px;  /* mono legends, chips, badges. THE FLOOR. */
+  --t-1:12px;  /* secondary meta, timestamps, counts */
+  --t-2:14px;  /* UI default, body */
+  --t-3:16px;  /* conversation body, anything read in paragraphs */
+  --t-4:18px;  /* panel and card heading */
+  --t-5:21px;  /* page heading */
+  --t-6:24px;
+  --t-7:28px;  /* display. Nothing on an operations panel is larger. */
+
+  /* Three line-heights, bound to purpose rather than to a size. A heading at --lh body-height
+     floats between its paragraphs, which is the defect DESIGN.md names under Layout. */
+  --lh-tight:1.2;  /* --t-4 and up */
+  --lh:1.5;        /* UI text */
+  --lh-read:1.6;   /* --t-3 paragraphs */
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body,#root{height:100%}
@@ -148,7 +181,7 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 /* ---- presence ---- */
 .avs{display:flex;align-items:center}
 .av{width:29px;height:29px;border-radius:50%;border:2.5px solid var(--card);margin-left:-8px;
-    display:grid;place-items:center;font-size:10.5px;font-weight:600;color:#fff;position:relative}
+    display:grid;place-items:center;font-size:var(--t-0);font-weight:600;color:#fff;position:relative}
 .av:first-child{margin-left:0}
 .av::after{content:'';position:absolute;right:-1px;bottom:-1px;width:8px;height:8px;
     border-radius:50%;border:2px solid var(--card);background:#3FB950}
@@ -156,7 +189,7 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 /* Offline is the QUIETEST state, so on dark it is the dimmest -- the old #C4BFB6 was light-page
    grey and became the brightest ring on the board. */
 .av[data-ring="offline"]::after{background:#6C757F}
-.av.sm{width:22px;height:22px;font-size:9px;border-width:2px;margin-left:-6px}
+.av.sm{width:22px;height:22px;font-size:var(--t-0);border-width:2px;margin-left:-6px}
 .av.sm::after{width:6.5px;height:6.5px}
 .avs .more{font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:6px}
 .noagents{font-size:12.5px;color:var(--muted)}
@@ -281,18 +314,18 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .card .title{font-size:13.5px;font-weight:500;line-height:1.4;overflow-wrap:break-word;
       text-wrap:balance}
 .row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
-.kind{font-size:10.5px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;
+.kind{font-size:var(--t-0);font-weight:600;letter-spacing:.03em;text-transform:uppercase;
       border-radius:var(--r-tag);padding:2px 7px}
 .kind[data-k="backend"]{background:var(--teal-soft);color:var(--teal)}
 .kind[data-k="frontend"]{background:#EFEAF6;color:#5B4A7D}
 .kind[data-k="qa"]{background:#FBF0E8;color:#9A5B2E}
 .kind[data-k="docs"],.kind[data-k="devops"]{background:#EEEDEA;color:var(--ink2)}
-.badge{font-size:10.5px;font-weight:600;border-radius:var(--r-tag);padding:2px 7px}
+.badge{font-size:var(--t-0);font-weight:600;border-radius:var(--r-tag);padding:2px 7px}
 .badge[data-t="ci-failed"],.badge[data-t="blocked"]{background:var(--red-soft);color:var(--red)}
 .badge[data-t="review"]{background:var(--amber-soft);color:var(--amber)}
-.verpill{font-family:var(--mono);font-size:10.5px;background:var(--teal-soft);color:var(--teal);
+.verpill{font-family:var(--mono);font-size:var(--t-0);background:var(--teal-soft);color:var(--teal);
       border-radius:var(--r-tag);padding:2px 7px;font-weight:500}
-.branch{font-family:var(--mono);font-size:10.5px;color:var(--muted);overflow:hidden;
+.branch{font-family:var(--mono);font-size:var(--t-0);color:var(--muted);overflow:hidden;
       text-overflow:ellipsis;white-space:nowrap}
 .card .who{margin-left:auto;display:flex}
 
@@ -325,7 +358,7 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .p-body{padding:18px 24px 26px;overflow-y:auto;display:grid;gap:20px;min-height:0;
        align-content:start}
 .sect{display:grid;gap:7px;align-content:start}
-.sect .lbl{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.09em;
+.sect .lbl{font-size:var(--t-0);font-weight:600;text-transform:uppercase;letter-spacing:.09em;
        color:var(--muted)}
 /* `pretty` rather than `balance` for body copy: balance optimises for even line lengths across a
    short block, which is right for a title and wrong for a paragraph. pretty only prevents the
@@ -446,7 +479,7 @@ pre{background:var(--paper);border:1px solid var(--line);border-radius:9px;paddi
 .side{background:var(--card);border-right:1px solid var(--line);
      display:flex;flex-direction:column;overflow-y:auto}
 .side .side-head{padding:16px 18px;display:flex;align-items:center}
-.side .side-sec{padding:16px 18px 7px;font-size:10.5px;font-weight:600;letter-spacing:.07em;
+.side .side-sec{padding:16px 18px 7px;font-size:var(--t-0);font-weight:600;letter-spacing:.07em;
      text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:8px}
 .side .side-sec .n{margin-left:auto;font-variant-numeric:tabular-nums;letter-spacing:0}
 .side-nav{display:flex;flex-direction:column;gap:1px;padding:0 10px}
@@ -465,7 +498,7 @@ pre{background:var(--paper);border:1px solid var(--line);border-radius:9px;paddi
    a room that does not exist. */
 .side-nav a[data-unbuilt="true"]{color:var(--muted);cursor:default}
 .side-nav a[data-unbuilt="true"]:hover{background:transparent;color:var(--muted)}
-.side-nav a[data-unbuilt="true"] .ct{font-size:10.5px}
+.side-nav a[data-unbuilt="true"] .ct{font-size:var(--t-0)}
 .side .side-foot{margin-top:auto;padding:14px 18px;border-top:1px solid var(--line);
      font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:10px}
 .side .newproj{margin:8px 10px 0;padding:9px 10px;border-radius:var(--r-ctl);
@@ -533,7 +566,7 @@ pre{background:var(--paper);border:1px solid var(--line);border-radius:9px;paddi
 .chip{display:inline-flex;align-items:center;gap:6px;border-radius:var(--r-tag);
      padding:3px 7px;font-size:11px;border:1px solid var(--line);background:var(--paper);
      color:var(--ink2)}
-.chip.scope{font-family:var(--mono);font-size:10.5px}
+.chip.scope{font-family:var(--mono);font-size:var(--t-0)}
 .chip.scope .k{color:var(--muted)}
 .chip.agent{font-family:var(--sans);font-size:11px}
 .chip.kind{font-weight:500;text-transform:capitalize}
@@ -544,7 +577,7 @@ pre{background:var(--paper);border:1px solid var(--line);border-radius:9px;paddi
 
 /* ---- right rail ---- */
 .rail{background:var(--paper);border-left:1px solid var(--line);padding:18px 18px 34px}
-.rail h3{font-size:10.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;
+.rail h3{font-size:var(--t-0);font-weight:600;letter-spacing:.07em;text-transform:uppercase;
      color:var(--muted);margin-bottom:10px}
 .rail h3:not(:first-child){margin-top:24px}
 /* Three identical cards stacked is the shape that reads as generated. They are entries in a
@@ -553,7 +586,7 @@ pre{background:var(--paper);border:1px solid var(--line);border-radius:9px;paddi
 .holder:last-child{border-bottom:none}
 .holder .who{display:flex;align-items:center;gap:9px}
 .holder .who .nm{font-size:13.5px;font-weight:600}
-.holder .who .you{font-size:10px;background:var(--teal-soft);color:var(--teal);
+.holder .who .you{font-size:var(--t-0);background:var(--teal-soft);color:var(--teal);
      border-radius:var(--r-tag);padding:2px 6px;font-weight:600}
 .holder .role{font-size:11.5px;color:var(--muted);margin-top:3px}
 .holder .scopes{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}

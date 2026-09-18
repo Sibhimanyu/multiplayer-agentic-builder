@@ -70,6 +70,8 @@ interface Config {
   root: string;
   api_base: string;
   repo: string;
+  /** The hosted board, or '' when this install has no project configured yet. */
+  board: string;
 }
 
 async function loadConfig(root: string): Promise<Config> {
@@ -82,20 +84,22 @@ async function loadConfig(root: string): Promise<Config> {
   // `login`. It is not the agent's tree, so deriving the URL from it keeps B2 intact. The env
   // var still wins, for pointing a machine at an emulator or a second project.
   let api_base = process.env.BUILDER_API_URL ?? '';
-  if (!api_base) {
-    try {
-      const { loadConfig: installConfig, apiUrl } = await import('./config.ts');
-      api_base = apiUrl(await installConfig());
-    } catch {
-      // Not configured yet. The commands that need it report that themselves, with the fix.
-    }
+  let board = '';
+  // Both URLs derive from the same config read, so they cannot end up pointing at two projects.
+  try {
+    const { loadConfig: installConfig, apiUrl, boardUrl } = await import('./config.ts');
+    const installed = await installConfig();
+    if (!api_base) api_base = apiUrl(installed);
+    board = boardUrl(installed);
+  } catch {
+    // Not configured yet. The commands that need it report that themselves, with the fix.
   }
   let repo = process.env.BUILDER_REPO ?? '';
   if (!repo) {
     const raw = await fs.readFile(path.join(root, LAYOUT.project), 'utf8').catch(() => '');
     if (raw) repo = (JSON.parse(raw) as ProjectFile).repo_url ?? '';
   }
-  return { root, api_base, repo };
+  return { root, api_base, repo, board };
 }
 
 async function readToken(root: string): Promise<string> {
@@ -675,6 +679,8 @@ async function cmdChat(root: string, rest: string[]): Promise<number> {
     mcpConfig: await writeMcpConfig(root),
     agent,
     allowedScope: async () => rolePackFor(await client.whoami()).may_edit,
+    // So the chat is not a dead end. Derived from the project id like every other URL here.
+    ...(cfg.board ? { boardUrl: cfg.board } : {}),
   }, port);
 
   out(`flotilla chat — ${agent}, on this machine`);

@@ -74,13 +74,62 @@ One superfamily. Not Inter, Fraunces, Geist, Plus Jakarta or Space Grotesk — e
 on the detector's overused list, and swapping one for another would have traded a generic choice
 for a generic choice. Plex was drawn for technical interfaces.
 
-**Type carries real contrast now.** 34px h1 at `-0.033em`, body at 14px, and section heads as
-11.5px uppercase mono at `+0.08em`. The old scale was 25 / 15.5 / 14 — three sizes that barely
-differed, which is why the page had no voice.
+**The scale.** One scale. Every `font-size` comes from it.
+
+| Token | Value | Typical use |
+|---|---|---|
+| `--t-0` | `11px` | mono legends, chips, badges, glob tags. **The floor.** |
+| `--t-1` | `12px` | secondary meta, counts, timestamps |
+| `--t-2` | `14px` | UI default, body |
+| `--t-3` | `16px` | conversation body, anything read in paragraphs |
+| `--t-4` | `18px` | panel and card heading |
+| `--t-5` | `21px` | page heading |
+| `--t-6` | `24px` | — |
+| `--t-7` | `28px` | display; nothing on an operations panel is larger |
+
+Line-height is bound to purpose, not to size: `--lh-tight:1.2` at `--t-4` and up, `--lh:1.5` for
+UI text, `--lh-read:1.6` for `--t-3` paragraphs. A heading at body line-height floats between its
+paragraphs, which is the Layout defect below.
+
+Three rules, and each one exists because it was broken:
+
+1. **Integers only.** Until order 0083 this section pinned the two families and forbade five
+   fonts by name, and pinned no sizes at all. The shipped CSS had drifted to **18 distinct
+   values** — 9, 10, 10.5, 11, 11.5, 12, 12.5, 13, 13.5, 14, 14.5, 15, 18, 19, 20, 22, 26, 34 —
+   twelve of them half-pixels. Every half-pixel got there by nudging an existing rule rather than
+   moving a step, and .5px is below what anyone can see: it buys no hierarchy and costs a scale.
+2. **11px is the floor.** Not taste. Below it the design detector fails functional text outright
+   (`undersized-ui-text`), and `.av.sm` had shipped at **9px**. Anything that needs to be smaller
+   needs less to say.
+3. **Twelve of the eighteen sat inside a 5px band.** That is why nothing on the board read as
+   more important than anything else — a 13.5px title beside a 12.5px label is not a hierarchy,
+   it is noise. The detector names the same thing from the other side: `flat-type-hierarchy`.
+
+The ~1.15 step is deliberately small for the bottom half (11 → 12 → 14) because a panel needs
+legend/meta/body to be *distinguishable*, not dramatic, and widens at the top (18 → 21 → 28)
+where the jumps do the work headings are for.
+
+**34px h1 at `-0.033em`** and section heads as uppercase mono at `+0.08em`. The old marketing
+scale was 25 / 15.5 / 14 — three sizes that barely differed, which is why the page had no voice.
+The 34px h1 is the one value above `--t-7` and it is marketing-only; migrate it to `--t-7` when
+that page is next touched.
+
+**Migrate on touch.** The remaining half-pixels are a known debt, listed in "Measured call
+sites". Do not open a sweep commit that rewrites every rule at once: a type sweep is
+indistinguishable from a type regression in review, which is exactly how the spacing scale is
+being migrated.
 
 **Self-hosted, latin subset, same-origin** (`/brand/fonts/*.woff2`, order 0067). There is no
 `fonts.googleapis.com` request: as a render-blocking third-party stylesheet it cost 3031 ms on a
-cold load and 3572 ms to first paint. Preload Inter and Fraunces; they are on the paint path.
+cold load and 3572 ms to first paint. Preload **Plex Sans 400 and 600**; they are on the paint
+path. (This line said "preload Inter and Fraunces" until order 0083 — both fonts were deleted in
+0077 and the instruction outlived them.)
+
+**The CLI serves the same two files.** `flotilla chat` is a second surface, and "any visual
+divergence between the two builds is a bug" applies to it. The fonts ship inside the npm tarball
+at `dist/brand/fonts/` and the loopback server serves them from disk, so the chat page renders in
+Plex with no network. A local tool that reaches the internet to draw its own text is broken on a
+plane.
 
 ### Shape and motion
 

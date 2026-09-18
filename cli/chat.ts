@@ -17,6 +17,9 @@
 import { spawn } from 'node:child_process';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID, randomBytes } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import type { ApiClient } from './client.ts';
 import type { Logger } from '../shared/log.ts';
 import { chatPage } from './chatpage.ts';
@@ -31,6 +34,42 @@ export interface ChatDeps {
   /** `claude` or `codex`. */
   agent: string;
   allowedScope: () => Promise<string[]>;
+  /**
+   * The hosted board for this project, so the chat is not a dead end.
+   *
+   * Optional because a project without hosting has no board to link to, and a link that 404s is
+   * worse than no link -- the page hides the button when this is absent rather than rendering a
+   * broken one.
+   */
+  boardUrl?: string;
+}
+
+/**
+ * Where the two Plex families live, checked in order.
+ *
+ * DESIGN.md: "any visual divergence between the two builds is a bug", and until order 0083 this
+ * page fell back to `system-ui` -- the "I gave up on typography" signal DESIGN.md forbids by
+ * name -- because the CLI had no font files to serve. They now ship in the npm tarball.
+ *
+ * INSTALLED FIRST, SOURCE SECOND. The bundle lands at `dist/flotilla.js` with the fonts beside it
+ * at `dist/brand/fonts/`; running from source they are still in `client/public/`. Resolving from
+ * `import.meta.url` rather than `process.cwd()` matters because `flotilla chat` runs in the
+ * user's repository, not in its own install directory.
+ */
+const FONT_DIRS = [
+  fileURLToPath(new URL('./brand/fonts/', import.meta.url)),
+  fileURLToPath(new URL('../client/public/brand/fonts/', import.meta.url)),
+];
+
+/** Served same-origin and cached hard: the bytes are immutable and the page blocks paint on them. */
+async function readFont(name: string): Promise<Buffer | null> {
+  // Name comes off the URL, so it is validated against a fixed shape rather than trusted. A
+  // loopback server is still a file server, and `..` in a path is how one becomes a file leak.
+  if (!/^Plex(Sans|Mono)-[0-9]{3}\.woff2$/.test(name)) return null;
+  for (const dir of FONT_DIRS) {
+    try { return await readFile(path.join(dir, name)); } catch { /* try the next */ }
+  }
+  return null;
 }
 
 /** What the sidebar shows. Structured, unlike the MCP tools, because a UI can lay it out. */
@@ -41,6 +80,8 @@ export interface ChatContext {
   task: { task_id: string; title: string; status: string; file_scope: string[] } | null;
   agents: { label: string; role: string; harness: string; stale: boolean; holds: string[]; you: boolean }[];
   contested: string[];
+  /** Absent when the project has no hosted board; the page hides the link rather than 404ing. */
+  board_url?: string;
 }
 
 export async function readContext(deps: ChatDeps): Promise<ChatContext> {
@@ -71,6 +112,7 @@ export async function readContext(deps: ChatDeps): Promise<ChatContext> {
     // The globs SOMEONE ELSE holds. This is the one fact the designer most needs and the board
     // buries: it is why their agent must not touch a file.
     contested: (snap?.locks ?? []).filter((l) => l.agent_id !== me.agent_id).flatMap((l) => l.globs),
+    ...(deps.boardUrl ? { board_url: deps.boardUrl } : {}),
   };
 }
 
@@ -173,6 +215,27 @@ export function serveChat(deps: ChatDeps, port = 0): Promise<{ url: string; clos
     if (host !== '127.0.0.1' && host !== 'localhost') {
       return json(res, 403, { error: 'loopback only' });
     }
+    // THE FONTS ARE EXEMPT FROM THE NONCE, AND HAVE TO BE. A browser sends neither the query
+    // string nor a custom header when it fetches a font referenced from CSS, so a nonce-gated
+    // font route 403s every request and the page silently renders in the fallback stack -- the
+    // exact failure this route exists to fix.
+    //
+    // Exempting them costs nothing: these are five OFL-licensed woff2 files with a fixed-shape
+    // name check, no state, and no path to the agent. The Host check above still applies, so a
+    // rebound name cannot reach even these.
+    if (req.method === 'GET' && url.pathname.startsWith('/brand/fonts/')) {
+      const bytes = await readFont(path.posix.basename(url.pathname));
+      if (!bytes) return json(res, 404, { error: 'no such font' });
+      res.writeHead(200, {
+        'content-type': 'font/woff2',
+        'content-length': bytes.length,
+        // Immutable bytes, and the page blocks paint on them. The server dies with the command,
+        // so a long max-age cannot outlive a font change by more than one `flotilla chat`.
+        'cache-control': 'public, max-age=31536000, immutable',
+      });
+      return res.end(bytes);
+    }
+
     if (url.searchParams.get('n') !== nonce && req.headers['x-flotilla-nonce'] !== nonce) {
       return json(res, 403, { error: 'bad or missing nonce' });
     }

@@ -44,6 +44,24 @@ try {
     logLevel: 'error',
   });
 
+  // THE FONTS SHIP WITH THE CLI. `flotilla chat` serves a page that must render in Plex with no
+  // network (DESIGN.md: "any visual divergence between the two builds is a bug"), and before
+  // order 0083 it had no font files to serve, so it fell back to system-ui -- the one typographic
+  // signal DESIGN.md forbids by name. Five woff2 plus the licence is 148 KB in a CLI tarball.
+  //
+  // COPIED FROM client/public, not duplicated into packaging/: one copy of each font in the
+  // repository, so the board and the CLI cannot drift onto different cuts of the same typeface.
+  const fontSrc = join(root, 'client', 'public', 'brand', 'fonts');
+  const fontDst = join(stage, 'dist', 'brand', 'fonts');
+  mkdirSync(fontDst, { recursive: true });
+  const fonts = readdirSync(fontSrc).filter((f) => f.endsWith('.woff2'));
+  // Asserted, not assumed: an empty glob would silently ship a fontless CLI, which is exactly
+  // the failure this block fixes and is invisible until someone opens the page.
+  if (fonts.length < 5) {
+    throw new Error(`expected 5 woff2 in ${fontSrc}, found ${fonts.length}`);
+  }
+  for (const f of [...fonts, 'OFL.txt']) copyFileSync(join(fontSrc, f), join(fontDst, f));
+
   writeFileSync(join(stage, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`);
   copyFileSync(join(root, 'README.md'), join(stage, 'README.md'));
 
