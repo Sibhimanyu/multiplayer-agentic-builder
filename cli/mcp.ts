@@ -140,16 +140,34 @@ export function currentTask(snap: Snapshot, me: string): TaskView | null {
   return [...mine].sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1))[0] ?? null;
 }
 
+/**
+ * WHAT YOU MAY WRITE NOW IS THE LOCK, NOT THE ROLE. This said "Your role may write: **" to an
+ * owner holding a `web/**` lock, while the harness running that same agent enforced `web/**`.
+ * The agent believed the tool, tried to edit `server/index.js`, was refused, and reported that
+ * the block "is not what I expected". Two answers to "what may I write" on one screen is the
+ * same defect as the two answers to "what am I working on" that `currentTask` was written for.
+ *
+ * `held` leads, because it is the operative fact and the one the enforcement agrees with. The
+ * role scope stays, labelled as what may be ACQUIRED, because an agent that is refused needs to
+ * know whether the fix is "claim a task" or "ask a human".
+ */
 export function renderAssignment(
   who: { agent_id: string; role_slug: string },
   allowed: string[],
   task: TaskView | null,
+  held: string[] = [],
 ): string {
   const head = [
     `You are acting as: ${who.role_slug}`,
-    `Your role may write: ${allowed.length > 0 ? allowed.join(', ') : '(nothing — read only)'}`,
+    held.length > 0
+      ? `You may write, right now: ${held.join(', ')}`
+      : 'You may write, right now: NOTHING. Editing is scoped to the globs you hold, and you hold none.',
+    `Your role may acquire: ${allowed.length > 0 ? allowed.join(', ') : '(nothing — read only)'}`,
+    held.length === 0 && allowed.length > 0
+      ? 'Claim a task to turn that into a write scope.'
+      : '',
     '',
-  ];
+  ].filter((l, i, a) => l !== '' || i === a.length - 1);
   if (!task) {
     return [
       ...head,
@@ -192,7 +210,14 @@ async function callTool(name: string, args: Record<string, unknown>, deps: McpDe
       const me = await deps.client.whoami();
       const read = await deps.client.readSnapshot();
       const task = read ? currentTask(read.snapshot, me.agent_id) : null;
-      return text(renderAssignment(me, await deps.allowedScope(), task));
+      // The globs THIS agent holds, from the same snapshot `flotilla chat` hands to the harness,
+      // so the tool's answer and the enforcement come from one read of one source.
+      const held = [...new Set(
+        (read?.snapshot.locks ?? [])
+          .filter((l) => l.agent_id === me.agent_id)
+          .flatMap((l) => l.globs),
+      )];
+      return text(renderAssignment(me, await deps.allowedScope(), task, held));
     }
     case 'report': {
       const message = String(args.message ?? '').trim();

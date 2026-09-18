@@ -109,8 +109,14 @@ export function renderAgentsMd(role: RolePack, project: ProjectFile): string {
     role.responsibilities.trim(),
     '',
     '## Your file scope',
-    `You may edit:      ${role.may_edit.join(', ')}`,
-    `You may not edit:  ${role.may_not_edit.join(', ')}`,
+    // Never blank. `You may edit:` followed by nothing reads as a truncated file, and an agent
+    // that has to infer "so, none?" from whitespace is being asked to guess at its own contract.
+    `You may edit:      ${role.may_edit.length > 0 ? role.may_edit.join(', ') : '(nothing — you are read-only)'}`,
+    // Omitted rather than printed empty. A role that may edit everything forbids nothing, and
+    // "You may not edit:" with a blank after it reads as a truncated file.
+    ...(role.may_not_edit.length > 0
+      ? [`You may not edit:  ${role.may_not_edit.join(', ')}`]
+      : []),
     `Branches are named:  ${role.branch_prefix}<task-slug>`,
     '',
     '## How you communicate',
@@ -350,11 +356,13 @@ export function renderRoleMd(role: RolePack): string {
     '## File scope',
     '',
     'You may edit:',
-    ...role.may_edit.map((g) => `- ${g}`),
+    ...(role.may_edit.length > 0
+      ? role.may_edit.map((g) => `- ${g}`)
+      : ['- (nothing — you are read-only)']),
     '',
-    'You may not edit:',
-    ...role.may_not_edit.map((g) => `- ${g}`),
-    '',
+    ...(role.may_not_edit.length > 0
+      ? ['You may not edit:', ...role.may_not_edit.map((g) => `- ${g}`), '']
+      : []),
     '## Branch',
     '',
     `${role.branch_prefix}<task-slug>`,

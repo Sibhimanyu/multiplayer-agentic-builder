@@ -82,6 +82,17 @@ export interface ChatContext {
   contested: string[];
   /** Absent when the project has no hosted board; the page hides the link rather than 404ing. */
   board_url?: string;
+  /**
+   * The globs this agent may EDIT this turn: the ones it currently holds a lock on.
+   *
+   * Not the role's file scope. The role says what you are allowed to acquire; the lock says what
+   * you have actually taken, and it is the lock that stops two agents writing the same file.
+   * Handing the role scope to the harness would let a frontend member edit every client file in
+   * the repository while a teammate held half of them.
+   *
+   * Empty is the normal state before a claim, and it means no writing at all.
+   */
+  writable: string[];
 }
 
 export async function readContext(deps: ChatDeps): Promise<ChatContext> {
@@ -113,6 +124,38 @@ export async function readContext(deps: ChatDeps): Promise<ChatContext> {
     // buries: it is why their agent must not touch a file.
     contested: (snap?.locks ?? []).filter((l) => l.agent_id !== me.agent_id).flatMap((l) => l.globs),
     ...(deps.boardUrl ? { board_url: deps.boardUrl } : {}),
+    writable: [...new Set(holds.get(me.agent_id) ?? [])],
+  };
+}
+
+/**
+ * The tools one turn may use, derived from the globs that turn holds.
+ *
+ * WHY THE AGENT CAN WRITE AT ALL NOW. Phase 2 shipped read-only: the four Flotilla tools and
+ * nothing else, because pre-approving Claude Code's Edit and Write would have let a browser tab
+ * rewrite the repository with no human in the loop. That is true of an UNSCOPED approval. It is
+ * not true of this one, and a chat that cannot change a file is a demo of coordination rather
+ * than the thing being coordinated.
+ *
+ * `Edit(<glob>)` was verified against the harness both ways before this was built: with
+ * `--allowedTools 'Edit(web/**)'`, an edit to `web/index.html` ran with no denial and the file
+ * changed; an edit to `server/index.js` came back denied with the file untouched.
+ *
+ * BASH IS DENIED, and that is the whole reason the scoping means anything. `Edit(web/**)` is a
+ * wall; `echo >> server/index.js` is a door beside it. It is named in `deny` as well as left out
+ * of `allow` because deny wins, and a future change to the allow list should not be able to open
+ * it by accident. The cost is real: the agent cannot run your tests from this page. That is the
+ * correct trade for a surface with no human confirming each action.
+ *
+ * Read, Glob and Grep are allowed everywhere. Reading the whole repository is how an agent finds
+ * out what it must not break, and none of the three can change a byte.
+ */
+export function turnTools(writable: string[]): { allow: string[]; deny: string[] } {
+  const flotilla = TOOLS.map((t) => `mcp__flotilla__${t.name}`);
+  const write = writable.flatMap((g) => [`Edit(${g})`, `Write(${g})`, `MultiEdit(${g})`]);
+  return {
+    allow: [...flotilla, 'Read', 'Glob', 'Grep', ...write],
+    deny: ['Bash', 'NotebookEdit', 'WebFetch', 'WebSearch'],
   };
 }
 
@@ -128,6 +171,8 @@ export function runTurn(
   message: string,
   session: string,
   first: boolean,
+  /** The globs this turn may write. Re-read per turn, so releasing a lock removes the permission. */
+  writable: string[] = [],
 ): Promise<{ reply: string; error: boolean; cost?: number; denials: number }> {
   // FLOTILLA'S OWN TOOLS ARE PRE-ALLOWED, and they have to be. `claude -p` is non-interactive,
   // so it cannot prompt for approval and auto-denies instead: the first live turn came back
@@ -135,18 +180,16 @@ export function runTurn(
   // read the files itself. A chat whose whole purpose is live fleet context, silently losing it
   // on every turn, is the feature not working while appearing to.
   //
-  // Only these four. They read state, append one progress line, and claim a task -- all of which
-  // the server already gates by role. Editing files is NOT allowed here: those are Claude Code's
-  // own Edit and Write tools, and pre-approving them would let a browser tab rewrite the
-  // repository with no human in the loop. That is a decision for the user, not a default.
-  const allow = TOOLS.map((t) => `mcp__flotilla__${t.name}`).join(',');
+  // Editing is allowed ONLY inside the globs this agent currently holds. See `turnTools`.
+  const { allow, deny } = turnTools(writable);
   const args = deps.agent === 'claude'
     ? [
         '-p', message,
         '--output-format', 'json',
         first ? '--session-id' : '--resume', session,
         '--mcp-config', deps.mcpConfig,
-        '--allowedTools', allow,
+        '--allowedTools', allow.join(','),
+        '--disallowedTools', deny.join(','),
       ]
     : ['exec', message];
 
@@ -260,10 +303,21 @@ export function serveChat(deps: ChatDeps, port = 0): Promise<{ url: string; clos
       catch { return json(res, 400, { error: 'bad json' }); }
       if (!message) return json(res, 400, { error: 'empty message' });
 
+      // THE SCOPE IS RE-READ PER TURN, not captured when the server started. A lock released in
+      // another terminal, or a task merged from the board, must remove the write permission from
+      // the very next message -- a chat that kept editing files it no longer held would be the
+      // coordination failing silently, which is the one failure this product exists to prevent.
+      //
+      // A failed read means no writes, not the last known good scope. Offline is exactly when a
+      // stale permission is most dangerous, because nothing can tell you the lock moved.
+      let writable: string[] = [];
+      try { writable = (await readContext(deps)).writable; }
+      catch (e) { deps.log.warn('chat.scope_unreadable', 'could not read scope: this turn is read-only', { err: (e as Error).message }); }
+
       const first = turns === 0;
       turns += 1;
-      const t = await runTurn(deps, message, session, first);
-      deps.log.info('chat.turn', 'chat turn', { turns, error: t.error, denials: t.denials });
+      const t = await runTurn(deps, message, session, first, writable);
+      deps.log.info('chat.turn', 'chat turn', { turns, error: t.error, denials: t.denials, writable });
       return json(res, 200, t);
     }
 

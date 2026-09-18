@@ -245,9 +245,7 @@ export function chatPage(nonce: string): string {
       <h2>Your agent runs here, on your machine, and it already knows the fleet.</h2>
       <p class="sub" id="startsub">Reading your assignment…</p>
       <div class="prompts" id="prompts"></div>
-      <p class="cando">It can read your files, check what your role may write, see which globs a
-        teammate is holding, post progress to the board and claim a task.
-        <b>It cannot edit files from this page</b> — that stays a terminal decision.</p>
+      <p class="cando" id="cando"></p>
     </div>
   </div>
 
@@ -285,13 +283,20 @@ function turn(who, body, meta) {
    prompt that gets refused is worse than no starter prompt. */
 function starters(c) {
   const scope = (c.scope && c.scope.length) ? c.scope.join(', ') : null;
+  const canWrite = c.writable && c.writable.length;
   const out = [];
   if (c.task) {
     out.push(['assignment', 'What am I working on, and exactly which files may I write?']);
     out.push(['read', 'Read the files under ' + (c.task.file_scope[0] || scope || 'my scope')
       + ' and tell me what could cause: ' + c.task.title]);
-    out.push(['plan', 'Plan a fix for "' + c.task.title
-      + '". List the files you would change and why, but do not change them.']);
+    // The verb follows the permission. Offering "fix it" while the agent would be refused, or
+    // offering only "plan it" once it genuinely can edit, both teach the wrong thing about what
+    // this tool does -- and the second is how a working feature stays undiscovered.
+    out.push(canWrite
+      ? ['fix', 'Fix "' + c.task.title + '" in ' + c.writable.join(', ')
+          + ', then report what you changed.']
+      : ['plan', 'Plan a fix for "' + c.task.title
+          + '". List the files you would change and why, but do not change them.']);
   } else {
     out.push(['queue', 'What tasks are ready for my role, and which one should I claim first?']);
     out.push(['orient', 'What is this project, what is my role, and what may I write?']);
@@ -312,6 +317,19 @@ function paintStart(c) {
   el('startsub').textContent = c.task
     ? 'You hold "' + c.task.title + '". Pick a starting point or type your own.'
     : 'You have not claimed a task yet. Pick a starting point or type your own.';
+  // WHAT IT MAY WRITE IS A FACT ABOUT RIGHT NOW, so it is rendered from state rather than
+  // written into the HTML. It was a fixed sentence saying "it cannot edit files from this page",
+  // which stopped being true the moment editing was scoped to the held locks -- a hardcoded
+  // capability line is a lie waiting for the next release.
+  el('cando').innerHTML = (c.writable && c.writable.length)
+    ? 'It can read anything here, and <b>edit files in '
+      + c.writable.map(g => '<span class="g">' + esc(g) + '</span>').join(' ')
+      + '</b> — the globs you hold. Everything else in the repository is refused, '
+      + 'and it cannot run shell commands.'
+    : 'It can read anything here, check what your role may write, see which globs a teammate is '
+      + 'holding, post progress and claim a task. <b>It cannot edit any file yet</b>, because '
+      + 'editing is scoped to the globs you hold and you are holding none. Claim a task first.';
+
   el('prompts').innerHTML = starters(c).map(([k, q]) =>
     '<button type="button" data-q="' + esc(q) + '"><span class="k">' + esc(k)
     + '</span><span class="q">' + esc(q) + '</span></button>').join('');

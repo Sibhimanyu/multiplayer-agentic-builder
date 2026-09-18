@@ -705,7 +705,7 @@ async function cmdChat(root: string, rest: string[]): Promise<number> {
  * from a table duplicated here. A local table would eventually disagree with the server, and
  * AGENTS.md would tell the agent it can do something the API refuses.
  */
-function rolePackFor(me: WhoAmI): RolePack {
+export function rolePackFor(me: WhoAmI): RolePack {
   const SCOPES: Record<string, { edit: string[]; not: string[]; prefix: string; title: string; what: string }> = {
     architect: {
       edit: ['contracts/**', 'schema/**', 'decisions/**'],
@@ -761,12 +761,39 @@ function rolePackFor(me: WhoAmI): RolePack {
     title: me.role_slug || 'Unknown role',
     what: `You are acting as ${me.role_slug || 'an unknown role'} on this project.`,
   };
+  // AND `not` IS DERIVED TOO, for the same reason `edit` is.
+  //
+  // The fix above took `edit` from roleFor() and left `not` coming from SCOPES, which has no
+  // `owner` key -- so an owner fell through to the default and AGENTS.md rendered
+  //
+  //     You may edit:      **
+  //     You may not edit:  **
+  //
+  // on adjacent lines. A live agent read that, called it "a template artifact", and decided for
+  // itself which line to believe. It guessed right. A contract an agent has to guess at is not a
+  // contract, and the next one guesses the other way.
+  //
+  // The deny list is now the other roles' scopes minus this role's own, so it cannot contradict
+  // the allow list by construction: a glob this role may edit is removed from it. A role that may
+  // edit everything forbids nothing, and the renderer drops the line rather than printing an
+  // empty one.
+  const mine = new Set(shared.file_scope);
+  const others = ROLE_SLUGS
+    .filter((r) => r !== me.role_slug)
+    .flatMap((r) => roleFor(r).file_scope)
+    .filter((g) => !mine.has(g))
+    // `**` IS NOT A DIRECTORY ANY ROLE OWNS, it is the absence of a scope -- the owner's. Left
+    // in, it made the first version of this fix reintroduce the same contradiction one step
+    // further out: frontend rendered "You may edit: client/** / You may not edit: **, ...",
+    // which denies the line above it. Caught by rendering the file rather than by the
+    // intersection test, which `**` passes because it is genuinely not in `client/**`.
+    .filter((g) => g !== '**');
   const s = {
     ...prose,
     edit: shared.file_scope,
     // Fail closed only when the SERVER says the role has no scope, not when this file has no
-    // prose for it.
-    not: shared.file_scope.length > 0 ? prose.not : ['**'],
+    // prose for it: no scope means nothing is writable, which is a real deny-everything.
+    not: shared.file_scope.length === 0 ? ['**'] : mine.has('**') ? [] : [...new Set(others)],
   };
   return {
     role_slug: me.role_slug,

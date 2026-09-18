@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { connect } from 'node:net';
-import { serveChat, readContext, type ChatDeps } from './chat.ts';
+import { serveChat, readContext, turnTools, type ChatDeps } from './chat.ts';
 import { chatPage } from './chatpage.ts';
 import type { Logger } from '../shared/log.ts';
 
@@ -191,11 +191,11 @@ test('the opening screen is starter prompts, not a welcome paragraph', async () 
   assert.ok(!/knows where it stands/.test(html), 'the happy-talk welcome must be gone');
   assert.match(html, /id="prompts"/, 'the starter prompts container must exist');
   assert.match(html, /function starters/, 'the prompts must be generated from context');
-  // And it must say upfront that it cannot edit, rather than letting the user find out by
-  // being refused. Being honest about a limit replenishes goodwill; discovering it drains it.
-  assert.match(html, /cannot edit files/);
-  // Nothing in the starter set may offer an edit, because the agent would be refused.
-  assert.ok(!/\bEdit the\b|\bFix the bug and\b/.test(html));
+  // And when it holds no lock it must say so upfront, rather than letting the user find out by
+  // being refused mid-task. Being honest about a limit replenishes goodwill; discovering it
+  // drains it. (Until order 0084 this was unconditional -- editing was not possible at all.)
+  assert.match(html, /cannot edit any file yet/);
+  assert.match(html, /Claim a task first/);
 });
 
 test('a failed poll blanks every region, not just the header', async () => {
@@ -215,4 +215,74 @@ test('the rail survives a narrow window instead of being deleted', async () => {
   // page exists -- from any split screen. It moves above the conversation now.
   assert.ok(!/aside\{display:none\}/.test(html), 'the rail must not be display:none anywhere');
   assert.match(html, /overflow-wrap:anywhere/, 'the task id must be allowed to break');
+});
+
+// ---- order 0084. Editing, scoped to the globs you hold. ----
+
+test('the write permission is the LOCK, never the role scope', async () => {
+  // The fixture's role scope is client/**; the lock it holds is also client/**, so this test
+  // would pass on either. The one below separates them, which is the point.
+  const c = await readContext(deps());
+  assert.deepEqual(c.writable, ['client/**']);
+});
+
+test('holding nothing means writing nothing, even with a broad role', async () => {
+  const d = deps();
+  // An owner whose role may edit EVERYTHING, holding no lock. The role is the wrong input:
+  // handing `**` to the harness here would let one idle browser tab rewrite the repository.
+  d.client = {
+    whoami: async () => ({ agent_id: 'idle', role_slug: 'owner', project_id: 'p1' }),
+    readSnapshot: async () => ({ snapshot: snap, etag: 'x' }),
+  } as never;
+  d.allowedScope = async () => ['**'];
+  const c = await readContext(d);
+  assert.deepEqual(c.scope, ['**'], 'the role really does allow everything');
+  assert.deepEqual(c.writable, [], 'and it may still write nothing, because it holds nothing');
+
+  const { allow } = turnTools(c.writable);
+  assert.ok(!allow.some((a) => a.startsWith('Edit')), `no Edit may be granted: ${allow.join(' ')}`);
+  assert.ok(!allow.some((a) => a.startsWith('Write')), 'no Write may be granted');
+});
+
+test('a held glob becomes a scoped Edit, and nothing becomes an unscoped one', () => {
+  const { allow, deny } = turnTools(['web/**', 'docs/*.md']);
+  // Verified against the harness before this was written: `--allowedTools 'Edit(web/**)'` let an
+  // edit to web/index.html through with no denial, and refused server/index.js with the file
+  // unchanged. The parentheses are load-bearing.
+  assert.ok(allow.includes('Edit(web/**)'));
+  assert.ok(allow.includes('Write(web/**)'));
+  assert.ok(allow.includes('MultiEdit(docs/*.md)'));
+  // A BARE `Edit` WOULD ALLOW EVERY PATH. If one ever appears in this list the scoping is over,
+  // and it would look identical in a diff to the scoped form.
+  for (const bare of ['Edit', 'Write', 'MultiEdit']) {
+    assert.ok(!allow.includes(bare), `a bare ${bare} allows every path in the repository`);
+  }
+  // BASH IS THE HOLE THE GLOBS DO NOT COVER. `Edit(web/**)` is a wall and
+  // `echo >> server/index.js` is the door beside it. Denied explicitly, because deny wins and a
+  // later addition to the allow list must not be able to reopen it.
+  assert.ok(deny.includes('Bash'));
+  assert.ok(!allow.includes('Bash'));
+  // And reading stays unrestricted: finding out what you must not break cannot change a byte.
+  for (const r of ['Read', 'Glob', 'Grep']) assert.ok(allow.includes(r));
+});
+
+test('the flotilla tools survive the change that added editing', () => {
+  // They were the whole allowlist before scoped editing existed. A refactor that drops them
+  // brings back the original bug -- every turn silently losing its fleet context -- and the
+  // page would look exactly the same while doing it.
+  const { allow } = turnTools([]);
+  for (const t of ['my_assignment', 'fleet_status', 'report', 'claim_task']) {
+    assert.ok(allow.includes(`mcp__flotilla__${t}`), `${t} must stay allowed`);
+  }
+});
+
+test('the page states the write scope from live state, never as a fixed sentence', () => {
+  const html = chatPage('n');
+  // The old copy said "It cannot edit files from this page", which stopped being true the moment
+  // editing was scoped to held locks. A hardcoded capability line is a lie waiting for a release.
+  assert.ok(!/It cannot edit files from this page/.test(html));
+  assert.match(html, /id="cando"/);
+  assert.match(html, /c\.writable/, 'the sentence must be written from the live scope');
+  // And the starter verb has to follow the permission, in both directions.
+  assert.match(html, /canWrite\s*\n?\s*\?\s*\['fix'/);
 });
