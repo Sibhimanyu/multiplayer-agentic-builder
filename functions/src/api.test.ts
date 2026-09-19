@@ -11,8 +11,24 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { deleteApp, initializeApp, type App } from 'firebase-admin/app';
-import { getFirestore, type Firestore } from 'firebase-admin/firestore';
+// THROUGH admin-sdk.ts, NOT A BARE SPECIFIER, and the reason is subtle enough to state.
+//
+// There are three copies of firebase-admin on disk: root, firebase/, functions/. Node resolves a
+// bare specifier from the IMPORTING file's own directory upward, so this file -- under
+// functions/ -- got functions/node_modules, while firebase/store.ts got firebase/node_modules.
+// Two module instances, and `FieldValue.increment()` from one is not `instanceof` the transform
+// class of the other. The SDK then reports the sentinel as an ordinary object:
+//
+//   claimTask: Value for argument "data" is not a valid Firestore document. Couldn't serialize
+//   object of type "NumericIncrementTransform" (found in field "rollup.counts.open").
+//
+// Which surfaced as a bare `502 !== 200` on the claim test and looked like a claim bug. It is
+// not: claiming works in production, where one function has one copy. `admin-sdk.ts` sits next
+// to the firebase/ install and re-exports from there, so a relative import of it gives every
+// caller the SAME instance store.ts uses, wherever the caller lives.
+import { deleteApp, initializeApp, getFirestore } from '../../firebase/admin-sdk.ts';
+import type { App } from 'firebase-admin/app';
+import type { Firestore } from 'firebase-admin/firestore';
 
 import { handleApi, statusFor, type ApiDeps, type ApiRequest } from './api.ts';
 import { AGENT_APPENDABLE, hashToken, mintToken, resolveAgent, ROLE_PACKS } from './authority.ts';

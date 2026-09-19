@@ -47,3 +47,6 @@ client/.env.local
 
 # Bundled edge render, rebuilt on demand.
 client/edge/.*-shot.mjs
+
+# Written by scripts/emulator.sh when the default emulator port is busy.
+.firebase-emulator-*.json

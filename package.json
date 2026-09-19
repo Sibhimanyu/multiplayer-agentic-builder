@@ -5,9 +5,15 @@
   "type": "module",
   "description": "Several AI coding agents build one app together, without stepping on each other.",
   "scripts": {
-    "test": "node --test \"shared/**/*.test.ts\" \"cli/**/*.test.ts\"",
+    "test": "scripts/run-tests.sh \"shared/**/*.test.ts\" \"cli/**/*.test.ts\" firebase/errors.test.ts functions/src/webhook.test.ts",
+    "test:emulator": "npm --prefix firebase test",
+    "test:all": "npm run typecheck:all && npm test && npm run test:emulator",
     "test:memory": "node --test shared/store/memory.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:firebase": "tsc --noEmit -p tsconfig.firebase.json",
+    "typecheck:functions": "npm --prefix functions run typecheck",
+    "typecheck:client": "npm --prefix client run typecheck",
+    "typecheck:all": "npm run typecheck && npm run typecheck:firebase && npm run typecheck:functions && npm run typecheck:client",
     "build:cli": "node scripts/build-cli.mjs",
     "verify:published": "node scripts/verify-published.mjs",
     "build:all": "sh scripts/build-all.sh"
