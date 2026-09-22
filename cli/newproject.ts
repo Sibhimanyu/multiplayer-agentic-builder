@@ -72,10 +72,10 @@ function rolePack(role: RoleSlug, project_name: string): string {
     backend: '`functions/**` and `schema/**`.',
     frontend: '`client/**`.',
     qa: '`test/**` and `e2e/**`.',
-    client: 'nothing. You have no working tree and no agent.',
+    user: 'nothing. You have no working tree and no agent.',
   };
   const body =
-    role === 'client'
+    role === 'user'
       ? `You administer the delivered app. You ask questions and suggest changes.
 
 You do not write code, claim tasks, or hold a file scope, and you have no agent. Your questions and

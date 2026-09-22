@@ -51,15 +51,15 @@ const ROLE_NOTE: Record<string, string> = {
   backend: 'server',
   frontend: 'the app UI',
   qa: 'tests',
-  client: 'no agent, no terminal',
+  user: 'the people who use what you ship',
 };
 
 const DECLARED = {
   surfaces: [
     {
       kind: 'web', name: 'The board', sub: 'in any browser',
-      does: ['See every ticket', 'Raise a ticket', 'Who is online', 'Who holds which files'],
-      who: 'everyone, client included',
+      does: ['Sign in with Google', 'Raise a suggestion', 'See every ticket', 'Who holds which files'],
+      who: 'everyone, users included',
     },
     {
       kind: 'terminal', name: 'The CLI', sub: 'flotilla',
@@ -74,8 +74,8 @@ const DECLARED = {
   ],
   /** `built` on the last two is OVERWRITTEN below by what the source actually says. */
   steps: [
-    { t: 'Ticket raised', w: 'board / cli', built: true },
-    { t: 'Someone claims it', w: 'cli / chat', built: true },
+    { t: 'Raised or suggested', w: 'user or dev', built: true },
+    { t: 'Anyone picks it up', w: 'triage = claim', built: true },
     { t: 'Their files lock', w: 'automatic', built: true },
     { t: 'Agent works', w: 'their machine', built: true },
     { t: 'Branch pushed', w: 'flotilla ship', built: true },
@@ -98,6 +98,7 @@ const DECLARED = {
   ],
   /** Gaps that are facts about the world. Code-derived gaps are appended to these. */
   gaps: [
+    '<b>A user cannot raise anything yet from the web.</b> The seat, the four report types and the API exist; the sign-in form and the suggestions lane on the board do not.',
     '<b>Nothing hands tickets out.</b> A human writes them, an agent takes whichever it likes.',
     '<b>Two agents at once has never been run.</b> The locks are built and untested in the wild.',
     '<b>Nobody reviews anybody&rsquo;s work</b> inside the product.',
@@ -184,7 +185,7 @@ function roleRow(slug: RoleSlug): string {
     })
     .join('');
 
-  // The client row inverts entirely: its emptiness IS the role, and inversion says that without
+  // The user row inverts entirely: its emptiness IS the role, and inversion says that without
   // needing a colour or a caption.
   const invert = r.file_scope.length === 0 && r.capabilities.length === 1 ? ' invert' : '';
   return `    <div class="rrow${invert}">
@@ -435,6 +436,25 @@ ${gaps.map((g, i) => `      <li><span class="no">${String(i + 1).padStart(2, '0'
 
 // ---- main -----------------------------------------------------------------------------------
 
+/**
+ * ONLY WHEN RUN DIRECTLY, and this guard is load-bearing rather than tidy.
+ *
+ * Without it, this module WROTE docs/board.html as an import side effect -- and
+ * `cli/board.test.ts` imports it for `missingNotes()`. So the test regenerated the very file it
+ * was checking, one statement before checking it, and "the committed board matches a fresh
+ * render" could not fail no matter how stale the committed board was. Proven: with
+ * `<!-- stale -->` appended, `node scripts/board.ts --check` exited 1 while the test suite
+ * reported 8 of 8 passing.
+ *
+ * It was also silently mutating a tracked file on every `npm test`, which is how the board came
+ * to be already-regenerated after a rename nobody had regenerated for.
+ *
+ * `cli/index.ts` uses this same idiom for the same reason. A module that does work on import
+ * cannot be imported by its own test.
+ */
+if (import.meta.url === `file://${process.argv[1]}`) main();
+
+function main(): void {
 assertNotes();
 
 const html = render();
@@ -453,4 +473,5 @@ if (process.argv.includes('--check')) {
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(OUT, html);
   console.log(`board: wrote docs/board.html (${ROLE_SLUGS.length} roles, ${TASK_KINDS.length} ticket types)`);
+}
 }

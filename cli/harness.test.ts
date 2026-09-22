@@ -33,7 +33,7 @@ test('the role pack names the scope, and says where enforcement actually lives',
 test('a role with no scope says so rather than rendering an empty list', async () => {
   const root = await tmp();
   await writeScopeFile({
-    root, command: 'true', file_scope: [], role_slug: 'client', agent_id: 'uid_c',
+    root, command: 'true', file_scope: [], role_slug: 'user', agent_id: 'uid_c',
     log: new CapturingLogger(),
   });
   const body = await fs.readFile(path.join(root, '.agentic', 'role.md'), 'utf8');

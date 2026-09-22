@@ -1,7 +1,10 @@
 # 0005 — Work appears by triage, and only by triage
 
-Status: **proposed** (opinion recorded, not built — Order 0063 asked for the position before the
-implementation)
+Status: **partly superseded** by [0006](0006-anyone-can-pick-up-a-suggestion.md) (order 0089).
+The ruling that work appears by triage and only by triage STANDS. What 0006 reversed is the
+reservation of `triage` to owner and architect: every working role now holds it, because picking
+a suggestion up IS the triage act and reserving the act reserves the work. `user` still does not
+hold it.
 Date: 2026-09-16
 Raised by: Order 0063
 

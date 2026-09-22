@@ -22,9 +22,10 @@
 import type {
   AgentId, AgentPresence, AgentStatus, AppendResult, ClaimResult, ContractPointer,
   CoordinationStore, CreateTaskResult, Event, EventInput, Freshness, ProjectId, ScopeLock,
-  ScopeResult, Seq, Snapshot, SnapshotRead, TaskActor, TaskId, TaskKind, TaskView,
+  ScopeResult, Seq, Snapshot, SnapshotRead, SuggestionId, SuggestionStatus, SuggestionView,
+  ReportType, TaskActor, TaskId, TaskKind, TaskView,
 } from './types.ts';
-import { LAYER_OF, LIMITS, STALE_AFTER_MS } from './types.ts';
+import { LAYER_OF, LIMITS, REPORT_ORDER, STALE_AFTER_MS } from './types.ts';
 import { deriveTaskId, newTaskView, taskCreatedBody, type NewTask } from './tasks.ts';
 import type { Clock } from '../clock.ts';
 import { systemClock } from '../clock.ts';
@@ -72,6 +73,8 @@ interface ProjectState {
   agents: Map<AgentId, AgentRecord>;
   presence: Map<AgentId, PresenceEntry>;
   contracts: Map<string, ContractPointer>;
+  /** Order 0089. Live state like claims and locks, NOT folded from the ledger. */
+  suggestions: Map<SuggestionId, SuggestionView>;
   /** Bumps on every mutation. Backs the ETag. */
   version: number;
   /** How far the fold has advanced. Lags `events` while the snapshot is frozen. */
@@ -169,6 +172,8 @@ export class MemoryStore implements CoordinationStore {
   #projects = new Map<ProjectId, ProjectState>();
   /** Global-monotonic, like a Catalyst ROWID. Gaps across projects are legal. */
   #seq = 0;
+  /** Suggestion ids only need to be unique per process; the store is in-memory. */
+  #sugSeq = 0;
   /** >0 while a server-side injectEvent is in flight. See injectEvent. */
   #bypassGate = 0;
 
@@ -189,7 +194,7 @@ export class MemoryStore implements CoordinationStore {
       project_name: sanitizeText(project_name, { field: 'project_name', max: VARCHAR_MAX, log: this.#log }),
       repo_url: sanitizeText(repo_url, { field: 'repo_url', log: this.#log }),
       events: [], dedupe: new Map(), claims: new Map(), locks: [], tasks: new Map(),
-      agents: new Map(), presence: new Map(), contracts: new Map(),
+      agents: new Map(), presence: new Map(), contracts: new Map(), suggestions: new Map(),
       version: 0, fold_cursor: 0, listeners: new Set(),
     });
   }
@@ -477,6 +482,124 @@ export class MemoryStore implements CoordinationStore {
     this.#notify(p);
   }
 
+  // ---- suggestions (order 0089) ----------------------------------------
+
+  async raiseSuggestion(
+    project_id: ProjectId,
+    input: { title: string; body: string; report: ReportType; raised_by: string; raised_by_label: string },
+  ): Promise<{ suggestion_id: SuggestionId }> {
+    const p = this.#project(project_id);
+    await this.#gate(p);
+
+    // A user types this, so it is sanitised exactly like an event body is. The `user` seat is
+    // the least trusted writer in the system and the only one a stranger might hold.
+    const title = sanitizeText(input.title, { field: 'suggestion.title', max: VARCHAR_MAX, log: this.#log });
+    const body = sanitizeText(input.body, { field: 'suggestion.body', max: TEXT_MAX, log: this.#log });
+    if (title.trim() === '') throw new StoreError('a suggestion needs a title');
+
+    const suggestion_id = `sug_${(++this.#sugSeq).toString(36)}_${Date.now().toString(36)}`;
+    p.suggestions.set(suggestion_id, {
+      suggestion_id, title, body,
+      report: input.report,
+      status: 'open',
+      raised_by: input.raised_by,
+      raised_by_label: sanitizeText(input.raised_by_label, { field: 'raised_by_label', max: VARCHAR_MAX, log: this.#log }),
+      raised_at: this.#clock.iso(),
+      resolved_by: null, resolved_at: null, accepted_task_id: null, declined_reason: null,
+    });
+    this.stats.inserts++;
+    this.#touch(p);
+    this.#notify(p);
+    return { suggestion_id };
+  }
+
+  async acceptSuggestion(
+    project_id: ProjectId,
+    suggestion_id: SuggestionId,
+    by: string,
+    task: { task_id: TaskId; title: string; kind: TaskKind; file_scope: string[] },
+  ): Promise<{ ok: true; task_id: TaskId } | { ok: false; resolved_by: string; status: SuggestionStatus }> {
+    const p = this.#project(project_id);
+    await this.#gate(p);
+
+    // ---- critical section: no await until the suggestion is marked. Two people reading the
+    // ---- same board WILL pick the same suggestion up seconds apart, and the loser must get
+    // ---- ok:false with the winner named -- exactly like a lost claim, never a second ticket
+    // ---- for the same complaint.
+    const s = p.suggestions.get(suggestion_id);
+    if (!s) throw new StoreError(`no such suggestion: ${suggestion_id}`);
+    if (s.status !== 'open') {
+      return { ok: false, resolved_by: s.resolved_by ?? '(unknown)', status: s.status };
+    }
+    p.suggestions.set(suggestion_id, {
+      ...s, status: 'accepted', resolved_by: by, resolved_at: this.#clock.iso(),
+      accepted_task_id: task.task_id,
+    });
+    // ---- end critical section
+
+    // The ticket is created AFTER the mark, through the ordinary path, so it is an ordinary
+    // `task_created` event with nothing special about it. If this throws, the suggestion is
+    // already accepted and points at a task that does not exist -- so it is put back.
+    try {
+      const r = await this.createTask(
+        project_id,
+        {
+          task_id: task.task_id, title: task.title, kind: task.kind,
+          file_scope: task.file_scope,
+          // The trail from "a user complained" to "this branch" has to survive, and the
+          // description is the only field that travels with a task everywhere.
+          description: `Raised as ${s.report} by ${s.raised_by_label} (${suggestion_id}).\n\n${s.body}`,
+        },
+        { actor_type: 'member', actor_id: by },
+      );
+      if (!r.ok) {
+        p.suggestions.set(suggestion_id, { ...s });
+        throw new StoreError(`task ${task.task_id} already exists; suggestion left open`);
+      }
+    } catch (err) {
+      p.suggestions.set(suggestion_id, { ...s });
+      throw err;
+    }
+
+    this.#touch(p);
+    this.#notify(p);
+    return { ok: true, task_id: task.task_id };
+  }
+
+  async declineSuggestion(
+    project_id: ProjectId, suggestion_id: SuggestionId, by: string, reason: string,
+  ): Promise<{ ok: true } | { ok: false; resolved_by: string; status: SuggestionStatus }> {
+    const p = this.#project(project_id);
+    await this.#gate(p);
+
+    const s = p.suggestions.get(suggestion_id);
+    if (!s) throw new StoreError(`no such suggestion: ${suggestion_id}`);
+    if (s.status !== 'open') {
+      return { ok: false, resolved_by: s.resolved_by ?? '(unknown)', status: s.status };
+    }
+    // REQUIRED, not merely accepted. A refusal with no reason is an ignore with paperwork, and
+    // the person who raised it reads this.
+    const why = sanitizeText(reason, { field: 'declined_reason', max: TEXT_MAX, log: this.#log });
+    if (why.trim() === '') throw new StoreError('declining a suggestion needs a reason');
+
+    p.suggestions.set(suggestion_id, {
+      ...s, status: 'declined', resolved_by: by, resolved_at: this.#clock.iso(),
+      declined_reason: why,
+    });
+    this.#touch(p);
+    this.#notify(p);
+    return { ok: true };
+  }
+
+  /** Open ones only, most urgent first. See REPORT_ORDER for why the order is not a number. */
+  #openSuggestions(p: ProjectState): SuggestionView[] {
+    return [...p.suggestions.values()]
+      .filter((s) => s.status === 'open')
+      .sort((a, b) => REPORT_ORDER[a.report] - REPORT_ORDER[b.report]
+        || (a.raised_at < b.raised_at ? -1 : 1))
+      .map((s) => ({ ...s }));
+  }
+
   // ---- presence --------------------------------------------------------
 
   async heartbeat(
@@ -741,6 +864,7 @@ export class MemoryStore implements CoordinationStore {
       agents: this.#presenceOf(p),
       locks: this.#locksOf(p),
       contracts: [...p.contracts.values()].map((c) => ({ ...c })),
+      suggestions: this.#openSuggestions(p),
     };
   }
 

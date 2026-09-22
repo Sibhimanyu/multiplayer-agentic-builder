@@ -32,16 +32,18 @@ import {
 } from '../../shared/store/directory.ts';
 import { hashToken, mintToken } from './authority.ts';
 import { assertDeployAllowed, assertScopeAllowed } from '../../shared/store/roles.ts';
-import { TASK_KINDS, isTaskKind } from '../../shared/store/tasks.ts';
+import { TASK_KINDS, isTaskKind, deriveTaskId } from '../../shared/store/tasks.ts';
+import { REPORT_TYPES, isReportType, type ReportType } from '../../shared/store/types.ts';
 import type { NewTask } from '../../shared/store/tasks.ts';
-import type { CreateTaskResult, TaskActor } from '../../shared/store/types.ts';
+import type { CreateTaskResult, TaskActor, TaskKind } from '../../shared/store/types.ts';
 import type { Logger } from '../../shared/log.ts';
 
 export interface WriteRequest {
   project_id: string;
   op:
     | 'claim' | 'release' | 'acquire_scope' | 'release_scope' | 'append_event' | 'heartbeat'
-    | 'deploy' | 'create_project' | 'create_task' | 'create_invite';
+    | 'deploy' | 'create_project' | 'create_task' | 'create_invite'
+    | 'raise_suggestion' | 'accept_suggestion' | 'decline_suggestion';
   /** Operation payload. Shape depends on `op`. */
   body: Record<string, unknown>;
 }
@@ -64,6 +66,11 @@ export interface WriteDeps {
     appendEvent(pid: string, event: Record<string, unknown>, key: string): Promise<unknown>;
     heartbeat(pid: string, agent_id: string, status: string, task?: string | null, branch?: string | null): Promise<void>;
     createTask(pid: string, task: NewTask, actor: TaskActor): Promise<CreateTaskResult>;
+    // Optional on the port (see shared/store/types.ts): an adapter without suggestions is
+    // still a valid CoordinationStore, and the API answers 501 rather than crashing.
+    raiseSuggestion?(pid: string, input: { title: string; body: string; report: ReportType; raised_by: string; raised_by_label: string }): Promise<{ suggestion_id: string }>;
+    acceptSuggestion?(pid: string, suggestion_id: string, by: string, task: { task_id: string; title: string; kind: TaskKind; file_scope: string[] }): Promise<{ ok: true; task_id: string } | { ok: false; resolved_by: string; status: string }>;
+    declineSuggestion?(pid: string, suggestion_id: string, by: string, reason: string): Promise<{ ok: true } | { ok: false; resolved_by: string; status: string }>;
   };
   /** The directory's createProject. Separate port, so the write path does not grow a second one. */
   createProject: (input: {
@@ -79,6 +86,17 @@ const REQUIRES: Partial<Record<WriteRequest["op"], Capability>> = {
   // architect hold it; the client seat does not, which is the whole point of that seat. See
   // docs/decisions/0005-work-appears-by-triage.md.
   create_task: 'triage',
+  // ---- suggestions, order 0089 ----
+  // RAISING is gated on `suggest`, which the `user` seat holds and which is the ONLY thing it
+  // holds. That is the whole seat: sign in on the board, say what is wrong, and nothing else.
+  raise_suggestion: 'suggest',
+  // ACCEPTING AND DECLINING ARE BOTH `triage`, because accepting IS creating the task and
+  // declining is the other half of the same decision. Order 0089 widened who holds `triage` to
+  // every working role, so "anyone can pick it up" is true -- but `user` still does not hold it,
+  // so the emptiest seat cannot put work on anybody's board. No new capability was invented:
+  // decision 0005 warns that a second gate is a second thing to keep in agreement forever.
+  accept_suggestion: 'triage',
+  decline_suggestion: 'triage',
   // Minting an invite is how a project gains a member, so it is gated by the capability that
   // already means exactly that. Only the owner holds it.
   create_invite: 'invite',
@@ -133,14 +151,14 @@ export async function authorize(
   deps: WriteDeps,
   uid: string,
   project_id: string,
-): Promise<{ role: string; file_scope: string[]; deploy_scope: string[] }> {
+): Promise<{ role: string; label: string; file_scope: string[]; deploy_scope: string[] }> {
   const member = await deps.db.collection('projects').doc(project_id).collection('members').doc(uid).get();
   if (!member.exists) throw new Unauthorized(403, 'not a member of this project');
   // Revoked is a STATE, not an absence -- the row is retained so the ledger's references to this
   // uid stay resolvable, which means the check has to be explicit rather than existence-based.
   if (member.get('revoked') === true) throw new Unauthorized(403, 'membership revoked');
 
-  const role = (member.get('role') as string) ?? 'client';
+  const role = (member.get('role') as string) ?? 'user';
   const policy = await deps.db.collection('projects').doc(project_id).collection('roles').doc(role).get();
   if (!policy.exists) {
     // FAIL CLOSED. An unconfigured project is not an unrestricted one: that is precisely the
@@ -149,6 +167,10 @@ export async function authorize(
   }
   return {
     role,
+    // The board shows WHO raised a suggestion, and it must be the stored label rather than
+    // anything the caller sends: a display name is the one field a stranger would most like to
+    // choose for themselves.
+    label: (member.get('label') as string) ?? '',
     file_scope: (policy.get('file_scope') as string[]) ?? [],
     deploy_scope: (policy.get('deploy_scope') as string[]) ?? [],
   };
@@ -210,7 +232,9 @@ export async function handleWrite(
     }
   }
 
-  let grant: { role: string; file_scope: string[]; deploy_scope: string[] };
+  // Inferred from authorize rather than restated: a hand-written copy of this shape is how
+  // `label` went missing from it in the first place.
+  let grant: Awaited<ReturnType<typeof authorize>>;
   try {
     grant = await authorize(deps, caller.uid, req.project_id);
   } catch (err) {
@@ -277,6 +301,93 @@ export async function handleWrite(
         });
         // An existing task is 200 with ok:false, NOT 409 -- same reasoning as a lost claim. It
         // is the normal outcome of a retry and a 4xx would make every HTTP client log it red.
+        return { status: 200, body: { ...r } as Record<string, unknown> };
+      }
+      // ---- suggestions, order 0089 ------------------------------------------------------
+      case 'raise_suggestion': {
+        if (!deps.store.raiseSuggestion) {
+          return { status: 501, body: { error: 'this backend does not support suggestions' } };
+        }
+        const title = typeof req.body.title === 'string' ? req.body.title.trim() : '';
+        if (!title) return { status: 400, body: { error: 'a suggestion needs a title' } };
+        if (!isReportType(req.body.report)) {
+          // Named, never defaulted. Silently filing everything as `improvement` would make the
+          // one field the reporter actually answers meaningless, and the board sorts on it.
+          return {
+            status: 400,
+            body: { error: `report must be one of ${REPORT_TYPES.join(', ')}`, reports: [...REPORT_TYPES] },
+          };
+        }
+        // The raiser is the VERIFIED uid. A body-supplied one is ignored, so nobody can file a
+        // complaint under another person's name -- and the person who raised it is who gets told
+        // when it is declined.
+        const r = await deps.store.raiseSuggestion(req.project_id, {
+          title,
+          body: typeof req.body.body === 'string' ? req.body.body : '',
+          report: req.body.report,
+          raised_by: caller.uid,
+          raised_by_label: grant.label || caller.uid,
+        });
+        deps.log.info('api.suggestion_raised', 'suggestion raised', {
+          project_id: req.project_id, uid: caller.uid, role: grant.role,
+          report: req.body.report, suggestion_id: r.suggestion_id,
+        });
+        return { status: 200, body: { ok: true, ...r } };
+      }
+      case 'accept_suggestion': {
+        if (!deps.store.acceptSuggestion) {
+          return { status: 501, body: { error: 'this backend does not support suggestions' } };
+        }
+        const suggestion_id = typeof req.body.suggestion_id === 'string' ? req.body.suggestion_id : '';
+        if (!suggestion_id) return { status: 400, body: { error: 'accept needs a suggestion_id' } };
+        if (!isTaskKind(req.body.kind)) {
+          return {
+            status: 400,
+            body: { error: `kind must be one of ${TASK_KINDS.join(', ')}`, kinds: [...TASK_KINDS] },
+          };
+        }
+        const globs = Array.isArray(req.body.file_scope)
+          ? (req.body.file_scope as unknown[]).filter((x): x is string => typeof x === 'string')
+          : [];
+        // THE SAME GATE A CLAIM GETS. Accepting writes a task whose file_scope the accepter will
+        // then lock, so a frontend member must not be able to accept a suggestion as
+        // `functions/**` work and hand themselves the server. Checked against the project's own
+        // policy, not the default template.
+        if (globs.length > 0) assertScopeAllowed(grant.role, globs, grant.file_scope);
+
+        const title = typeof req.body.title === 'string' && req.body.title.trim()
+          ? req.body.title.trim()
+          : '';
+        const task_id = typeof req.body.task_id === 'string' && req.body.task_id
+          ? req.body.task_id
+          : deriveTaskId(title || suggestion_id);
+
+        const r = await deps.store.acceptSuggestion(req.project_id, suggestion_id, caller.uid, {
+          task_id, title: title || suggestion_id, kind: req.body.kind, file_scope: globs,
+        });
+        deps.log.info('api.suggestion_accepted', 'suggestion triaged into a task', {
+          project_id: req.project_id, uid: caller.uid, role: grant.role,
+          suggestion_id, ok: r.ok,
+        });
+        // A LOST RACE IS 200 WITH ok:false, like a lost claim. Two people reading the same board
+        // will pick the same suggestion up seconds apart; the loser is told who won, and a 4xx
+        // would make every HTTP client log a normal outcome as an error.
+        return { status: 200, body: { ...r } as Record<string, unknown> };
+      }
+      case 'decline_suggestion': {
+        if (!deps.store.declineSuggestion) {
+          return { status: 501, body: { error: 'this backend does not support suggestions' } };
+        }
+        const suggestion_id = typeof req.body.suggestion_id === 'string' ? req.body.suggestion_id : '';
+        if (!suggestion_id) return { status: 400, body: { error: 'decline needs a suggestion_id' } };
+        const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
+        // REQUIRED. The person who raised it reads this, and a refusal with no reason is an
+        // ignore with paperwork.
+        if (!reason) return { status: 400, body: { error: 'declining needs a reason' } };
+        const r = await deps.store.declineSuggestion(req.project_id, suggestion_id, caller.uid, reason);
+        deps.log.info('api.suggestion_declined', 'suggestion declined', {
+          project_id: req.project_id, uid: caller.uid, role: grant.role, suggestion_id, ok: r.ok,
+        });
         return { status: 200, body: { ...r } as Record<string, unknown> };
       }
       case 'create_invite': {

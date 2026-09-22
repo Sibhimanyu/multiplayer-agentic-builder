@@ -235,7 +235,7 @@ export function registerDirectoryConformanceSuite(setup: DirectoryHarnessFactory
       const h = await setup();
       try {
         const { project_id } = await make(h);
-        const roles: RoleSlug[] = ['architect', 'backend', 'frontend', 'qa', 'client'];
+        const roles: RoleSlug[] = ['architect', 'backend', 'frontend', 'qa', 'user'];
         for (const [i, role] of roles.entries()) {
           await h.directory.addMember(project_id, `uid_${i}`, role, `member ${i}`);
         }

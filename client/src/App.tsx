@@ -446,7 +446,7 @@ function ProjectShellRoute({
   onSignOut: () => void;
   onNavigate: (slug: string) => void;
 }) {
-  const [role, setRole] = useState<string>('client');
+  const [role, setRole] = useState<string>('user');
 
   useEffect(() => {
     let live = true;

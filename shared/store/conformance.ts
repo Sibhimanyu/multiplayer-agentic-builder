@@ -610,5 +610,68 @@ export function registerConformanceSuite(factory: HarnessFactory): void {
       } finally { await h.dispose(); }
     });
 
+    // ---- section A-S: suggestions (order 0089) ------------------------------------------
+    //
+    // OPTIONAL ON THE PORT, so each of these SKIPS WITH A NAMED REASON rather than passing when
+    // an adapter does not implement suggestions. A conformance test that silently passes on an
+    // unimplemented operation is worse than no test: it reports coverage that does not exist.
+
+    it('AS1 a raised suggestion is open, sorted urgent-first, and creates no task', async () => {
+      const h = await factory();  // raw: setup() seeds a task and AS1 asserts there are none
+      try {
+        if (!h.store.raiseSuggestion) { console.log('    [skip] AS1: adapter has no raiseSuggestion'); return; }
+        await h.store.raiseSuggestion(h.project_id, { title: 'Dark mode', body: 'nice to have', report: 'idea', raised_by: 'uid_u', raised_by_label: 'Priya' });
+        await h.store.raiseSuggestion(h.project_id, { title: 'Search is empty', body: 'type a sku, get nothing', report: 'broken', raised_by: 'uid_u', raised_by_label: 'Priya' });
+        const snap = (await h.store.readSnapshot(h.project_id))!.snapshot;
+        const sugs = snap.suggestions ?? [];
+        assert.equal(sugs.length, 2);
+        // Most urgent first, by REPORT_ORDER. The reporter never types a number.
+        assert.equal(sugs[0]!.report, 'broken');
+        assert.equal(sugs[0]!.status, 'open');
+        // A suggestion binds nobody until somebody picks it up.
+        assert.equal(snap.tasks.length, 0, 'raising must not create work');
+      } finally { await h.dispose(); }
+    });
+
+    it('AS2 two accepts of one suggestion: one wins, one ticket, loser is told who won', async () => {
+      const h = await factory();  // raw: setup() seeds a task and AS1 asserts there are none
+      try {
+        if (!h.store.raiseSuggestion || !h.store.acceptSuggestion) { console.log('    [skip] AS2: adapter has no suggestions'); return; }
+        const { suggestion_id } = await h.store.raiseSuggestion(h.project_id, { title: 'Search is empty', body: 'b', report: 'broken', raised_by: 'uid_u', raised_by_label: 'Priya' });
+        // THE SAME PROPERTY A2 PROVES FOR CLAIMS. Two people reading one board pick the same
+        // suggestion up seconds apart; the loser must not get a second ticket for one complaint.
+        const [a, b] = await Promise.all([
+          h.store.acceptSuggestion(h.project_id, suggestion_id, 'uid_d1', { task_id: 'task_s_a', title: 'Search is empty', kind: 'frontend', file_scope: ['client/**'] }),
+          h.store.acceptSuggestion(h.project_id, suggestion_id, 'uid_d2', { task_id: 'task_s_b', title: 'Search is empty', kind: 'frontend', file_scope: ['client/**'] }),
+        ]);
+        const wins = [a, b].filter((r) => r.ok);
+        const loses = [a, b].filter((r) => !r.ok);
+        assert.equal(wins.length, 1, 'exactly one accept may win');
+        assert.equal(loses.length, 1);
+        assert.ok((loses[0] as { resolved_by: string }).resolved_by.startsWith('uid_d'), 'the loser is told who won');
+        const snap = (await h.store.readSnapshot(h.project_id))!.snapshot;
+        assert.equal(snap.tasks.length, 1, 'one complaint, one ticket');
+        assert.equal((snap.suggestions ?? []).length, 0, 'an accepted suggestion leaves the open lane');
+      } finally { await h.dispose(); }
+    });
+
+    it('AS3 declining needs a reason, and removes it from the open lane', async () => {
+      const h = await factory();  // raw: setup() seeds a task and AS1 asserts there are none
+      try {
+        if (!h.store.raiseSuggestion || !h.store.declineSuggestion) { console.log('    [skip] AS3: adapter has no suggestions'); return; }
+        const { suggestion_id } = await h.store.raiseSuggestion(h.project_id, { title: 'Rewrite in Rust', body: 'b', report: 'idea', raised_by: 'uid_u', raised_by_label: 'Priya' });
+        // A refusal with no reason is an ignore with paperwork, and the raiser reads this.
+        await assert.rejects(() => h.store.declineSuggestion!(h.project_id, suggestion_id, 'uid_d1', '   '));
+        const still = (await h.store.readSnapshot(h.project_id))!.snapshot.suggestions ?? [];
+        assert.equal(still.length, 1, 'a refused decline must leave it open');
+        const r = await h.store.declineSuggestion(h.project_id, suggestion_id, 'uid_d1', 'not this quarter');
+        assert.equal(r.ok, true);
+        assert.equal(((await h.store.readSnapshot(h.project_id))!.snapshot.suggestions ?? []).length, 0);
+        // And a second decline is a lost race, not a crash.
+        const again = await h.store.declineSuggestion(h.project_id, suggestion_id, 'uid_d2', 'also no');
+        assert.equal(again.ok, false);
+      } finally { await h.dispose(); }
+    });
+
   });
 }

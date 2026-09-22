@@ -174,20 +174,20 @@
     <div class="rrow">
       <div class="rname">Backend<small>server</small></div>
       <div><span class="g">functions/**</span><span class="g">schema/**</span></div>
-      <div><span class="cap hot">open pr</span><span class="cap hot">deploy</span><span class="cap">claim</span><span class="cap">lock files</span><span class="cap">contracts</span></div>
+      <div><span class="cap hot">open pr</span><span class="cap hot">deploy</span><span class="cap">claim</span><span class="cap">lock files</span><span class="cap">contracts</span><span class="cap">triage</span></div>
     </div>
     <div class="rrow">
       <div class="rname">Frontend<small>the app UI</small></div>
       <div><span class="g">client/**</span></div>
-      <div><span class="cap hot">open pr</span><span class="cap hot">deploy</span><span class="cap">claim</span><span class="cap">lock files</span><span class="cap">contracts</span></div>
+      <div><span class="cap hot">open pr</span><span class="cap hot">deploy</span><span class="cap">claim</span><span class="cap">lock files</span><span class="cap">contracts</span><span class="cap">triage</span></div>
     </div>
     <div class="rrow">
       <div class="rname">Qa<small>tests</small></div>
       <div><span class="g">test/**</span><span class="g">e2e/**</span></div>
-      <div><span class="cap hot">open pr</span><span class="cap">claim</span><span class="cap">lock files</span></div>
+      <div><span class="cap hot">open pr</span><span class="cap">claim</span><span class="cap">lock files</span><span class="cap">triage</span></div>
     </div>
     <div class="rrow invert">
-      <div class="rname">Client<small>no agent, no terminal</small></div>
+      <div class="rname">User<small>the people who use what you ship</small></div>
       <div><span class="g none">nothing</span></div>
       <div><span class="cap">suggest only</span></div>
     </div>
@@ -200,8 +200,8 @@
     <div class="surf">
       <span class="ic">web</span>
       <span class="nm">The board<code>in any browser</code></span>
-      <ul><li>See every ticket</li><li>Raise a ticket</li><li>Who is online</li><li>Who holds which files</li></ul>
-      <span class="who-for">everyone, client included</span>
+      <ul><li>Sign in with Google</li><li>Raise a suggestion</li><li>See every ticket</li><li>Who holds which files</li></ul>
+      <span class="who-for">everyone, users included</span>
     </div>
     <div class="surf">
       <span class="ic">terminal</span>
@@ -221,8 +221,8 @@
 <section class="sec">
   <h2><span class="num">03</span> A ticket, start to finish</h2>
   <div class="flow">
-    <div class="step"><span class="n">1</span><span class="t">Ticket raised</span><span class="w">board / cli</span></div>
-    <div class="step"><span class="n">2</span><span class="t">Someone claims it</span><span class="w">cli / chat</span></div>
+    <div class="step"><span class="n">1</span><span class="t">Raised or suggested</span><span class="w">user or dev</span></div>
+    <div class="step"><span class="n">2</span><span class="t">Anyone picks it up</span><span class="w">triage = claim</span></div>
     <div class="step"><span class="n">3</span><span class="t">Their files lock</span><span class="w">automatic</span></div>
     <div class="step"><span class="n">4</span><span class="t">Agent works</span><span class="w">their machine</span></div>
     <div class="step"><span class="n">5</span><span class="t">Branch pushed</span><span class="w">flotilla ship</span></div>
@@ -258,11 +258,12 @@
     <h3>Not yet true</h3>
     <ul>
       <li><span class="no">01</span><b>Steps 6 and 7 are manual.</b> The board never learns a branch exists, so tickets sit on &ldquo;claimed&rdquo; forever.</li>
-      <li><span class="no">02</span><b>Nothing hands tickets out.</b> A human writes them, an agent takes whichever it likes.</li>
-      <li><span class="no">03</span><b>Two agents at once has never been run.</b> The locks are built and untested in the wild.</li>
-      <li><span class="no">04</span><b>Nobody reviews anybody&rsquo;s work</b> inside the product.</li>
-      <li><span class="no">05</span>A <code>docs</code> ticket type exists, but <b>no role owns docs.</b></li>
-      <li><span class="no">06</span>A <code>devops</code> ticket type exists, but <b>no role owns devops.</b></li>
+      <li><span class="no">02</span><b>A user cannot raise anything yet from the web.</b> The seat, the four report types and the API exist; the sign-in form and the suggestions lane on the board do not.</li>
+      <li><span class="no">03</span><b>Nothing hands tickets out.</b> A human writes them, an agent takes whichever it likes.</li>
+      <li><span class="no">04</span><b>Two agents at once has never been run.</b> The locks are built and untested in the wild.</li>
+      <li><span class="no">05</span><b>Nobody reviews anybody&rsquo;s work</b> inside the product.</li>
+      <li><span class="no">06</span>A <code>docs</code> ticket type exists, but <b>no role owns docs.</b></li>
+      <li><span class="no">07</span>A <code>devops</code> ticket type exists, but <b>no role owns devops.</b></li>
     </ul>
   </div>
 </section>

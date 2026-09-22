@@ -5,7 +5,7 @@
 // branches' clients must compile from their own tree. Types only — no behaviour is duplicated,
 // so there is nothing here that can drift in a way a test would not catch.
 
-export type RoleSlug = 'owner' | 'architect' | 'backend' | 'frontend' | 'qa' | 'client';
+export type RoleSlug = 'owner' | 'architect' | 'backend' | 'frontend' | 'qa' | 'user';
 
 export interface ProjectRecord {
   project_id: string;
@@ -58,15 +58,15 @@ export type Capability =
 const CAPABILITIES: Record<RoleSlug, readonly Capability[]> = {
   owner: ['claim', 'acquire_scope', 'publish_contract', 'open_pr', 'deploy', 'triage', 'invite', 'suggest'],
   architect: ['claim', 'acquire_scope', 'publish_contract', 'triage', 'suggest'],
-  backend: ['claim', 'acquire_scope', 'publish_contract', 'open_pr', 'deploy', 'suggest'],
-  frontend: ['claim', 'acquire_scope', 'publish_contract', 'open_pr', 'deploy', 'suggest'],
-  qa: ['claim', 'acquire_scope', 'open_pr', 'suggest'],
-  // The client seat holds `suggest` and nothing else. It cannot claim and it cannot create a
-  // task, because creating a task IS the triage act -- decision 0005.
-  client: ['suggest'],
+  backend: ['claim', 'acquire_scope', 'publish_contract', 'open_pr', 'deploy', 'triage', 'suggest'],
+  frontend: ['claim', 'acquire_scope', 'publish_contract', 'open_pr', 'deploy', 'triage', 'suggest'],
+  qa: ['claim', 'acquire_scope', 'open_pr', 'triage', 'suggest'],
+  // The `user` seat holds `suggest` and nothing else: it can raise a suggestion and that is
+  // all. It cannot claim and cannot accept one, because accepting IS creating the task.
+  user: ['suggest'],
 };
 
-/** Unknown roles fall back to `client`, the least-privileged seat, exactly as the server does. */
+/** Unknown roles fall back to `user`, the least-privileged seat, exactly as the server does. */
 export function hasCapability(slug: string, cap: Capability): boolean {
-  return (CAPABILITIES[slug as RoleSlug] ?? CAPABILITIES.client).includes(cap);
+  return (CAPABILITIES[slug as RoleSlug] ?? CAPABILITIES.user).includes(cap);
 }

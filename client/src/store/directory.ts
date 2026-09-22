@@ -86,13 +86,13 @@ export class BrowserDirectory {
         repo_url: (p.get('repo_url') as string) ?? '',
         created_at: (p.get('created_at') as string) ?? '',
         created_by: (p.get('created_by') as string) ?? '',
-        role: (m.get('role') as RoleSlug) ?? 'client',
+        role: (m.get('role') as RoleSlug) ?? 'user',
         rollup: (p.get('rollup') as ProjectRollup) ?? {},
         agents_live,
         members: roster.docs
           .map((d) => ({
             uid: (d.get('uid') as string) ?? d.id,
-            role: (d.get('role') as RoleSlug) ?? 'client',
+            role: (d.get('role') as RoleSlug) ?? 'user',
             label: (d.get('label') as string) ?? d.id,
             revoked: d.get('revoked') === true,
             added_at: (d.get('added_at') as string) ?? '',

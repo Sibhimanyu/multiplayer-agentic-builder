@@ -27,9 +27,9 @@ import type { ProjectId } from './types.ts';
  * `owner` is the only one this port treats specially, and only to the extent that removing the
  * last owner would leave a project nobody can administer -- see revokeMember.
  */
-export type RoleSlug = 'owner' | 'architect' | 'backend' | 'frontend' | 'qa' | 'client';
+export type RoleSlug = 'owner' | 'architect' | 'backend' | 'frontend' | 'qa' | 'user';
 
-export const ROLE_SLUGS: readonly RoleSlug[] = ['owner', 'architect', 'backend', 'frontend', 'qa', 'client'];
+export const ROLE_SLUGS: readonly RoleSlug[] = ['owner', 'architect', 'backend', 'frontend', 'qa', 'user'];
 
 /** A browser identity. Firebase anonymous uid, or whatever a backend calls a signed-in subject. */
 export type MemberUid = string;
@@ -46,9 +46,21 @@ export type Capability =
   | 'publish_contract' // write to the git blackboard
   | 'open_pr'
   | 'deploy'
-  | 'triage'           // turn a suggestion into a task, or decline it
+  // Turn a suggestion into a ticket, or decline it.
+  //
+  // ORDER 0089 WIDENED WHO HOLDS THIS, and it is a real reversal of decision 0005, which
+  // reserved it to owner and architect. The ask was "anyone should be able to pick it up and
+  // work on it", and picking a suggestion up IS this act: accepting creates the ticket.
+  // Reserving it to two roles would mean a suggestion sits untouched until an owner is looking,
+  // which is the opposite of what a queue is for.
+  //
+  // What decision 0005 was actually protecting is kept: there is still exactly ONE way work
+  // appears (triage), a suggestion still never becomes a ticket by itself, and declining is
+  // still possible. Only the size of the group holding the gate changed. `user` does not hold
+  // it, so the emptiest seat still cannot put work on anybody's board.
+  | 'triage'
   | 'invite'           // add members and set roles
-  | 'suggest';         // append human-layer question/suggestion
+  | 'suggest';         // raise a suggestion: the one thing the `user` seat can do
 
 export interface RoleDefinition {
   slug: RoleSlug;
@@ -62,10 +74,19 @@ export interface RoleDefinition {
 /**
  * The six default roles.
  *
- * `client` is the one whose emptiness is the point: no file scope, no deploy targets, and only
+ * `user` is the one whose emptiness is the point: no file scope, no deploy targets, and only
  * `suggest`. It cannot claim, cannot lock a path, cannot publish a contract, and has no agent.
- * See the client-seat note in docs/designs/project-tier.md -- its words are human-layer, so the
- * file contract keeps them out of every inbox.jsonl without anything having to filter them.
+ * It is the seat for the people who USE the delivered app -- they sign in on the board, raise a
+ * suggestion, and that is the whole of their power. Their words never become work on their own:
+ * somebody with `triage` picks a suggestion up, and picking it up is what creates the ticket.
+ *
+ * Renamed from `client` in order 0089. "Client" read as the person paying for the project;
+ * the seat is actually for whoever is using the thing, which is usually a different person and
+ * usually a lot more of them.
+ *
+ * A suggestion is NOT a ledger event and has its own collection. That is what keeps a user's
+ * words out of every agent's inbox.jsonl structurally, rather than by a filter that has to stay
+ * correct -- the property the old client-seat note in docs/designs/project-tier.md described.
  */
 export const DEFAULT_ROLES: Record<RoleSlug, RoleDefinition> = {
   owner: {
@@ -88,22 +109,22 @@ export const DEFAULT_ROLES: Record<RoleSlug, RoleDefinition> = {
     slug: 'backend',
     file_scope: ['functions/**', 'schema/**'],
     deploy_scope: ['functions'],
-    capabilities: ['claim', 'acquire_scope', 'publish_contract', 'open_pr', 'deploy', 'suggest'],
+    capabilities: ['claim', 'acquire_scope', 'publish_contract', 'open_pr', 'deploy', 'triage', 'suggest'],
   },
   frontend: {
     slug: 'frontend',
     file_scope: ['client/**'],
     deploy_scope: ['hosting'],
-    capabilities: ['claim', 'acquire_scope', 'publish_contract', 'open_pr', 'deploy', 'suggest'],
+    capabilities: ['claim', 'acquire_scope', 'publish_contract', 'open_pr', 'deploy', 'triage', 'suggest'],
   },
   qa: {
     slug: 'qa',
     file_scope: ['test/**', 'e2e/**'],
     deploy_scope: [],
-    capabilities: ['claim', 'acquire_scope', 'open_pr', 'suggest'],
+    capabilities: ['claim', 'acquire_scope', 'open_pr', 'triage', 'suggest'],
   },
-  client: {
-    slug: 'client',
+  user: {
+    slug: 'user',
     file_scope: [],
     deploy_scope: [],
     capabilities: ['suggest'],
@@ -113,7 +134,7 @@ export const DEFAULT_ROLES: Record<RoleSlug, RoleDefinition> = {
 export function roleFor(slug: string): RoleDefinition {
   // An unknown slug gets the LEAST privilege, not a default of convenience. A typo in a role
   // name must not silently grant backend rights.
-  return DEFAULT_ROLES[slug as RoleSlug] ?? DEFAULT_ROLES.client;
+  return DEFAULT_ROLES[slug as RoleSlug] ?? DEFAULT_ROLES.user;
 }
 
 export function hasCapability(slug: string, cap: Capability): boolean {
