@@ -22,12 +22,26 @@ set -uo pipefail
 OUT="$(mktemp -t testrun-XXXXXX.log)"
 trap 'rm -f "$OUT"' EXIT INT TERM
 
-node --test "$@" 2>&1 | tee "$OUT"
+# --test-reporter=spec IS PINNED, NOT INHERITED. `node --test` picks its reporter from whether
+# stdout is a TTY, and which reporter that is has changed between releases: Node 26 emits the spec
+# form (`ℹ pass 177`) into a pipe, Node 22 emits TAP (`# pass 177`). This script parses that
+# summary, so an unpinned reporter means the runtime can silently change the thing being parsed.
+#
+# It did. A node downgrade from v26.3.1 to v22.23.1 on the dev machine turned every run into
+#
+#   run-tests: FAIL -- could not read a full summary from the runner.
+#
+# while all 177 tests were in fact passing. That refusal is the correct behaviour and the reason
+# this script exists -- absent counts are a violation, not "nothing to check" -- but the cause was
+# this script trusting a default. The `#` form is still accepted below so that a runtime which
+# ignores the flag degrades to parsing rather than to refusing.
+node --test --test-reporter=spec "$@" 2>&1 | tee "$OUT"
 NODE_STATUS="${PIPESTATUS[0]}"
 
 count() {
   local key="$1" v
-  v="$(grep -E "^ℹ ${key} " "$OUT" | tail -1 | sed -E 's/[^0-9]*([0-9]+).*/\1/')"
+  # Either reporter's summary line: `ℹ pass 177` (spec) or `# pass 177` (tap).
+  v="$(grep -E "^(ℹ|#) ${key} " "$OUT" | tail -1 | sed -E 's/[^0-9]*([0-9]+).*/\1/')"
   printf '%s' "${v:-}"
 }
 

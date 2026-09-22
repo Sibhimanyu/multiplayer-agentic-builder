@@ -156,3 +156,18 @@ test('the emulator runner only names groups that exist as scripts', () => {
   const missing = groups.filter((g) => !(`test:${g}` in scripts));
   assert.deepEqual(missing, [], `emul-groups.sh names groups with no script: ${missing.join(', ')}`);
 });
+
+test('run-tests.sh pins its reporter instead of inheriting one', () => {
+  // `node --test` chooses its reporter from whether stdout is a TTY, and WHICH reporter that is
+  // changed between releases: Node 26 writes the spec form (`ℹ pass 177`) into a pipe, Node 22
+  // writes TAP (`# pass 177`). run-tests.sh parses that summary to fail on cancelled/todo counts
+  // the `fail` number hides, so an unpinned reporter lets the runtime change the thing being
+  // parsed. A node downgrade from 26.3.1 to 22.23.1 did exactly that and turned every run into
+  // "could not read a full summary from the runner" while all 177 tests were passing.
+  const sh = fs.readFileSync(path.join(root, 'scripts/run-tests.sh'), 'utf8');
+  assert.match(sh, /--test-reporter=spec/,
+    'run-tests.sh must pin --test-reporter, or a runtime upgrade silently changes its input');
+  // And it must still read the other form, so a runtime that ignores the flag degrades to
+  // parsing rather than to refusing every run.
+  assert.match(sh, /\^\(ℹ\|#\)/, 'the summary parse must accept both reporters');
+});
