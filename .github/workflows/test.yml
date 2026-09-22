@@ -48,6 +48,10 @@ jobs:
       # test failure below it noise.
       - run: npm run typecheck:all
 
+      # The board is generated from the role table, the ticket types and whether the webhook
+      # is exported. A stale board is a lie everyone reasons from, so CI refuses one.
+      - run: npm run board:check
+
       - run: npm test
 
   emulator:

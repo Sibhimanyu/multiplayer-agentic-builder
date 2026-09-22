@@ -16,7 +16,9 @@
     "typecheck:all": "npm run typecheck && npm run typecheck:firebase && npm run typecheck:functions && npm run typecheck:client",
     "build:cli": "node scripts/build-cli.mjs",
     "verify:published": "node scripts/verify-published.mjs",
-    "build:all": "sh scripts/build-all.sh"
+    "build:all": "sh scripts/build-all.sh",
+    "board": "node scripts/board.ts",
+    "board:check": "node scripts/board.ts --check"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

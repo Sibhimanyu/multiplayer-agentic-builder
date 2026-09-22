@@ -58,3 +58,27 @@ Full detail, and the reasoning behind the suite layout, is in **TESTING.md**. Th
 When adding code: a new function gets a test, a bug fix gets a regression test that fails without
 the fix, and a new conditional gets both branches. Any test that scans or derives needs a control
 assertion proving the scan found something — a scan that matches nothing passes silently.
+
+## The board (docs/board.html)
+
+One page showing what Flotilla is: the roles, the three surfaces, a ticket's seven steps, and
+what is not built yet. **It is generated, never hand-edited.**
+
+```bash
+npm run board        # regenerate after any change that alters what it shows
+npm run board:check  # what CI and cli/board.test.ts run
+```
+
+Derived from source, so it cannot drift: roles, file scopes and capabilities from
+`shared/store/directory.ts`; ticket types from `shared/store/tasks.ts`; which ticket types no
+role owns, by comparing those two; whether the PR and merge steps work, from whether
+`githubWebhook` is exported in `functions/src/index.ts`; the CLI command list from its USAGE
+block. Everything else lives in one `DECLARED` block in `scripts/board.ts` so it is obvious what
+is asserted rather than measured.
+
+Adding a role needs one hand-written thing: its one-line note in `ROLE_NOTE`. The generator
+stops and names the role if you forget.
+
+Visual world is **plain monochrome and bold** — no accent colour at all. Filled black chips mean
+"can change production"; that inversion is the whole colour system. This is deliberately NOT the
+product's instrument-panel language; do not add a hue to it.
