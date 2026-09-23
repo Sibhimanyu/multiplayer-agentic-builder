@@ -41,6 +41,8 @@ import { ShipError, branchFor, classifyChanges, parseStatus, scopeForTask, shipS
 import { openBrowser } from './browser.ts';
 import { ensureIgnored } from './gitignore.ts';
 import { positional } from './args.ts';
+import { dropLanded, landedChanges } from './sync.ts';
+import { pickTasks } from './pick.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
 import { LAYER_OF, TASK_KINDS, type Event, type EventKind, type TaskKind } from '../shared/store/types.ts';
 import { ROLE_SLUGS, roleFor } from '../shared/store/directory.ts';
@@ -142,7 +144,7 @@ async function cmdConnect(root: string, invite: string): Promise<number> {
 
   out(`connected as ${res.agent_id} (${res.role_slug}) to ${project.name}`);
   out(`wrote ${written.length} files: ${LAYOUT.agents_md} and ${LAYOUT.project.split('/')[0]}/`);
-  if (ignored.length) out(`added to .gitignore: ${ignored.join(', ')}`);
+  if (ignored.length) out(`ignored in this checkout (.git/info/exclude): ${ignored.join(', ')}`);
   return 0;
 }
 
@@ -310,6 +312,74 @@ async function cmdRelease(root: string, task_id: string): Promise<number> {
   return 0;
 }
 
+/**
+ * `flotilla sync` — after your PR merges: drop the shipped copies, then fast-forward.
+ *
+ * Needs no token and no network beyond git: it is about the working tree, not the board.
+ */
+async function cmdSync(root: string): Promise<number> {
+  const fetched = await git(['fetch', '-q', 'origin'], root);
+  if (fetched.code !== 0) {
+    log.warn('cli.sync_fetch_failed', 'could not fetch origin', { error: fetched.stderr.trim() });
+    return 1;
+  }
+  // The branch this checkout tracks, else the remote default. Never a guess at "main".
+  const up = await git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], root);
+  const head = await git(['rev-parse', '--abbrev-ref', 'origin/HEAD'], root);
+  const ref = up.code === 0 ? up.stdout.trim() : head.code === 0 ? head.stdout.trim() : '';
+  if (!ref) {
+    log.warn('cli.sync_no_upstream', 'this branch tracks nothing and origin has no default branch set');
+    return 1;
+  }
+
+  const { landed, kept } = await landedChanges(root, ref);
+  await dropLanded(root, landed);
+  for (const f of landed) out(`dropped  ${f}  (already merged in ${ref})`);
+
+  const ff = await git(['merge', '--ff-only', '-q', ref], root);
+  if (ff.code !== 0) {
+    out(`could not fast-forward to ${ref}: ${ff.stderr.trim().split('\n')[0]}`);
+    if (kept.length) out(`these local changes are not in ${ref} and were left alone: ${kept.join(', ')}`);
+    return 1;
+  }
+  out(`up to date with ${ref}${kept.length ? ` — kept ${kept.length} local change(s): ${kept.join(', ')}` : ''}`);
+  return 0;
+}
+
+/**
+ * `flotilla claim` with no id — take the oldest open ticket you could actually finish.
+ *
+ * Tries candidates in order until a claim wins, because another agent may be running this at the
+ * same moment; claimTask is atomic, so losing is just "try the next one". Then hands the winner to
+ * cmdClaim for the scope lock, where re-claiming your own ticket is idempotent.
+ */
+async function cmdClaimNext(root: string): Promise<number> {
+  if (!(await isConnected(root))) {
+    log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
+    return 2;
+  }
+  const cfg = await loadConfig(root);
+  const client = new ApiClient({ base_url: cfg.api_base, token: await readToken(root), log });
+  const me = await client.whoami();
+  const snap = await client.readSnapshot();
+  if (!snap) { out('the board returned no snapshot; you may be offline'); return 1; }
+  const fence = me.file_scope ?? roleFor(me.role_slug).file_scope;
+  const pick = pickTasks(snap.snapshot.tasks, fence, snap.snapshot.locks, me.agent_id);
+
+  for (const task_id of pick.fits.slice(0, 5)) {
+    const won = await client.claimTask(task_id);
+    if (won.ok) return cmdClaim(root, task_id);
+  }
+
+  out(pick.fits.length ? 'every fitting ticket was taken while you asked; try again' : `no open ticket fits your fence (${fence.join(', ') || 'nothing'})`);
+  if (pick.blocked.length) out(`  waiting on another agent's files: ${pick.blocked.join(', ')}`);
+  if (pick.unscoped.length) {
+    out(`  declare no files, so take them by name: ${pick.unscoped.join(', ')}`);
+    out(`    flotilla claim ${pick.unscoped[0]} --scope '<glob>'`);
+  }
+  return 0;
+}
+
 async function cmdReport(root: string, message: string): Promise<number> {
   if (!(await isConnected(root))) {
     log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
@@ -352,7 +422,7 @@ async function cmdStart(root: string): Promise<number> {
   }
   // Also here, so repos connected before this existed are fixed on their next session.
   const ignored = await ensureIgnored(root);
-  if (ignored.length) out(`added to .gitignore: ${ignored.join(', ')}`);
+  if (ignored.length) out(`ignored in this checkout (.git/info/exclude): ${ignored.join(', ')}`);
   const cfg = await loadConfig(root);
   const token = await readToken(root);
   const client = new ApiClient({ base_url: cfg.api_base, token, log });
@@ -835,7 +905,8 @@ export function rolePackFor(me: WhoAmI): RolePack {
   // The comment on this function already said scope must not come from a table duplicated here.
   // It was duplicated anyway, and it drifted. Prose still comes from SCOPES, because a title and
   // a sentence are not facts the server owns; the globs are, so they come from roleFor().
-  const shared = roleFor(me.role_slug);
+  // The project's fence when the backend reports it; the template only as a fallback.
+  const shared = { ...roleFor(me.role_slug), file_scope: me.file_scope ?? roleFor(me.role_slug).file_scope };
   const prose = SCOPES[me.role_slug] ?? {
     edit: [],
     not: ['**'],
@@ -998,7 +1069,7 @@ async function cmdShip(root: string, rest: string[]): Promise<number> {
     const wantsPr = !rest.includes('--wip') && task.status !== 'pr_open' && task.status !== 'merged';
     if (cfg.repo && wantsPr && me.permissions.open_prs) {
       const pr = await openPr(root, cfg.repo, branch, task.title, task.task_id);
-      if (pr.opened) out(`opened ${pr.url}`);
+      if (pr.opened) out(`opened ${pr.url}\n  once it merges, run \`flotilla sync\` to pull it back in`);
       else if (pr.url) out(`PR already open: ${pr.url}`);
       else {
         out(`could not open the PR (${pr.reason}) — open it here:`);
@@ -1037,9 +1108,11 @@ const USAGE = `flotilla — agentic coordination CLI
   flotilla status               what the board thinks is happening
   flotilla task <title> --kind <${TASK_KINDS.join('|')}> --scope "<globs>"
                                 create a task on the board; --id overrides the derived id
-  flotilla claim <task_id>      atomic claim, then acquire the declared file scope
+  flotilla claim [task_id]      atomic claim, then acquire the declared file scope
+                                no id: take the oldest open ticket inside your fence
                                 --scope <glob> names it for a ticket that declared none
   flotilla release <task_id>    give a ticket back, and its file lock with it
+  flotilla sync                 after a merge: drop shipped copies, then fast-forward
   flotilla report "<message>"   queue one progress line in the outbox
   flotilla ship                 commit your in-scope changes to agent/<role>/<task> and push
                                 marks the task complete and opens its PR (needs gh)
@@ -1209,12 +1282,13 @@ export async function main(argv: string[]): Promise<number> {
       return cmdStatus(root);
     case 'claim': {
       const task = rest[0];
-      if (!task) {
-        log.warn('cli.usage_flotilla_claim_task', 'usage: flotilla claim <task_id>');
-        return 1;
-      }
+      // No id: hand one out. `--scope` is meaningless here -- a picked ticket always declares its
+      // own files, because unscoped ones are never picked.
+      if (!task || task.startsWith('--')) return cmdClaimNext(root);
       return cmdClaim(root, task, rest.slice(1));
     }
+    case 'sync':
+      return cmdSync(root);
     case 'release': {
       const task = rest[0];
       if (!task) {

@@ -41,6 +41,8 @@ export interface WhoAmI {
   role_slug: string;
   permissions: { push_branches: boolean; open_prs: boolean; merge: boolean; publish_contracts: boolean };
   freshness: Freshness;
+  /** The project's own fence for this role. Absent from older backends: fall back to the template. */
+  file_scope?: string[];
 }
 
 export class ApiClient {

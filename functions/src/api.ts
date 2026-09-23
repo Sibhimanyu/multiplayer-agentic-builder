@@ -280,16 +280,25 @@ export async function handleApi(req: ApiRequest, deps: ApiDeps): Promise<ApiResp
         return json(200, { events, next_cursor: r.next_cursor, has_more: r.has_more });
       }
 
-      case 'GET /whoami':
+      case 'GET /whoami': {
         // Useful for `status`, and the cheapest possible proof that agent_id comes from the
         // token: there is no request field that can change this answer.
+        //
+        // file_scope is THIS PROJECT'S policy for the role, not the template. `flotilla role` and
+        // `flotilla new` redraw it, and a CLI reading the template would tell the agent the old
+        // fence in AGENTS.md and hand it tickets it can never lock. Absent when the project has no
+        // policy doc, so the CLI can fall back rather than be told "nothing".
+        const policy = await deps.db.collection('projects').doc(id.project_id).collection('roles').doc(id.role_slug).get();
+        const file_scope = policy.exists ? (policy.get('file_scope') as string[] | undefined) : undefined;
         return json(200, {
           agent_id: id.agent_id,
           project_id: id.project_id,
           role_slug: id.role_slug,
           permissions: id.permissions,
           freshness: store.freshness,
+          ...(Array.isArray(file_scope) ? { file_scope } : {}),
         });
+      }
 
       default:
         return json(404, { error: 'no_such_route', route });
