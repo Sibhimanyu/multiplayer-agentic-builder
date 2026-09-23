@@ -187,3 +187,42 @@ export async function newProject(opts: NewProjectOptions): Promise<NewProjectRes
     agentic_dir: path.relative(opts.root, agentic) || '.agentic',
   };
 }
+
+/**
+ * Folder names that say which role owns them. Top level only: a guess about `src/`'s insides
+ * would be wrong as often as right, and a wrong fence is worse than the default one.
+ */
+const OWNS: Record<'backend' | 'frontend' | 'qa', readonly string[]> = {
+  backend: ['server', 'api', 'backend', 'functions', 'services', 'db', 'migrations', 'schema'],
+  frontend: ['client', 'web', 'frontend', 'app', 'ui', 'public'],
+  qa: ['test', 'tests', 'e2e', 'spec', '__tests__', 'cypress', 'playwright'],
+};
+
+/**
+ * Fit the three builder roles' file scopes to the folders this repo actually has.
+ *
+ * The role template assumes functions/ + client/. In a repo shaped server/ + web/, backend could
+ * lock nothing it needed and every backend claim was refused until the owner found
+ * `flotilla role`. Returns only roles whose fitted scope differs from `current`, so a repo that
+ * already matches the template changes nothing; a role with no matching folder keeps its default.
+ */
+export function inferRoleScopes(
+  topLevelDirs: readonly string[],
+  current: Partial<Record<'backend' | 'frontend' | 'qa', readonly string[]>>,
+): Partial<Record<'backend' | 'frontend' | 'qa', string[]>> {
+  const have = new Set(topLevelDirs.map((d) => d.toLowerCase()));
+  const out: Partial<Record<'backend' | 'frontend' | 'qa', string[]>> = {};
+  for (const role of ['backend', 'frontend', 'qa'] as const) {
+    const globs = OWNS[role].filter((d) => have.has(d)).map((d) => `${d}/**`);
+    if (globs.length === 0) continue;
+    const before = [...(current[role] ?? [])].sort().join(',');
+    if (globs.slice().sort().join(',') !== before) out[role] = globs;
+  }
+  return out;
+}
+
+/** Top-level directories, skipping dot-folders and node_modules. */
+export async function topLevelDirs(root: string): Promise<string[]> {
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+  return entries.filter((e) => e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules').map((e) => e.name);
+}

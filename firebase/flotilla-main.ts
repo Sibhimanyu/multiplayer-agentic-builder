@@ -13,7 +13,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { main, registerAuthCommands, registerProjectCommands } from '../cli/index.ts';
-import { newProject } from '../cli/newproject.ts';
+import { inferRoleScopes, newProject, topLevelDirs } from '../cli/newproject.ts';
 import { boardUrl, fetchApiKey, loadConfig, saveConfig, writeUrl } from '../cli/config.ts';
 import {
   credentialsPath, loadCredential, localLoginUrl, loginUrl, loopbackReady, saveCredential,
@@ -24,7 +24,7 @@ import { openBrowser } from '../cli/browser.ts';
 import { WriteClient } from '../cli/writeclient.ts';
 import { RemoteDirectory } from '../cli/remotedirectory.ts';
 import { ReadClient } from '../cli/readclient.ts';
-import { ProjectExistsError } from '../shared/store/directory.ts';
+import { DEFAULT_ROLES, ProjectExistsError } from '../shared/store/directory.ts';
 import { consoleLogger } from '../shared/log.ts';
 
 // NO BAKED-IN PROJECT ID. It used to read `?? 'multiplayer-agents-eec02'`, which compiled one
@@ -238,6 +238,20 @@ registerProjectCommands({
       console.log(`  repo       ${r.repo_url}`);
       console.log(`  scaffold   ${r.agentic_dir}/project.json`);
       console.log(`  role packs ${r.role_packs.length}`);
+
+      // Fit the fences to this repo. After the create, and never fatal: the project exists and
+      // works with template scopes; a failed fit is one `flotilla role` away from fixed.
+      const fitted = inferRoleScopes(await topLevelDirs(root), {
+        backend: DEFAULT_ROLES.backend.file_scope,
+        frontend: DEFAULT_ROLES.frontend.file_scope,
+        qa: DEFAULT_ROLES.qa.file_scope,
+      });
+      for (const [role_slug, file_scope] of Object.entries(fitted)) {
+        const res = await client.write(r.project_id, 'set_role_scope', { role_slug, file_scope });
+        console.log(res.ok
+          ? `  ${role_slug.padEnd(10)} ${file_scope.join(', ')}  (fitted to this repo)`
+          : `  ${role_slug.padEnd(10)} kept the default: ${String(res.body.error ?? res.status)}`);
+      }
       console.log(`\nopen it at /p/${r.project_id}`);
       return 0;
     } catch (err) {
