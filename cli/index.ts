@@ -42,6 +42,7 @@ import { openBrowser } from './browser.ts';
 import { ensureIgnored } from './gitignore.ts';
 import { positional } from './args.ts';
 import { dropLanded, landedChanges } from './sync.ts';
+import { pickTasks } from './pick.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
 import { LAYER_OF, TASK_KINDS, type Event, type EventKind, type TaskKind } from '../shared/store/types.ts';
 import { ROLE_SLUGS, roleFor } from '../shared/store/directory.ts';
@@ -342,6 +343,40 @@ async function cmdSync(root: string): Promise<number> {
     return 1;
   }
   out(`up to date with ${ref}${kept.length ? ` — kept ${kept.length} local change(s): ${kept.join(', ')}` : ''}`);
+  return 0;
+}
+
+/**
+ * `flotilla claim` with no id — take the oldest open ticket you could actually finish.
+ *
+ * Tries candidates in order until a claim wins, because another agent may be running this at the
+ * same moment; claimTask is atomic, so losing is just "try the next one". Then hands the winner to
+ * cmdClaim for the scope lock, where re-claiming your own ticket is idempotent.
+ */
+async function cmdClaimNext(root: string): Promise<number> {
+  if (!(await isConnected(root))) {
+    log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
+    return 2;
+  }
+  const cfg = await loadConfig(root);
+  const client = new ApiClient({ base_url: cfg.api_base, token: await readToken(root), log });
+  const me = await client.whoami();
+  const snap = await client.readSnapshot();
+  if (!snap) { out('the board returned no snapshot; you may be offline'); return 1; }
+  const fence = me.file_scope ?? roleFor(me.role_slug).file_scope;
+  const pick = pickTasks(snap.snapshot.tasks, fence, snap.snapshot.locks, me.agent_id);
+
+  for (const task_id of pick.fits.slice(0, 5)) {
+    const won = await client.claimTask(task_id);
+    if (won.ok) return cmdClaim(root, task_id);
+  }
+
+  out(pick.fits.length ? 'every fitting ticket was taken while you asked; try again' : `no open ticket fits your fence (${fence.join(', ') || 'nothing'})`);
+  if (pick.blocked.length) out(`  waiting on another agent's files: ${pick.blocked.join(', ')}`);
+  if (pick.unscoped.length) {
+    out(`  declare no files, so take them by name: ${pick.unscoped.join(', ')}`);
+    out(`    flotilla claim ${pick.unscoped[0]} --scope '<glob>'`);
+  }
   return 0;
 }
 
@@ -870,7 +905,8 @@ export function rolePackFor(me: WhoAmI): RolePack {
   // The comment on this function already said scope must not come from a table duplicated here.
   // It was duplicated anyway, and it drifted. Prose still comes from SCOPES, because a title and
   // a sentence are not facts the server owns; the globs are, so they come from roleFor().
-  const shared = roleFor(me.role_slug);
+  // The project's fence when the backend reports it; the template only as a fallback.
+  const shared = { ...roleFor(me.role_slug), file_scope: me.file_scope ?? roleFor(me.role_slug).file_scope };
   const prose = SCOPES[me.role_slug] ?? {
     edit: [],
     not: ['**'],
@@ -1072,7 +1108,8 @@ const USAGE = `flotilla — agentic coordination CLI
   flotilla status               what the board thinks is happening
   flotilla task <title> --kind <${TASK_KINDS.join('|')}> --scope "<globs>"
                                 create a task on the board; --id overrides the derived id
-  flotilla claim <task_id>      atomic claim, then acquire the declared file scope
+  flotilla claim [task_id]      atomic claim, then acquire the declared file scope
+                                no id: take the oldest open ticket inside your fence
                                 --scope <glob> names it for a ticket that declared none
   flotilla release <task_id>    give a ticket back, and its file lock with it
   flotilla sync                 after a merge: drop shipped copies, then fast-forward
@@ -1245,10 +1282,9 @@ export async function main(argv: string[]): Promise<number> {
       return cmdStatus(root);
     case 'claim': {
       const task = rest[0];
-      if (!task) {
-        log.warn('cli.usage_flotilla_claim_task', 'usage: flotilla claim <task_id>');
-        return 1;
-      }
+      // No id: hand one out. `--scope` is meaningless here -- a picked ticket always declares its
+      // own files, because unscoped ones are never picked.
+      if (!task || task.startsWith('--')) return cmdClaimNext(root);
       return cmdClaim(root, task, rest.slice(1));
     }
     case 'sync':
