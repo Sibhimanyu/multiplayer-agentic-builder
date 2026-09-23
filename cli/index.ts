@@ -39,6 +39,7 @@ import { git, materialise, publishToBlackboard } from './blackboard.ts';
 import { serve, currentTask } from './mcp.ts';
 import { ShipError, branchFor, classifyChanges, parseStatus, scopeForTask, shipScope } from './ship.ts';
 import { openBrowser } from './browser.ts';
+import { ensureIgnored } from './gitignore.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
 import { LAYER_OF, TASK_KINDS, type Event, type EventKind, type TaskKind } from '../shared/store/types.ts';
 import { ROLE_SLUGS, roleFor } from '../shared/store/directory.ts';
@@ -120,6 +121,7 @@ async function cmdConnect(root: string, invite: string): Promise<number> {
   const res = await connectWithInvite(cfg.api_base, invite, detectHarness());
   // 0600: the token is the agent's identity for the whole session.
   await fs.writeFile(path.join(root, TOKEN_FILE), `${res.token}\n`, { mode: 0o600 });
+  const ignored = await ensureIgnored(root);
 
   const client = new ApiClient({ base_url: cfg.api_base, token: res.token, log });
   const me = await client.whoami();
@@ -139,8 +141,7 @@ async function cmdConnect(root: string, invite: string): Promise<number> {
 
   out(`connected as ${res.agent_id} (${res.role_slug}) to ${project.name}`);
   out(`wrote ${written.length} files: ${LAYOUT.agents_md} and ${LAYOUT.project.split('/')[0]}/`);
-  out('');
-  out('Add .agentic/ and .flotilla-token to .gitignore if they are not already there.');
+  if (ignored.length) out(`added to .gitignore: ${ignored.join(', ')}`);
   return 0;
 }
 
@@ -306,6 +307,9 @@ async function cmdStart(root: string): Promise<number> {
     log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
     return 2;
   }
+  // Also here, so repos connected before this existed are fixed on their next session.
+  const ignored = await ensureIgnored(root);
+  if (ignored.length) out(`added to .gitignore: ${ignored.join(', ')}`);
   const cfg = await loadConfig(root);
   const token = await readToken(root);
   const client = new ApiClient({ base_url: cfg.api_base, token, log });
