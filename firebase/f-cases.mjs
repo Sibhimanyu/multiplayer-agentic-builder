@@ -58,7 +58,7 @@ console.log(`F-cases against real Firestore -- ${PROJECT}, asia-south1`);
 console.log(`namespace ${PID}\nevidence: ledger\n`);
 
 try {
-  await store.ensureProject(PID, { project_name: 'Inventory Tracker', repo_url: 'Sibhimanyu/inventory-tracker' });
+  await store.ensureProject(PID, { project_name: 'Inventory Tracker', repo_url: 'flotilla-test/scratch' });
   for (const [id, role, initials] of [
     ['agent_backend', 'backend-builder', 'BE'],
     ['agent_frontend', 'frontend-builder', 'FE'],

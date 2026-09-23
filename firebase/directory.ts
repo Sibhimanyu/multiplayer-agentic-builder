@@ -165,7 +165,7 @@ export class FirestoreDirectory implements ProjectDirectory {
         repo_url: data.repo_url ?? '',
         created_at: data.created_at ?? '',
         created_by: data.created_by ?? '',
-        role: (m.get('role') as RoleSlug) ?? 'client',
+        role: (m.get('role') as RoleSlug) ?? 'user',
       });
     }
     // Stable order, newest first. An unordered list reshuffles between renders (locked pattern 7).
@@ -202,7 +202,7 @@ export class FirestoreDirectory implements ProjectDirectory {
         const m = d.data() as Partial<StoredMember>;
         return {
           uid: m.uid ?? d.id,
-          role: (m.role as RoleSlug) ?? 'client',
+          role: (m.role as RoleSlug) ?? 'user',
           label: m.label ?? d.id,
           revoked: m.revoked === true,
           added_at: m.added_at ?? '',
@@ -251,8 +251,10 @@ export class FirestoreDirectory implements ProjectDirectory {
         const activeOwners = all.docs.filter(
           (d) => d.get('role') === 'owner' && d.get('revoked') !== true,
         );
-        const isTheOnlyOwner =
-          activeOwners.length === 1 && activeOwners[0].id === uid && self.get('revoked') !== true;
+        // Bound rather than indexed twice: `length === 1` does not narrow `[0]` for the
+        // compiler under noUncheckedIndexedAccess, which the functions build enables.
+        const onlyOwner = activeOwners.length === 1 ? activeOwners[0] : undefined;
+        const isTheOnlyOwner = onlyOwner?.id === uid && self.get('revoked') !== true;
         if (isTheOnlyOwner) throw new LastOwnerError(project_id, uid);
       }
       mutate(tx, ref);

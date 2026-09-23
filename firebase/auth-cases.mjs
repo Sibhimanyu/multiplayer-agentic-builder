@@ -158,7 +158,7 @@ try {
     return { status: r.status, body: await r.json() };
   };
 
-  await store.ensureProject(PID, { project_name: 'Auth', repo_url: 'Sibhimanyu/inventory-tracker' });
+  await store.ensureProject(PID, { project_name: 'Auth', repo_url: 'flotilla-test/scratch' });
   await store.seedTasks(PID, [{
     task_id: 'task_api', title: 'API', kind: 'backend', status: 'open', claimed_by: null, branch: null,
     pr_url: null, pr_number: null, ci: null, depends_on: [], blocked_by: null, blocked_reason: null,

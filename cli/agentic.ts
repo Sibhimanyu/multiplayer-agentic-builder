@@ -109,8 +109,14 @@ export function renderAgentsMd(role: RolePack, project: ProjectFile): string {
     role.responsibilities.trim(),
     '',
     '## Your file scope',
-    `You may edit:      ${role.may_edit.join(', ')}`,
-    `You may not edit:  ${role.may_not_edit.join(', ')}`,
+    // Never blank. `You may edit:` followed by nothing reads as a truncated file, and an agent
+    // that has to infer "so, none?" from whitespace is being asked to guess at its own contract.
+    `You may edit:      ${role.may_edit.length > 0 ? role.may_edit.join(', ') : '(nothing — you are read-only)'}`,
+    // Omitted rather than printed empty. A role that may edit everything forbids nothing, and
+    // "You may not edit:" with a blank after it reads as a truncated file.
+    ...(role.may_not_edit.length > 0
+      ? [`You may not edit:  ${role.may_not_edit.join(', ')}`]
+      : []),
     `Branches are named:  ${role.branch_prefix}<task-slug>`,
     '',
     '## How you communicate',
@@ -120,6 +126,17 @@ export function renderAgentsMd(role: RolePack, project: ProjectFile): string {
     'The line you append needs exactly two fields: `kind` and `body`. Everything else —',
     '`seq`, `layer`, `ts`, your identity — is assigned by the server. Extra fields are',
     'ignored rather than rejected, but you do not need to invent them.',
+    '',
+    // SAYS HOW, NOT JUST THAT. The promise above ("a branch is pushed on your behalf") was in
+    // every AGENTS.md this CLI has ever written, and until order 0085 nothing kept it -- the
+    // agent's work sat as uncommitted edits in the human's checkout. Now it is kept, so the
+    // contract names the trigger: an agent that does not know completion is what pushes the
+    // branch has no reason to emit it, and its work stays in the tree exactly as before.
+    '## Shipping your work',
+    'Append `task_completed` with your `task_id` when the work is done. That is what pushes',
+    'the branch: only the files inside the scope you hold are committed, and files a teammate',
+    'is holding are left alone. Do not run git, do not commit, do not open the PR yourself.',
+    'A human opens the pull request from the branch you produced.',
     '',
     `Read ${LAYOUT.inbox} from the offset in ${LAYOUT.inbox_cursor}, and write the new`,
     'offset back when you have read it. That file is yours.',
@@ -350,11 +367,13 @@ export function renderRoleMd(role: RolePack): string {
     '## File scope',
     '',
     'You may edit:',
-    ...role.may_edit.map((g) => `- ${g}`),
+    ...(role.may_edit.length > 0
+      ? role.may_edit.map((g) => `- ${g}`)
+      : ['- (nothing — you are read-only)']),
     '',
-    'You may not edit:',
-    ...role.may_not_edit.map((g) => `- ${g}`),
-    '',
+    ...(role.may_not_edit.length > 0
+      ? ['You may not edit:', ...role.may_not_edit.map((g) => `- ${g}`), '']
+      : []),
     '## Branch',
     '',
     `${role.branch_prefix}<task-slug>`,

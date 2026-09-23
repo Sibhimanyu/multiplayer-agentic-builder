@@ -1,57 +1,195 @@
 /* Approved design language. Source of truth: docs/designs/dashboard.md
    Any visual divergence between the two builds is a bug. */
-@font-face{
-  font-family:'Fraunces Brand';
-  src:url('/brand/fonts/Fraunces-SemiBold.ttf') format('truetype');
-  font-style:normal;
-  font-weight:600;
-  font-display:swap;
-}
+/* Self-hosted, latin subset. IBM Plex, one superfamily.
+   NOT Inter, Fraunces, Geist, Plus Jakarta or Space Grotesk: every one of those is on the
+   overused list the design detector flags by name, and the old pairing (Fraunces display on a
+   cream ground with one desaturated accent) was AI look #1 exactly. Plex was drawn for technical
+   interfaces, its sans and mono are one family, and the mono here is content -- globs, branches,
+   ids -- not costume. */
+@font-face{font-family:'Plex Sans';src:url('/brand/fonts/PlexSans-400.woff2') format('woff2');
+  font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:'Plex Sans';src:url('/brand/fonts/PlexSans-500.woff2') format('woff2');
+  font-weight:500;font-style:normal;font-display:swap}
+@font-face{font-family:'Plex Sans';src:url('/brand/fonts/PlexSans-600.woff2') format('woff2');
+  font-weight:600;font-style:normal;font-display:swap}
+@font-face{font-family:'Plex Mono';src:url('/brand/fonts/PlexMono-400.woff2') format('woff2');
+  font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:'Plex Mono';src:url('/brand/fonts/PlexMono-500.woff2') format('woff2');
+  font-weight:500;font-style:normal;font-display:swap}
 :root{
-  --paper:#FAF9F7; --card:#FFFFFF; --ink:#1A1917; --ink2:#4A4741;
-  --muted:#8A857C; --line:#E8E4DD; --line2:#D9D4CA;
-  --teal:#0F766E; --teal-soft:#E6F2F0;
-  --red:#B91C1C; --red-soft:#FDEDED;
-  --amber:#B45309; --amber-soft:#FDF4E7;
-  --sans:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-  --serif:'Fraunces',Georgia,serif;
-  --brand-serif:'Fraunces Brand','Fraunces',Georgia,serif;
-  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  /* ---- Instrument panel. Replaces Kanban Calm, order 0077. ----
+     Dark is chosen from the USE SCENE, not from the category: this sits beside a terminal while
+     agents run. Every value below is measured against both surfaces, not picked by eye.
+       ink   16.02 on paper / 14.64 on card
+       ink2   9.58 / 8.75
+       muted  5.23 / 4.78   (#768390 was 4.46 on card and was rejected for it)
+       teal  10.17 / 9.29    red 7.51 / 6.86    amber 9.72 / 8.89
+     All ≥4.5:1, so every one is legal as body text rather than large-text-only. */
+  --paper:#0D1117; --card:#161B22; --ink:#E6EDF3; --ink2:#ADBAC7;
+  --muted:#7C8894; --line:#21262D; --line2:#30363D;
+  --teal:#2DD4BF; --teal-soft:rgba(45,212,191,.13);
+  --red:#FF7B72; --red-soft:rgba(255,123,114,.13);
+  --amber:#E3B341; --amber-soft:rgba(227,179,65,.13);
+  --sans:'Plex Sans',ui-sans-serif,system-ui,sans-serif;
+  /* --serif and --brand-serif are kept as NAMES so no call site breaks, and both resolve to the
+     sans. There is no serif in this world; a display serif on an operations panel was the single
+     loudest thing making it read as generated. */
+  --serif:'Plex Sans',ui-sans-serif,system-ui,sans-serif;
+  --brand-serif:'Plex Sans',ui-sans-serif,system-ui,sans-serif;
+  --mono:'Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
   --r-card:12px; --r-ctl:8px; --r-tag:5px;
-  --shadow:0 1px 2px rgba(26,25,23,.04),0 1px 1px rgba(26,25,23,.02);
+  /* On dark, a drop shadow is invisible: there is nothing darker to cast onto. Depth is a
+     lighter surface plus a 1px inner highlight, which is how real panels catch light. */
+  --shadow:inset 0 1px 0 rgba(255,255,255,.04);
+
+  /* ---- order 0066. The interaction states Kanban Calm specified and never got. ----
+     They outlived the world they were written for: focus, lift, press and reduced-motion are
+     structural, so order 0077 changed their VALUES for dark and kept every rule. */
+
+  /* The keyboard focus ring. --teal at an offset, so it reads on both --paper and --card
+     without needing a second colour for each surface. */
+  --focus-ring:2px solid var(--teal);
+  --focus-offset:2px;
+  /* The hover lift. On dark it is not a bigger shadow but a brighter edge: the inner highlight
+     strengthens and a hairline of the accent appears. Same principle as before -- one elevation
+     idea, expressed twice -- just the one that is actually visible on this ground. */
+  --shadow-lift:inset 0 1px 0 rgba(255,255,255,.07),0 0 0 1px rgba(45,212,191,.18);
+  --lift:-1px;
+  --press:.985;
+  /* 150-200ms per the order. One duration, so two interactive states cannot drift apart. */
+  --motion-fast:160ms;
+  --ease:cubic-bezier(.2,0,.2,1);
+    /* Skeleton fill: one step up from --card, not a new grey. */
+  --sk-base:#1B222B;
+  --sk-sheen:#232C37;
+
+  /* ---- order 0071. The shell's two fixed columns. ----
+     Named because both are referenced by the grid AND by the breakpoints that drop them, and a
+     literal in two places is a literal that will disagree with itself. */
+  --w-side:244px;
+  --w-rail:320px;
+
+  /* ---- the spacing scale. DESIGN.md "Spacing". ----
+     There was never a first scale, only 28 improvised pixel values, which is why two gaps next
+     to the same logo could differ by 5px and nobody could say which was wrong. Every new
+     margin, padding and gap comes from here. */
+  --sp-1:2px;  --sp-2:4px;  --sp-3:6px;   --sp-4:8px;   --sp-5:12px;
+  --sp-6:16px; --sp-7:24px; --sp-8:32px;  --sp-9:48px;  --sp-10:64px;
+
+  /* ---- the type scale. DESIGN.md "Type". ----
+     DESIGN.md pinned the FAMILIES and forbade five fonts by name, then pinned no sizes at all.
+     So the shipped CSS carried 18 distinct font-size values -- 9, 10, 10.5, 11, 11.5, 12, 12.5,
+     13, 13.5, 14, 14.5, 15, 18, 19, 20, 22, 26, 34 -- twelve of them half-pixels chosen one rule
+     at a time. Twelve of the eighteen sit inside a 5px band, which is why nothing on the board
+     reads as more important than anything else: a 13.5px title beside a 12.5px label is not a
+     hierarchy, it is noise. The design detector found the same thing from the other side and
+     called it flat-type-hierarchy.
+
+     INTEGERS ONLY. Every half-pixel above got there because someone nudged an existing rule by
+     .5 rather than moving a step, and .5px is below the threshold anyone can see -- it buys no
+     hierarchy and costs a scale.
+
+     11px IS THE FLOOR and it is not a preference: below it the detector fails functional text
+     outright, and .av.sm shipped at 9px. Anything that "needs" to be smaller needs less to say.
+
+     Steps are ~1.15, integer-rounded. Eight of them is enough for a panel; if a ninth seems
+     necessary, the layout is doing the job type should be doing. */
+  --t-0:11px;  /* mono legends, chips, badges. THE FLOOR. */
+  --t-1:12px;  /* secondary meta, timestamps, counts */
+  --t-2:14px;  /* UI default, body */
+  --t-3:16px;  /* conversation body, anything read in paragraphs */
+  --t-4:18px;  /* panel and card heading */
+  --t-5:21px;  /* page heading */
+  --t-6:24px;
+  --t-7:28px;  /* display. Nothing on an operations panel is larger. */
+
+  /* Three line-heights, bound to purpose rather than to a size. A heading at --lh body-height
+     floats between its paragraphs, which is the defect DESIGN.md names under Layout. */
+  --lh-tight:1.2;  /* --t-4 and up */
+  --lh:1.5;        /* UI text */
+  --lh-read:1.6;   /* --t-3 paragraphs */
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body,#root{height:100%}
+
+/* ---- focus, order 0066 point 1 ---- */
+/* AN ACCESSIBILITY FAILURE, NOT POLISH. There was no :focus-visible in this file at all, so a
+   keyboard user got the browser default or -- on the .card buttons, which set their own
+   background and border -- effectively nothing.
+   :focus-visible AND NOT :focus. The board's cards are <button>s, and :focus would leave a ring
+   behind after every mouse click, which is the reason authors delete focus styles in the first
+   place. The browser already knows the difference; this just has to ask for it.
+   One rule over a :where() list rather than a ring per component: :where() contributes ZERO
+   specificity, so any component that needs a different ring can override it with a plain class
+   selector, and nothing here has to be repeated when a new control is added. */
+:where(a,button,input,select,textarea,summary,[tabindex],.col-body,.board,.p-body):focus-visible{
+  outline:var(--focus-ring);
+  outline-offset:var(--focus-offset);
+}
+/* The scrollers are keyboard-focusable in Chrome because they scroll, and they are the one place
+   an offset ring would be clipped by their own overflow. Inset instead, same token. */
+:where(.col-body,.board,.p-body):focus-visible{outline-offset:calc(var(--focus-offset) * -1)}
 body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:14px;
      line-height:1.5;-webkit-font-smoothing:antialiased}
 #root{display:grid;grid-template-rows:auto 1fr;overflow:hidden}
 
+/* ---- brand lockup ---- */
+/* Order 0054 built this; order 0065 restored it after a branch consolidation dropped it back to a
+   div containing the letters "FL". Scoped to the COMPONENT rather than to .nav, because the
+   signed-out card carries the same lockup and a nav-only rule is how it went missing in three
+   places at once. */
+/* The gap is the OPTICAL gap -- mark ink to glyph cap -- which means cancelling the dead space
+   inside flotilla-mark.svg first. The asset carries 18.0% of its width as transparent padding on
+   the right and 9.1% on the left (DESIGN.md "Logo spacing" has the measured table). Uncancelled,
+   gap:10px rendered as 17.25px and the wordmark looked detached from the mark. The factors are
+   expressed against --mark-w so the two sizes cannot drift apart. */
+.brand-lockup{display:flex;align-items:center;gap:var(--sp-4);flex:none}
+.brand-lockup .mark{--mark-w:36px;display:block;width:var(--mark-w);height:29px;
+     object-fit:contain;flex:none}
+/* img only. The .mark-text fallback below is glyphs, not the asset, so it has no dead space to
+   cancel -- given these margins it would sit 10px too close to the wordmark. */
+.brand-lockup img.mark{margin-left:calc(var(--mark-w) * -.091);
+     margin-right:calc(var(--mark-w) * -.18)}
+.brand-lockup .brand{font-family:var(--brand-serif);font-size:18px;font-weight:600;line-height:1;
+     font-optical-sizing:auto;font-kerning:normal;font-feature-settings:'kern' 1;
+     letter-spacing:-.015em}
+/* The fallback, for when the SVG cannot load. Same box as the mark it replaces, in the brand
+   serif at the mark's colour -- a missing asset must not also change the typeface. */
+.brand-lockup .mark-text{display:grid;place-items:center;font-family:var(--brand-serif);
+     font-size:15px;font-weight:600;line-height:1;letter-spacing:.02em;color:var(--teal)}
+/* One larger size, for the screen where the lockup IS the page furniture rather than a corner of
+   it. A size attribute rather than a second component, so both stay one thing. */
+.brand-lockup[data-size="lg"]{gap:var(--sp-5)}
+.brand-lockup[data-size="lg"] .mark{--mark-w:54px;height:44px}
+.brand-lockup[data-size="lg"] .brand{font-size:26px}
+.brand-lockup[data-size="lg"] .mark-text{font-size:22px}
+
 /* ---- top nav ---- */
 .nav{background:var(--card);border-bottom:1px solid var(--line);padding:0 28px;height:60px;
      display:flex;align-items:center;gap:18px}
-.nav .brand-lockup{display:flex;align-items:center;gap:10px;flex:none}
-.nav .mark{display:block;width:36px;height:29px;object-fit:contain;flex:none}
-.nav .brand{font-family:var(--brand-serif);font-size:18px;font-weight:600;line-height:1;
-     font-optical-sizing:auto;font-kerning:normal;font-feature-settings:'kern' 1;
-     letter-spacing:-.015em}
 .nav .sep{width:1px;height:22px;background:var(--line2)}
 .nav .proj{font-family:var(--serif);font-size:19px;font-weight:600;letter-spacing:-.015em}
 .nav .repo{font-family:var(--mono);font-size:11.5px;color:var(--muted);background:var(--paper);
      border:1px solid var(--line);border-radius:6px;padding:4px 9px}
 .nav .grow{margin-left:auto}
-.cta{background:var(--teal);color:#fff;border:none;border-radius:var(--r-ctl);padding:8px 15px;
-     font:500 13px var(--sans);cursor:pointer}
+/* DARK LABEL ON A BRIGHT ACCENT. White on #2DD4BF measures 1.86:1 -- unreadable. The ground
+   colour on it measures 10.17:1. On a dark UI the accent is the light, so the text on it is the
+   dark; carrying the light-theme habit over is how a primary button ends up illegible. */
+.cta{background:var(--teal);color:var(--paper);border:none;border-radius:var(--r-ctl);padding:8px 15px;
+     font:500 13px var(--sans);cursor:pointer;transition:background 180ms ease}
 
 /* ---- presence ---- */
 .avs{display:flex;align-items:center}
 .av{width:29px;height:29px;border-radius:50%;border:2.5px solid var(--card);margin-left:-8px;
-    display:grid;place-items:center;font-size:10.5px;font-weight:600;color:#fff;position:relative}
+    display:grid;place-items:center;font-size:var(--t-0);font-weight:600;color:#fff;position:relative}
 .av:first-child{margin-left:0}
 .av::after{content:'';position:absolute;right:-1px;bottom:-1px;width:8px;height:8px;
-    border-radius:50%;border:2px solid var(--card);background:#3E9E4F}
+    border-radius:50%;border:2px solid var(--card);background:#3FB950}
 .av[data-ring="blocked"]::after{background:var(--red)}
-.av[data-ring="offline"]::after{background:#C4BFB6}
-.av.sm{width:22px;height:22px;font-size:9px;border-width:2px;margin-left:-6px}
+/* Offline is the QUIETEST state, so on dark it is the dimmest -- the old #C4BFB6 was light-page
+   grey and became the brightest ring on the board. */
+.av[data-ring="offline"]::after{background:#6C757F}
+.av.sm{width:22px;height:22px;font-size:var(--t-0);border-width:2px;margin-left:-6px}
 .av.sm::after{width:6.5px;height:6.5px}
 .avs .more{font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:6px}
 .noagents{font-size:12.5px;color:var(--muted)}
@@ -61,6 +199,25 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .fresh .dot{width:6px;height:6px;border-radius:50%;background:var(--teal);flex:none}
 .fresh[data-mode="poll"] .dot{animation:pulse 2.6s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.32}}
+
+/* ---- the centered page (order 0065) ---- */
+/* ONE named container, because the constraint was "do not invent a second set of spacing values".
+   Signed out is the only screen in the product with a single job and no data, and it rendered as
+   content pinned to the top-left of an empty 1440px viewport. Anything else that ends up in that
+   shape uses this rather than growing its own inline styles.
+
+   `grid-row:1/-1` because #root is `grid-template-rows:auto 1fr` and this page has no nav to put
+   in the first row; without it the page occupies only its content height and centres vertically
+   inside nothing.
+
+   `margin:auto` on the child rather than `align-items:center` on the parent: when the card is
+   taller than the viewport, centring via align-items overflows PAST THE TOP EDGE and the top of
+   the card cannot be scrolled to. The auto-margin form degrades to top-aligned-and-scrollable,
+   which is the behaviour anyone actually wants at 320px tall. */
+.centered{grid-row:1 / -1;display:flex;justify-content:center;padding:28px;overflow-y:auto}
+.centered > *{margin:auto}
+/* The loading line that shares these pages. Was an inline style at two call sites. */
+.muted-note{color:var(--muted)}
 
 /* ---- /login ---- */
 /* The handoff page for `flotilla login`. Not in dashboard.md: it is a route the design never
@@ -81,13 +238,34 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
        border:1px solid var(--line);border-radius:var(--r-tag);padding:1px 5px}
 .login .cta{margin-top:6px}
 
+/* The board's signed-out card. A modifier on .login rather than a new block: it is the same
+   typography, the same gap rhythm and the same tokens -- what differs is that this one is a card
+   on an empty page instead of a column on a document. */
+.login[data-signin="board"]{width:100%;max-width:400px;background:var(--card);
+     border:1px solid var(--line);border-radius:var(--r-card);box-shadow:var(--shadow);
+     padding:34px 30px 28px;gap:13px;justify-items:center;text-align:center}
+.login[data-signin="board"] .brand-lockup{margin-bottom:4px}
+.login[data-signin="board"] h2{font-size:19px}
+.login[data-signin="board"] p{font-size:13.5px}
+/* Full width, so the primary action reads as the primary action. The secondary is one line of
+   note text beneath it -- order 0065 point 3. */
+.login[data-signin="board"] .cta{justify-self:stretch;padding:10px 15px;margin-top:5px}
+
 /* ---- who is signed in (order 0064) ---- */
 /* A button that reads as a link. The anonymous chip's action is "Sign in", which is the one
    thing that fixes an empty board, so it must not look like a destructive "Sign out". */
 .linkish{background:none;border:none;padding:0;color:var(--teal);font:inherit;cursor:pointer;
      text-decoration:underline;text-underline-offset:2px}
 .linkish:disabled{color:var(--muted);cursor:default;text-decoration:none}
-.account{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink2)}
+/* The account control reads as ONE object (order 0069), not three loose things drifting at the
+   edge of the nav. Grouped on paper with a hairline so the avatar, the address and the sign-out
+   button are visibly the same control. */
+.account{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink2);
+     background:var(--paper);border:1px solid var(--line);border-radius:999px;padding:4px 5px 4px 4px}
+.account .account-av{width:24px;height:24px;border-radius:50%;flex:none;
+     display:grid;place-items:center;background:var(--teal-soft);color:var(--teal);
+     font:600 11px var(--sans)}
+.account[data-anonymous="true"] .account-av{background:var(--amber-soft);color:var(--amber)}
 .account .who-label{font-family:var(--mono);font-size:11.5px;color:var(--muted);
      max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Amber, not grey: an anonymous session is the state that silently produced an empty board, so
@@ -97,8 +275,14 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 /* ---- board ---- */
 /* padding-right lets the last column scroll clear of the overlay panel */
 .stage{position:relative;min-height:0;overflow:hidden}
-.board{display:flex;gap:16px;padding:22px 400px 22px 28px;overflow-x:auto;overflow-y:hidden;
-       height:100%;min-height:0}
+/* Locked pattern 3 says the board carries padding-right:400px so the last column can scroll
+   clear of the overlay panel. It said nothing about carrying it when no panel is open, and it
+   did: at 1440 inside the shell that was 400 of the 1204 hidden pixels, on every load, for a
+   panel nobody had opened. Conditional satisfies the pattern EXACTLY -- panel open, padding
+   present -- and gives the columns the space back the rest of the time. */
+.board{display:flex;gap:16px;padding:22px 28px;overflow-x:auto;overflow-y:hidden;
+       height:100%;min-height:0;scroll-behavior:smooth}
+.board[data-panel="true"]{padding-right:400px}
 .col{width:262px;flex:none;display:grid;grid-template-rows:auto 1fr;min-height:0}
 .col-head{display:flex;align-items:center;gap:8px;padding:0 4px 11px}
 .col-head h3{font-family:var(--serif);font-size:14.5px;font-weight:600;letter-spacing:-.01em}
@@ -115,23 +299,33 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 /* ---- card ---- */
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);
       padding:13px 14px;display:grid;gap:9px;box-shadow:var(--shadow);cursor:pointer;
-      text-align:left;font:inherit;color:inherit}
+      text-align:left;font:inherit;color:inherit;
+      /* order 0066 point 4. transform and box-shadow ONLY -- never width, height or top, which
+         would make every hover a layout pass and reflow the column under the pointer. */
+      transition:transform var(--motion-fast) var(--ease),
+                 box-shadow var(--motion-fast) var(--ease)}
+/* The most clickable element in the product, which did not respond to being touched. */
+.card:hover{box-shadow:var(--shadow-lift);transform:translateY(var(--lift))}
+.card:active{transform:scale(var(--press))}
 .card[data-sel="true"]{border-color:var(--teal);box-shadow:0 0 0 3px var(--teal-soft)}
 .card[data-merged="true"]{opacity:.66}
-.card .title{font-size:13.5px;font-weight:500;line-height:1.4;overflow-wrap:break-word}
+/* order 0066 point 5. dashboard.md's edge table has a 47-character title wrapping to two lines,
+   which is exactly the length that drops a single orphaned word onto the second. */
+.card .title{font-size:13.5px;font-weight:500;line-height:1.4;overflow-wrap:break-word;
+      text-wrap:balance}
 .row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
-.kind{font-size:10.5px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;
+.kind{font-size:var(--t-0);font-weight:600;letter-spacing:.03em;text-transform:uppercase;
       border-radius:var(--r-tag);padding:2px 7px}
 .kind[data-k="backend"]{background:var(--teal-soft);color:var(--teal)}
 .kind[data-k="frontend"]{background:#EFEAF6;color:#5B4A7D}
 .kind[data-k="qa"]{background:#FBF0E8;color:#9A5B2E}
 .kind[data-k="docs"],.kind[data-k="devops"]{background:#EEEDEA;color:var(--ink2)}
-.badge{font-size:10.5px;font-weight:600;border-radius:var(--r-tag);padding:2px 7px}
+.badge{font-size:var(--t-0);font-weight:600;border-radius:var(--r-tag);padding:2px 7px}
 .badge[data-t="ci-failed"],.badge[data-t="blocked"]{background:var(--red-soft);color:var(--red)}
 .badge[data-t="review"]{background:var(--amber-soft);color:var(--amber)}
-.verpill{font-family:var(--mono);font-size:10.5px;background:var(--teal-soft);color:var(--teal);
+.verpill{font-family:var(--mono);font-size:var(--t-0);background:var(--teal-soft);color:var(--teal);
       border-radius:var(--r-tag);padding:2px 7px;font-weight:500}
-.branch{font-family:var(--mono);font-size:10.5px;color:var(--muted);overflow:hidden;
+.branch{font-family:var(--mono);font-size:var(--t-0);color:var(--muted);overflow:hidden;
       text-overflow:ellipsis;white-space:nowrap}
 .card .who{margin-left:auto;display:flex}
 
@@ -143,7 +337,7 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 /* ---- detail panel: OVERLAYS, never displaces ---- */
 .panel{position:absolute;top:0;right:0;bottom:0;width:372px;z-index:20;background:var(--card);
        border-left:1px solid var(--line);display:grid;grid-template-rows:auto 1fr;min-height:0;
-       box-shadow:-16px 0 44px rgba(26,25,23,.11)}
+       box-shadow:-18px 0 48px rgba(0,0,0,.55)}
 .p-head{padding:20px 24px 15px;border-bottom:1px solid var(--line);display:grid;gap:9px}
 .p-head .up{display:flex;align-items:center;gap:8px}
 .p-head .id{font-family:var(--mono);font-size:11px;color:var(--muted)}
@@ -164,15 +358,302 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .p-body{padding:18px 24px 26px;overflow-y:auto;display:grid;gap:20px;min-height:0;
        align-content:start}
 .sect{display:grid;gap:7px;align-content:start}
-.sect .lbl{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.09em;
+.sect .lbl{font-size:var(--t-0);font-weight:600;text-transform:uppercase;letter-spacing:.09em;
        color:var(--muted)}
-.sect p{font-size:13px;color:var(--ink2);line-height:1.6}
+/* `pretty` rather than `balance` for body copy: balance optimises for even line lengths across a
+   short block, which is right for a title and wrong for a paragraph. pretty only prevents the
+   orphan. */
+.sect p{font-size:13px;color:var(--ink2);line-height:1.6;text-wrap:pretty}
 .dep{display:flex;align-items:center;gap:9px;padding:9px 11px;background:var(--paper);
      border:1px solid var(--line);border-radius:9px;font-size:12.5px}
-.dep .d{width:7px;height:7px;border-radius:50%;flex:none;background:#3E9E4F}
+.dep .d{width:7px;height:7px;border-radius:50%;flex:none;background:#3FB950}
 .dep .d[data-blk="true"]{background:var(--red)}
 .dep .nm{font-family:var(--mono);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;
      white-space:nowrap}
 .dep .st{margin-left:auto;font-size:11px;color:var(--muted);flex:none}
 pre{background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:12px 13px;
     overflow-x:auto;font-family:var(--mono);font-size:11px;line-height:1.65;color:var(--ink2)}
+
+/* ---- tabular numbers, order 0066 point 2 ---- */
+/* Counts, durations and seq numbers sat in proportional Inter, so the digits have different
+   advance widths and a number JITTERS as it changes on a live board: "11 open" is narrower than
+   "18 open", and every pill to the right of it moves.
+   A rule list rather than a utility class, because the constraint was named tokens in this file
+   and no inline styles -- adding a className at twelve call sites is the same thing wearing a
+   different hat, and it is the form that gets forgotten at the thirteenth.
+   The already-mono selectors are included deliberately: --mono falls back through four families,
+   and "the fallback happens to be monospaced" is luck rather than a guarantee. */
+.count,.fresh,.badge,.verpill,.branch,.dep .st,.p-head .id,.av,.avs .more,
+.empty,.account .who-label,.login p.uid{
+  font-variant-numeric:tabular-nums;
+  font-feature-settings:'tnum' 1;
+}
+
+/* ---- loading skeleton, order 0066 point 3 ---- */
+/* A cold load showed "Connecting…" as bare text for up to fifteen seconds. The user read that as
+   a broken app twice and was being reasonable: bare text on an empty page is what a crashed SPA
+   looks like.
+   THE SHAPE HAS TO MATCH, not just exist. Locked pattern 7 in dashboard.md says a refresh must
+   not shift layout, and a skeleton that resizes when real data replaces it breaks that rule in a
+   new place -- so the skeleton renders the real .nav, the real .stage, the real .board and six
+   real .col elements, and only the leaf content is a grey block. The columns are sized by the
+   grid, not by their contents, so the board's height is identical before and after. */
+.sk{background:var(--sk-base);border-radius:var(--r-tag);
+    background-image:linear-gradient(90deg,var(--sk-base) 0%,var(--sk-sheen) 50%,var(--sk-base) 100%);
+    background-size:200% 100%;animation:sheen 1.4s linear infinite}
+@keyframes sheen{0%{background-position:200% 0}100%{background-position:-200% 0}}
+/* Card-height blocks, at the real card's radius and the real card's border so the swap is a
+   content change rather than a box change. */
+.sk-card{height:74px;border-radius:var(--r-card);border:1px solid var(--line)}
+.sk-card.tall{height:96px}
+.sk-count{width:34px;height:17px;border-radius:20px}
+.sk-proj{width:148px;height:19px}
+.sk-repo{width:186px;height:25px;border-radius:6px}
+.sk-line{width:96px;height:13px}
+/* Announced, not just drawn. A screen reader gets a word; a sighted user gets the shape. */
+.sk-board[aria-busy="true"]{pointer-events:none}
+
+/* ---- motion preference, order 0066 constraint ---- */
+/* "A motion preference that only covers page transitions is not honoured." So this suppresses
+   the hover lift, the press transform AND the skeleton sheen -- a looping shimmer is exactly the
+   kind of animation someone sets this preference to stop.
+   The hover still RESPONDS: the shadow change stays, because reduced motion is a request about
+   movement, not a request to remove feedback. */
+@media (prefers-reduced-motion: reduce){
+  .card{transition:none}
+  .card:hover{transform:none}
+  .card:active{transform:none}
+  .sk{animation:none;background-image:none}
+  .fresh[data-mode="poll"] .dot{animation:none}
+}
+
+/* ---- the secondary control (order 0069) ---- */
+/* Sign-out is the one destructive action in the nav and it used to be `.linkish` -- teal,
+   underlined, lighter than everything around it. */
+.ghost{background:var(--card);color:var(--ink2);border:1px solid var(--line2);
+     border-radius:999px;padding:5px 12px;font:500 12px var(--sans);cursor:pointer;
+     transition:background 180ms ease,color 180ms ease,border-color 180ms ease}
+.ghost:hover{background:var(--line2);color:var(--ink);border-color:var(--muted)}
+.ghost:active{transform:translateY(1px)}
+/* Brighten on hover, not darken: on a dark ground, closer means lighter. */
+.cta:hover{background:#5EE3D2}
+.cta:active{transform:translateY(1px)}
+@media (prefers-reduced-motion: reduce){
+  .ghost{transition:none}
+  .ghost:active{transform:none}
+  .cta:active{transform:none}
+}
+
+/* ======================================================================================
+   THE SHELL — order 0071.
+   Home stopped being a board and became a personal queue. The six-column state machine is
+   unchanged and moves to a secondary view; what is new is the chrome around it.
+
+   Nothing above this line changed. The palette, the type pairing, the radii and the density are
+   Kanban Calm. A2 (the approved comp) was drawn in these same tokens for exactly that reason.
+   ====================================================================================== */
+
+/* Sidebar spans full height; the top bar covers only content and rail, so the brand sits with
+   navigation rather than floating above everything. */
+.shell{display:grid;grid-row:1/-1;height:100%;overflow:hidden;
+     grid-template-columns:var(--w-side) minmax(0,1fr) var(--w-rail);
+     grid-template-rows:60px minmax(0,1fr)}
+.shell > .side{grid-column:1;grid-row:1/-1}
+.shell > .topbar{grid-column:2/-1;grid-row:1}
+.shell > .main{grid-column:2;grid-row:2;overflow-y:auto}
+.shell > .rail{grid-column:3;grid-row:2;overflow-y:auto}
+/* The rail is context, the sidebar is navigation. Context goes first when width runs out --
+   losing where you are is worse than losing who holds what. */
+@media (max-width:1240px){
+  .shell{grid-template-columns:var(--w-side) minmax(0,1fr)}
+  .shell > .rail{display:none}
+  .shell > .topbar{grid-column:2}
+}
+@media (max-width:860px){
+  .shell{grid-template-columns:minmax(0,1fr)}
+  .shell > .side{display:none}
+  .shell > .topbar,.shell > .main{grid-column:1}
+}
+
+/* ---- sidebar ---- */
+.side{background:var(--card);border-right:1px solid var(--line);
+     display:flex;flex-direction:column;overflow-y:auto}
+.side .side-head{padding:16px 18px;display:flex;align-items:center}
+.side .side-sec{padding:16px 18px 7px;font-size:var(--t-0);font-weight:600;letter-spacing:.07em;
+     text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:8px}
+.side .side-sec .n{margin-left:auto;font-variant-numeric:tabular-nums;letter-spacing:0}
+.side-nav{display:flex;flex-direction:column;gap:1px;padding:0 10px}
+.side-nav a{display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:var(--r-ctl);
+     color:var(--ink2);text-decoration:none;font-size:13.5px;
+     transition:background var(--motion-fast) var(--ease),color var(--motion-fast) var(--ease)}
+.side-nav a:hover{background:var(--paper);color:var(--ink)}
+.side-nav a .ct{margin-left:auto;font-size:11.5px;color:var(--muted);
+     font-variant-numeric:tabular-nums}
+/* Current section. A left bar plus a tint plus weight: three signals, because one of them is
+   invisible to anyone who cannot distinguish the tint. */
+.side-nav a[aria-current="page"]{background:var(--teal-soft);color:var(--teal);font-weight:600;
+     box-shadow:inset 2px 0 0 var(--teal)}
+.side-nav a[aria-current="page"] .ct{color:var(--teal)}
+/* A section with nothing behind it yet. Dimmed and non-navigating, so the sidebar never promises
+   a room that does not exist. */
+.side-nav a[data-unbuilt="true"]{color:var(--muted);cursor:default}
+.side-nav a[data-unbuilt="true"]:hover{background:transparent;color:var(--muted)}
+.side-nav a[data-unbuilt="true"] .ct{font-size:var(--t-0)}
+.side .side-foot{margin-top:auto;padding:14px 18px;border-top:1px solid var(--line);
+     font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:10px}
+.side .newproj{margin:8px 10px 0;padding:9px 10px;border-radius:var(--r-ctl);
+     border:1px dashed var(--line2);background:none;color:var(--ink2);cursor:pointer;
+     font:500 13px var(--sans);text-align:left;display:flex;align-items:center;gap:9px;
+     transition:border-color var(--motion-fast) var(--ease),color var(--motion-fast) var(--ease)}
+.side .newproj:hover{border-color:var(--teal);color:var(--teal)}
+
+/* ---- top bar ---- */
+.topbar{background:var(--card);border-bottom:1px solid var(--line);height:60px;
+     display:flex;align-items:center;gap:14px;padding:0 22px}
+.topbar .grow{margin-left:auto}
+.switcher{display:flex;align-items:center;gap:8px;padding:6px 11px;border-radius:var(--r-ctl);
+     border:1px solid var(--line);background:var(--paper);font-size:13px;color:var(--ink);
+     cursor:pointer;transition:border-color var(--motion-fast) var(--ease)}
+.switcher:hover{border-color:var(--line2)}
+.switcher .owner{color:var(--muted)}
+.switcher .repo-name{font-weight:600}
+
+/* ---- the queue ---- */
+.queue{padding:26px 28px 40px;max-width:1080px}
+/* 25px next to 15.5px next to 14px was three sizes that barely differed, so the page had no
+   voice. The step is now large enough to be a decision. Tracking tightens as size grows, which
+   is what keeps a big line from looking loose. */
+.queue h1{font-size:34px;font-weight:600;letter-spacing:-.033em;line-height:1.08;
+     text-wrap:balance}
+.queue .lede{margin-top:var(--sp-4);color:var(--ink2);font-size:14px;max-width:64ch;
+     text-wrap:pretty}
+.queue .grp{margin-top:28px}
+.queue .grp-head{display:flex;align-items:baseline;gap:10px;margin-bottom:11px}
+/* Section heads are the MONO voice, small and tracked out: on an instrument panel the label is
+   a legend, not a headline. This is also what stops them competing with the h1. */
+.queue .grp-head h2{font-family:var(--mono);font-size:11.5px;font-weight:500;
+     letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.queue .grp-head .note{font-size:12px;color:var(--muted);margin-left:auto;text-align:right}
+
+/* A task row. NOT a card: the group is the container, the rows are its contents, and a card
+   inside a card is the thing the floor bans. Hairlines between, radius only on the ends. */
+/* NOT A CARD. A bordered, rounded, filled box wrapping a list of rows is the container habit the
+   craft floor rejects -- and with the rail doing the same thing the page was five nested boxes.
+   The rows sit on the page ground, separated by the hairline that already separates them. What
+   is left is layout. */
+.qlist{border-top:1px solid var(--line)}
+.qrow{display:grid;grid-template-columns:52px minmax(0,1fr) auto;gap:0 14px;
+     padding:15px 17px;border-bottom:1px solid var(--line);
+     transition:background var(--motion-fast) var(--ease)}
+/* The last rule stays: it closes the list, the way a table's bottom rule does. */
+/* Hover lifts the row off the ground rather than tinting it a second colour. */
+.qrow:hover{background:var(--card)}
+.qrow .id{font-family:var(--mono);font-size:11px;color:var(--muted);padding-top:2px;
+     font-variant-numeric:tabular-nums}
+.qrow .t{font-size:14px;font-weight:500;line-height:1.4;text-wrap:pretty}
+.qrow .meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
+.qrow .why{margin-top:7px;font-size:12px;color:var(--muted);text-wrap:pretty}
+.qrow .why b{color:var(--amber);font-weight:500}
+.qrow .act{grid-column:3;grid-row:1;align-self:start;display:flex;flex-direction:column;
+     align-items:flex-end;gap:6px}
+.qrow .act .sub{font-size:11.5px;color:var(--muted);text-align:right;max-width:190px;
+     text-wrap:pretty}
+.qrow[data-blocked="true"]{background:rgba(227,179,65,.055)}
+.qrow[data-blocked="true"]:hover{background:rgba(227,179,65,.085)}
+
+/* Scope and agent chips. Mono here is measurement, not costume: these are literal glob patterns
+   and process names, and alignment between rows is the point. */
+.chip{display:inline-flex;align-items:center;gap:6px;border-radius:var(--r-tag);
+     padding:3px 7px;font-size:11px;border:1px solid var(--line);background:var(--paper);
+     color:var(--ink2)}
+.chip.scope{font-family:var(--mono);font-size:var(--t-0)}
+.chip.scope .k{color:var(--muted)}
+.chip.agent{font-family:var(--sans);font-size:11px}
+.chip.kind{font-weight:500;text-transform:capitalize}
+.chip.kind::before{content:'';width:5px;height:5px;border-radius:50%;background:var(--muted)}
+.chip.kind[data-k="bug"]::before{background:var(--red)}
+.chip.kind[data-k="feature"]::before{background:var(--teal)}
+.chip.kind[data-k="docs"]::before{background:var(--amber)}
+
+/* ---- right rail ---- */
+.rail{background:var(--paper);border-left:1px solid var(--line);padding:18px 18px 34px}
+.rail h3{font-size:var(--t-0);font-weight:600;letter-spacing:.07em;text-transform:uppercase;
+     color:var(--muted);margin-bottom:10px}
+.rail h3:not(:first-child){margin-top:24px}
+/* Three identical cards stacked is the shape that reads as generated. They are entries in a
+   list now: hairline-separated, no box, no radius. The rail is a legend, not a deck. */
+.holder{padding:var(--sp-5) 0;border-bottom:1px solid var(--line)}
+.holder:last-child{border-bottom:none}
+.holder .who{display:flex;align-items:center;gap:9px}
+.holder .who .nm{font-size:13.5px;font-weight:600}
+.holder .who .you{font-size:var(--t-0);background:var(--teal-soft);color:var(--teal);
+     border-radius:var(--r-tag);padding:2px 6px;font-weight:600}
+.holder .role{font-size:11.5px;color:var(--muted);margin-top:3px}
+.holder .scopes{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}
+.holder .since{font-size:11px;color:var(--muted);margin-top:9px;
+     font-variant-numeric:tabular-nums}
+
+/* ---- a section that is not built yet ---- */
+/* NOT the dashed empty state. "No file locks held" and "file locks are not built" are different
+   claims, and the dashed block already means the first one. This says the second. */
+.stub{padding:56px 28px;max-width:620px}
+.stub h1{font-family:var(--serif);font-size:22px;font-weight:600;letter-spacing:-.02em}
+.stub p{margin-top:11px;color:var(--ink2);font-size:13.5px;line-height:1.65;text-wrap:pretty}
+.stub .now{margin-top:18px;padding:14px 15px;background:var(--card);
+     border:1px solid var(--line);border-radius:var(--r-card)}
+.stub .now .lbl{font-size:11.5px;color:var(--muted)}
+.stub .now code{display:block;margin-top:7px;font-family:var(--mono);font-size:12.5px;
+     color:var(--ink);user-select:all}
+
+/* ---- new task ---- */
+.newtask{display:grid;gap:13px;padding:18px;background:var(--card);
+     border:1px solid var(--line);border-radius:var(--r-card);margin-top:14px;max-width:620px}
+.newtask label{display:grid;gap:6px;font-size:12px;color:var(--ink2)}
+.newtask input,.newtask select{font:400 13.5px var(--sans);color:var(--ink);
+     background:var(--paper);border:1px solid var(--line2);border-radius:var(--r-ctl);
+     padding:9px 11px}
+.newtask input::placeholder{color:var(--muted)}
+.newtask .row{display:flex;gap:10px;align-items:center}
+.newtask .err{font-size:12.5px;color:var(--red)}
+
+/* Browser surfaces carry the design too. */
+::selection{background:var(--teal-soft);color:var(--teal)}
+/* Tells the browser to theme its OWN surfaces dark: scrollbars, form controls, the caret and
+   the default selection. Without it the scrollbar in every column stays light and the page looks
+   like a dark theme bolted onto a light app. */
+:root{color-scheme:dark}
+/* The new-task form sits above the queue and shares its gutter, so the form and the list it will
+   add to line up on the same left edge. */
+.compose{padding:26px 28px 0;max-width:1080px}
+.main{overflow-y:auto}
+
+/* ---- disabled, order 0071 ---- */
+/* A DISABLED CONTROL THAT LOOKS ENABLED IS WORSE THAN NO CONTROL. The blocked rows rendered a
+   full-strength teal Claim button that did nothing when clicked; the reason was printed beside it
+   and the button contradicted the reason. Not opacity on the whole element -- that dims the label
+   below contrast. The surface goes flat and the text stays readable. */
+.cta:disabled{background:var(--line2);color:var(--muted);cursor:not-allowed}
+.cta:disabled:hover{background:var(--line2)}
+.cta:disabled:active{transform:none}
+.ghost:disabled{color:var(--muted);border-color:var(--line);cursor:not-allowed}
+.ghost:disabled:hover{background:var(--card);color:var(--muted);border-color:var(--line)}
+.newtask input:disabled,.newtask select:disabled{color:var(--muted);cursor:not-allowed}
+
+/* The switcher is a link but reads as a control; the default underline fights the border. */
+.switcher{text-decoration:none}
+.switcher:hover{text-decoration:none}
+
+/* The board spans the rail's column when the rail is gone, so dropping it actually buys width
+   instead of leaving a 320px hole. */
+.shell > .main[data-wide="true"]{grid-column:2/-1}
+
+/* Columns use the width they are given. 262px was a fixed value chosen when the board WAS the
+   page; inside the shell it forces scroll before the content needs it. The floor is what a task
+   card can still be read at. 176 is not a taste value: it is the width at which all six columns
+   fit a 1440 viewport beside the 244px sidebar, measured, with zero card overflow. It only binds
+   at 1440 and below -- at 1920 the columns grow back to ~256px and the max-width holds them
+   there. The cost is the longest title wrapping to four lines instead of three. */
+.col{width:auto;flex:1 1 262px;min-width:176px;max-width:300px}
+
+/* ---- selection, order 0077 ---- */
+::selection{background:rgba(45,212,191,.28);color:var(--ink)}

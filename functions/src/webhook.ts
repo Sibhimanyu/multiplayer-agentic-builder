@@ -291,3 +291,47 @@ export function refToBranch(ref: string | undefined): string | null {
  */
 export const repoKey = (full_name: string): string =>
   full_name.trim().toLowerCase().replace(/\//g, '__');
+
+/**
+ * Which project a delivery belongs to.
+ *
+ * The `repos/{repoKey}` mapping first, then the project's own `repo_url`. NOTHING EVER WROTE THE
+ * MAPPING -- `flotilla new` stores repo_url on the project and stops -- so a mapping-only lookup
+ * dropped every delivery as unmapped_repo. The fallback is what makes an existing project work
+ * without a backfill. Ambiguity (two projects on one repo) resolves to none rather than a guess:
+ * a wrong project would move somebody else's cards.
+ */
+export async function resolveProject(
+  full_name: string,
+  lookup: {
+    mapped: (key: string) => Promise<string | null>;
+    byRepoUrl: (full_name: string) => Promise<string[]>;
+  },
+): Promise<string | null> {
+  const mapped = await lookup.mapped(repoKey(full_name));
+  if (mapped) return mapped;
+  const matches = await lookup.byRepoUrl(full_name);
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+/**
+ * After a merge, free the file lock the task was holding. Returns whose lock it was, or null.
+ *
+ * The merged event moves the card, but a lock is a separate document, so without this a merged
+ * task kept its files locked until the reaper noticed the agent had gone quiet -- which, for an
+ * agent still running, is never. "Merged, lock freed" is one step on the board, not two.
+ */
+export async function releaseAfterMerge(
+  store: {
+    readSnapshot: (pid: string) => Promise<{ snapshot: { locks: { agent_id: string; task_id: string }[] } } | null>;
+    releaseScope: (pid: string, agent_id: string) => Promise<void>;
+  },
+  project_id: string,
+  task_id: string,
+): Promise<string | null> {
+  const read = await store.readSnapshot(project_id);
+  const lock = read?.snapshot.locks.find((l) => l.task_id === task_id);
+  if (!lock) return null;
+  await store.releaseScope(project_id, lock.agent_id);
+  return lock.agent_id;
+}

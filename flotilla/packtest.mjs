@@ -83,7 +83,7 @@ console.log('\n4. an UNCONFIGURED install must refuse, not guess\n');
 const demo = path.join(SANDBOX, 'demo-repo');
 await fs.mkdir(demo, { recursive: true });
 await run('git', ['init', '-q'], { cwd: demo });
-await run('git', ['remote', 'add', 'origin', 'https://github.com/Sibhimanyu/inventory-tracker.git'], { cwd: demo });
+await run('git', ['remote', 'add', 'origin', 'https://github.com/flotilla-test/scratch.git'], { cwd: demo });
 
 // HOME is redirected into the sandbox so this exercises a genuinely fresh install and cannot
 // read -- or clobber -- the real ~/.flotilla on this machine.

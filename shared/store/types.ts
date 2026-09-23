@@ -100,6 +100,72 @@ export interface TaskView {
   updated_at: string;
 }
 
+/**
+ * What the person raising a suggestion says it IS. Order 0089.
+ *
+ * THE REPORTER PICKS THE THING THEY CAN ACTUALLY JUDGE. A user of the delivered app cannot rank
+ * their request against work they have never seen, so asking them for a priority produces a
+ * board where everything is urgent. They CAN answer "is it broken, or would it just be better",
+ * and that answer carries real urgency information. Priority is derived from it (see
+ * REPORT_ORDER) rather than asked for.
+ */
+export type ReportType =
+  | 'broken'       // it does not work. something is wrong right now.
+  | 'confusing'    // it works, and I could not tell how
+  | 'improvement'  // it works, and it could be better
+  | 'idea';        // it does not exist yet
+
+export const REPORT_TYPES: readonly ReportType[] = ['broken', 'confusing', 'improvement', 'idea'];
+
+/** Narrow an untrusted value. The API refuses an unknown report rather than defaulting one. */
+export const isReportType = (v: unknown): v is ReportType =>
+  typeof v === 'string' && (REPORT_TYPES as readonly string[]).includes(v);
+
+/**
+ * Ordering, most urgent first. The board sorts by this; nobody types a number.
+ *
+ * `confusing` above `improvement` deliberately: a feature nobody can operate is closer to broken
+ * than to imperfect, and it is the class of report that gets filed once and ignored forever.
+ */
+export const REPORT_ORDER: Record<ReportType, number> = {
+  broken: 0, confusing: 1, improvement: 2, idea: 3,
+};
+
+export type SuggestionId = string;
+
+/** open until somebody with `triage` picks it up or turns it down. */
+export type SuggestionStatus = 'open' | 'accepted' | 'declined';
+
+/**
+ * A suggestion. NOT a ledger event, and that is structural rather than stylistic.
+ *
+ * An agent reads `inbox.jsonl`, which is fed from the ledger. Keeping suggestions out of the
+ * ledger means a user's words cannot reach an agent's prompt at all -- there is nothing to
+ * filter, so there is no filter to get wrong. The old client-seat note asked for exactly this
+ * property and got it by marking suggestions "human layer"; a separate collection gets it by
+ * construction.
+ *
+ * What DOES reach the ledger is the ticket created when somebody accepts, which carries the
+ * suggestion's id so the trail from "a user complained" to "this branch" is unbroken.
+ */
+export interface SuggestionView {
+  suggestion_id: SuggestionId;
+  title: string;
+  body: string;
+  report: ReportType;
+  status: SuggestionStatus;
+  /** The member uid who raised it, and their label for the board. */
+  raised_by: string;
+  raised_by_label: string;
+  raised_at: string;
+  /** Set once triaged. `accepted_task_id` is the ticket that picking it up created. */
+  resolved_by?: string | null;
+  resolved_at?: string | null;
+  accepted_task_id?: TaskId | null;
+  /** Why it was turned down. Required on decline: a refusal with no reason is an ignore. */
+  declined_reason?: string | null;
+}
+
 export interface AgentPresence {
   agent_id: AgentId; role_slug: string; member_label: string; initials: string;
   harness: 'claude-code' | 'codex' | 'manual';
@@ -132,6 +198,17 @@ export interface Snapshot {
   project_name: string; repo_url: string;
   tasks: TaskView[]; agents: AgentPresence[];
   locks: ScopeLock[]; contracts: ContractPointer[];
+  /**
+   * OPEN suggestions only, most urgent first by REPORT_ORDER. Order 0089.
+   *
+   * Optional so every existing adapter, mock and fixture stays valid without a migration: a
+   * build that has never heard of suggestions reports none rather than failing to parse. The
+   * board treats absent and empty the same.
+   *
+   * Accepted and declined ones are deliberately absent. The board's job is "what needs a
+   * decision"; history is a query, not a permanent lane nobody reads.
+   */
+  suggestions?: SuggestionView[];
 }
 
 /**
@@ -247,6 +324,49 @@ export interface CoordinationStore {
   ): Promise<void>;
 
   listPresence(project_id: ProjectId): Promise<AgentPresence[]>;
+
+  // ---- suggestions -----------------------------------------------------
+  //
+  // OPTIONAL ON THE PORT, and that is the point of the `?`. This file's own header argues that
+  // growing a proven ten-operation contract to fifteen "would put unproven surface behind a
+  // proven gate". Three more operations do not get to inherit the claim primitive's evidence.
+  // An adapter that implements none of them is still a valid CoordinationStore; the API reports
+  // suggestions unsupported rather than crashing, and the conformance suite skips the section
+  // with a named reason instead of silently passing.
+
+  /**
+   * Raise a suggestion. The only write the `user` seat can make.
+   *
+   * Creates nothing else: no task, no lock, no ledger event. A suggestion is an input to triage,
+   * and until somebody picks it up it binds nobody.
+   */
+  raiseSuggestion?(
+    project_id: ProjectId,
+    input: { title: string; body: string; report: ReportType; raised_by: string; raised_by_label: string },
+  ): Promise<{ suggestion_id: SuggestionId }>;
+
+  /**
+   * Accept a suggestion: create the ticket it becomes, atomically, and mark it accepted.
+   *
+   * ATOMIC, AND FOR THE SAME REASON A CLAIM IS. Two people reading the same board will pick the
+   * same suggestion up within seconds of each other, and the loser must get `ok:false` with the
+   * winner named, exactly like a lost claim -- not a second ticket for the same complaint.
+   *
+   * Returns the created task id, so the caller can claim it in the next breath. Accepting and
+   * claiming are separate on purpose: accepting says "this is real work", claiming says "and I
+   * am doing it", and somebody may honestly do the first without the second.
+   */
+  acceptSuggestion?(
+    project_id: ProjectId,
+    suggestion_id: SuggestionId,
+    by: string,
+    task: { task_id: TaskId; title: string; kind: TaskKind; file_scope: string[] },
+  ): Promise<{ ok: true; task_id: TaskId } | { ok: false; resolved_by: string; status: SuggestionStatus }>;
+
+  /** Turn one down. `reason` is required: a refusal with no reason is an ignore with paperwork. */
+  declineSuggestion?(
+    project_id: ProjectId, suggestion_id: SuggestionId, by: string, reason: string,
+  ): Promise<{ ok: true } | { ok: false; resolved_by: string; status: SuggestionStatus }>;
 
   // ---- read + notify ---------------------------------------------------
   /** Cheap folded read. Returns null when etag matches (a 304 equivalent). */

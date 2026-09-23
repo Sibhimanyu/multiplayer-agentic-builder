@@ -113,7 +113,11 @@ export async function reapProject(
       continue;
     }
 
-    const silent = now() - heartbeat;
+    // THE CLAIM ITSELF IS A SIGN OF LIFE. Measured from the heartbeat alone, a claim made one
+    // minute ago by an agent whose last heartbeat was at `connect` twenty minutes earlier was
+    // reaped on the next sweep -- a fresh claim, released almost as soon as it was taken.
+    const last = Number.isFinite(claimed_at_ms) ? Math.max(heartbeat, claimed_at_ms) : heartbeat;
+    const silent = now() - last;
     if (silent > timeout) {
       await release(store, project_id, task_id, agent_id, silent, result, log, 'heartbeat stale');
     } else {

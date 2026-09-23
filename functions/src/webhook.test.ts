@@ -9,7 +9,9 @@ import { createHmac, randomUUID } from 'node:crypto';
 import {
   CHECK_SUITE_CONCLUSIONS,
   mapDelivery,
+  releaseAfterMerge,
   repoKey,
+  resolveProject,
   taskIdFromBranch,
   verifySignature,
 } from './webhook.ts';
@@ -406,4 +408,57 @@ test('repoKey makes a repo full_name usable as a Firestore document id', () => {
   assert.equal(repoKey('zoho-cat/inventory-tracker'), 'zoho-cat__inventory-tracker');
   assert.equal(repoKey('ZOHO-Cat/Inventory-Tracker'), 'zoho-cat__inventory-tracker');
   assert.ok(!repoKey('a/b').includes('/'), 'a Firestore document id cannot contain a slash');
+});
+
+// ---- repo -> project, and merge -> lock freed ---------------------------------------------
+
+test('resolveProject prefers the explicit mapping', async () => {
+  const pid = await resolveProject('Owner/Repo', {
+    mapped: async (key) => (key === 'owner__repo' ? 'proj_mapped' : null),
+    byRepoUrl: async () => ['proj_other'],
+  });
+  assert.equal(pid, 'proj_mapped');
+});
+
+test('resolveProject falls back to the project repo_url when nothing is mapped', async () => {
+  const pid = await resolveProject('Owner/Repo', {
+    mapped: async () => null,
+    byRepoUrl: async (name) => (name === 'Owner/Repo' ? ['proj_by_url'] : []),
+  });
+  assert.equal(pid, 'proj_by_url');
+});
+
+test('resolveProject refuses to guess between two projects on one repo', async () => {
+  const pid = await resolveProject('o/r', { mapped: async () => null, byRepoUrl: async () => ['a', 'b'] });
+  assert.equal(pid, null);
+});
+
+test('resolveProject returns null for a repo no project uses', async () => {
+  assert.equal(await resolveProject('o/r', { mapped: async () => null, byRepoUrl: async () => [] }), null);
+});
+
+test('a merge frees the lock the task held, and only that one', async () => {
+  const store = createMemoryStore();
+  const pid = 'proj_inventory';
+  store.createProject(pid, 'Inventory Tracker', 'example/inventory-tracker');
+  store.addTask(pid, { task_id: 'task_a', title: 'A', kind: 'docs' });
+  store.addTask(pid, { task_id: 'task_b', title: 'B', kind: 'backend' });
+  store.addAgent(pid, { agent_id: 'agent_1', role_slug: 'owner', member_label: 'One' });
+  store.addAgent(pid, { agent_id: 'agent_2', role_slug: 'owner', member_label: 'Two' });
+  await store.acquireScope(pid, 'agent_1', 'task_a', ['docs/**']);
+  await store.acquireScope(pid, 'agent_2', 'task_b', ['server/**']);
+
+  // Control: both locks exist before the merge, so an empty result below means released.
+  assert.equal((await store.readSnapshot(pid))!.snapshot.locks.length, 2);
+
+  assert.equal(await releaseAfterMerge(store, pid, 'task_a'), 'agent_1');
+  const locks = (await store.readSnapshot(pid))!.snapshot.locks;
+  assert.deepEqual(locks.map((l) => l.task_id), ['task_b']);
+});
+
+test('a merge on a task holding no lock is a no-op', async () => {
+  const store = createMemoryStore();
+  const pid = 'proj_inventory';
+  store.createProject(pid, 'Inventory Tracker', 'example/inventory-tracker');
+  assert.equal(await releaseAfterMerge(store, pid, 'task_none'), null);
 });

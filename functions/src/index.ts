@@ -22,7 +22,7 @@ import { createFirestoreStore } from '../../firebase/store.ts';
 import { handleApi, statusFor } from './api.ts';
 import { handleWrite, type WriteRequest } from './write-api.ts';
 import { createFirestoreDirectory } from '../../firebase/directory.ts';
-import { mapDelivery, repoKey, verifySignature } from './webhook.ts';
+import { mapDelivery, releaseAfterMerge, resolveProject, verifySignature } from './webhook.ts';
 import { reapAll } from '../../firebase/reaper.ts';
 import { consoleLogger } from '../../shared/log.ts';
 
@@ -38,15 +38,14 @@ setGlobalOptions({ region: 'us-central1', maxInstances: 10 });
  * path require the Secret Manager API, which is disabled on this project and which the service
  * account is denied permission to enable. One dead function was blocking a live one.
  *
- * And the webhook is genuinely dead here: ORDER 0043 REPLACED IT WITH THE BRIDGE'S GITHUB POLL,
- * because Spark had no Cloud Functions to receive a webhook. Blaze is on now, but the poll is
- * the shipped mechanism, the checklist says so, and the empty-state copy says so. Exporting a
- * receiver nobody sends to would put the third name on a mechanism that already has one.
+ * So the webhook secret is NOT a declared secret. It is GITHUB_WEBHOOK_SECRET in functions/.env
+ * (gitignored), which firebase-tools deploys as a plain environment variable. That is visible to
+ * anyone with admin on the Cloud project -- who could read Secret Manager too -- and needs no API
+ * this project cannot enable. Move it to defineSecret if Secret Manager is ever turned on.
  *
- * The handler and its tests are untouched in webhook.ts. If the webhook is ever revived, this is
- * the line to restore, and Secret Manager has to be enabled first:
- *
- *   const GITHUB_WEBHOOK_SECRET = defineSecret('GITHUB_WEBHOOK_SECRET');
+ * THE WEBHOOK IS LIVE AGAIN. Order 0043 retired it in favour of a GitHub poll in the bridge;
+ * the poll was never built, so for weeks nothing read GitHub at all and no ticket could reach
+ * pr_open or merged. The receiver below was kept compiling and is what is exported now.
  */
 void defineSecret;
 
@@ -73,9 +72,7 @@ const store = createFirestoreStore({ db, log });
  *    A BAD SIGNATURE is different: that gets 401, because it is not a delivery we should
  *    acknowledge.
  */
-// NOT EXPORTED — superseded by the bridge's GitHub poll (order 0043). See the note at the
-// former GITHUB_WEBHOOK_SECRET declaration above. Kept compiling so it does not rot.
-const githubWebhook = onRequest(
+export const githubWebhook = onRequest(
   { cors: false },
   async (req, res) => {
     if (req.method !== 'POST') {
@@ -95,9 +92,8 @@ const githubWebhook = onRequest(
     const verdict = verifySignature(
       raw,
       req.header('x-hub-signature-256'),
-      // Read from the environment rather than a declared secret, so no module-scope
-      // defineSecret exists for firebase-tools to resolve at analysis time. Only reachable if
-      // this function is exported again, which it is not.
+      // From functions/.env, not a declared secret -- see the note above. Unset means every
+      // delivery fails verification, which is the right way to fail.
       process.env.GITHUB_WEBHOOK_SECRET ?? '',
     );
     if (!verdict.ok) {
@@ -133,8 +129,14 @@ const githubWebhook = onRequest(
     }
 
     // Repo -> project. An unmappable repo is logged and dropped, never a 500 (D6).
-    const mapping = await db.collection('repos').doc(repoKey(full_name)).get();
-    const project_id = mapping.exists ? (mapping.get('project_id') as string) : null;
+    const project_id = await resolveProject(full_name, {
+      mapped: async (key) => {
+        const doc = await db.collection('repos').doc(key).get();
+        return doc.exists ? ((doc.get('project_id') as string) ?? null) : null;
+      },
+      byRepoUrl: async (name) =>
+        (await db.collection('projects').where('repo_url', '==', name).limit(2).get()).docs.map((d) => d.id),
+    });
     if (!project_id) {
       log.warn('fn.webhook_for_unmapped_repo', 'webhook for unmapped repo, dropped', { delivery_id, event_name, repo: full_name });
       res.status(200).json({ ok: true, dropped: 'unmapped_repo', repo: full_name });
@@ -155,6 +157,17 @@ const githubWebhook = onRequest(
 
     try {
       const r = await store.appendEvent(project_id, mapped.event, mapped.idempotency_key);
+      // A merge frees the task's files. After the append, so a failed release leaves the card
+      // merged and the lock for the reaper -- never a freed lock on a task that is not merged.
+      const task_id = (mapped.event.body as { task_id?: unknown }).task_id;
+      if (mapped.event.kind === 'merged' && typeof task_id === 'string') {
+        try {
+          const released = await releaseAfterMerge(store, project_id, task_id);
+          log.info('fn.webhook_merge_released', 'merge released the task lock', { project_id, task_id, released });
+        } catch (err) {
+          log.warn('fn.webhook_merge_release_failed', 'merged, but could not release the lock', { project_id, task_id, error: String(err) });
+        }
+      }
       // A duplicate is a success. GitHub retries deliveries, and the whole point of keying on
       // the delivery id is that a retry is free (D4).
       res.status(200).json({ ok: true, seq: r.seq, duplicate: r.duplicate });

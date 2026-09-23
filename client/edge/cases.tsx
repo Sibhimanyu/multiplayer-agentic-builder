@@ -10,7 +10,7 @@
 // Built and run by client/edge/run.mjs.
 
 import { renderToStaticMarkup } from 'react-dom/server';
-import { BoardView, ProjectsIndex, blockedChain, isLoginPath, projectIdFromPath } from '../src/App';
+import { BoardView, ProjectsIndex, blockedChain, isLoginPath, projectIdFromPath, projectRoute } from '../src/App';
 import { AccountChip, SignInView, TriagePanel, relativeTime } from '../src/components';
 import { loadProjects, type ProjectLister } from '../src/store/projects';
 import type { Session } from '../src/store/session';
@@ -249,8 +249,23 @@ const render = (snap: Snapshot, freshness: Freshness = LIVE, selected: string | 
   check(projectIdFromPath('/p/proj_inventory/') === 'proj_inventory', 'route: a trailing slash is the same route');
   // The control: a path that must NOT parse as a project, so "returns null" is not vacuous.
   check(projectIdFromPath('/p/') === null, 'route: /p/ with no id is not a project');
-  check(projectIdFromPath('/p/a/b') === null, 'route: a nested path is not a project');
+  // Order 0071: one nested segment is now a SECTION, so `/p/a/b` is project `a`. The control
+  // moves out one level rather than being deleted -- a suite that stops rejecting anything is
+  // the failure this line existed to prevent.
+  check(projectIdFromPath('/p/a/b/c') === null, 'route: a two-deep path is not a project');
   check(projectIdFromPath('/p/../etc') === null, 'route: traversal characters are rejected');
+
+  // ---- sections, order 0071 ----
+  check(projectRoute('/p/proj_inventory')?.section === 'queue',
+    'route: the bare project URL is the queue, not the board');
+  check(projectRoute('/p/proj_inventory/board')?.section === 'board',
+    'route: a known section is kept');
+  check(projectRoute('/p/proj_inventory/board')?.project_id === 'proj_inventory',
+    'route: the project id survives a section');
+  // A typo in a shared link lands somewhere useful instead of a dead end.
+  check(projectRoute('/p/proj_inventory/nonsense')?.section === 'queue',
+    'route: an unknown section falls back to the queue');
+  check(projectRoute('/p/a/b/c') === null, '(control) route: two-deep still does not parse');
 }
 
 // ---------------------------------------------------------------- triage surface (0047)
@@ -678,16 +693,24 @@ const render = (snap: Snapshot, freshness: Freshness = LIVE, selected: string | 
         'session: and it does not render a throwaway uid as if it were a name');
     }
 
-    // ANONYMOUS IS A CHOICE, NOT THE DEFAULT. Both buttons present, neither pre-selected.
+    // ONE WAY IN: GOOGLE. Order 0073 removed the anonymous option; this asserted the opposite
+    // until then, which is why it is inverted here rather than deleted -- a removed assertion
+    // proves nothing, and this one now guards the removal from being quietly undone.
     {
-      const t = text(renderToStaticMarkup(
-        <SignInView onGoogle={() => {}} onAnonymous={() => {}} />,
-      ));
-      check(/Continue with Google/.test(t), 'signin: Google is offered');
-      check(/continue anonymously/.test(t),
-        'signin: anonymous stays available — the denied-state onboarding path depends on it');
+      const t = text(renderToStaticMarkup(<SignInView onGoogle={() => {}} />));
+      // The control FIRST: without it, "no anonymous option" also passes on a blank render.
+      check(/Continue with Google/.test(t), '(control) signin: Google is offered');
+      check(!/anonymous/i.test(t),
+        'signin: the anonymous escape hatch is gone — Google is the only way in');
+
+      // A browser still holding a pre-0073 anonymous credential is told why it is being asked
+      // again, rather than shown a sign-in screen that looks like it simply failed.
+      const stale = text(renderToStaticMarkup(<SignInView onGoogle={() => {}} staleAnonymous />));
+      check(/no longer accepted/.test(stale),
+        'signin: a stale anonymous session is named, not silently refused');
+
       const err = text(renderToStaticMarkup(
-        <SignInView onGoogle={() => {}} onAnonymous={() => {}}
+        <SignInView onGoogle={() => {}}
           error={{ code: 'auth/operation-not-allowed', detail: 'Google sign-in is disabled.' }} />,
       ));
       check(/Google sign-in is disabled/.test(err) && /auth\/operation-not-allowed/.test(err),

@@ -270,7 +270,78 @@ registerProjectCommands({
    * The project comes from `.agentic/project.json`, so the command works where the user already
    * is -- in the repo -- rather than needing a project id pasted from the board.
    */
-  async task(root, title, kind, task_id) {
+  /**
+   * Mint a single-use invite code.
+   *
+   * THE COMMAND THAT MAKES THIS A MULTIPLAYER PRODUCT. `connect` has always consumed an invite
+   * document; nothing has ever written one, so every project had exactly one member -- whoever
+   * ran `flotilla new`. Gated server-side by the `invite` capability, which only the owner holds.
+   *
+   * The code is printed ONCE. Firestore stores only its sha256, so it cannot be read back out:
+   * lose it and mint another.
+   */
+  async invite(root, role_slug, label) {
+    const cfg = await loadConfig();
+    const raw = await readFile(join(root, '.agentic/project.json'), 'utf8').catch(() => '');
+    if (!raw) {
+      console.error('\nno .agentic/project.json here. Run `flotilla new <name>` in your repo first.');
+      return 1;
+    }
+    const project_id = (JSON.parse(raw) as { project_id?: string }).project_id ?? '';
+    if (!project_id) {
+      console.error('\n.agentic/project.json names no project_id.');
+      return 1;
+    }
+
+    const client = new WriteClient({
+      api_url: writeUrl(cfg), api_key: cfg.api_key, log: consoleLogger,
+    });
+    const res = await client.write(project_id, 'create_invite', {
+      role_slug, ...(label ? { member_label: label } : {}),
+    });
+    if (!res.ok) {
+      console.error(`\n${String(res.body.error ?? `write refused (HTTP ${res.status})`)}`);
+      return 1;
+    }
+
+    const code = String(res.body.invite ?? '');
+    console.log(`\ninvite for ${String(res.body.role_slug ?? role_slug)}`);
+    console.log(`  label    ${String(res.body.member_label ?? role_slug)}`);
+    console.log(`  expires  in 7 days`);
+    console.log('\nSend them this, once:\n');
+    console.log(`  flotilla connect ${code}\n`);
+    console.log('It works one time. This is the only time the code is shown.');
+    return 0;
+  },
+
+  /**
+   * Redraw a role's file scope for this project. Owner only, enforced by the write function.
+   *
+   * Role policy is copied from the template at `flotilla new` and describes a functions/ +
+   * client/ layout. A repo shaped any other way needs its fences redrawn, and until this there
+   * was no way to do it: every backend claim in a server/ repo was refused.
+   */
+  async roleScope(root, role_slug, globs) {
+    const cfg = await loadConfig();
+    const raw = await readFile(join(root, '.agentic/project.json'), 'utf8').catch(() => '');
+    const project_id = raw ? ((JSON.parse(raw) as { project_id?: string }).project_id ?? '') : '';
+    if (!project_id) {
+      console.error('\nno project here. Run this in a repo with .agentic/project.json.');
+      return 1;
+    }
+    const client = new WriteClient({ api_url: writeUrl(cfg), api_key: cfg.api_key, log: consoleLogger });
+    const res = await client.write(project_id, 'set_role_scope', { role_slug, file_scope: globs });
+    if (!res.ok) {
+      console.error(`\n${String(res.body.error ?? `write refused (HTTP ${res.status})`)}`);
+      return 1;
+    }
+    const got = (res.body.file_scope as string[] | undefined) ?? globs;
+    console.log(`\n${role_slug} may now edit: ${got.join(', ')}`);
+    console.log('Takes effect on the next claim. Locks already held are unchanged.');
+    return 0;
+  },
+
+  async task(root, title, kind, task_id, file_scope) {
     const cfg = await loadConfig();
     const raw = await readFile(join(root, '.agentic/project.json'), 'utf8').catch(() => '');
     if (!raw) {
@@ -288,6 +359,7 @@ registerProjectCommands({
     });
     const res = await client.write(project_id, 'create_task', {
       title, kind, ...(task_id ? { task_id } : {}),
+      ...(file_scope && file_scope.length > 0 ? { file_scope } : {}),
     });
     if (!res.ok) {
       console.error(`\n${String(res.body.error ?? `write refused (HTTP ${res.status})`)}`);
@@ -308,6 +380,7 @@ registerProjectCommands({
     console.log(`created ${id}`);
     console.log(`  title  ${title}`);
     console.log(`  kind   ${kind}`);
+    console.log(`  locks  ${file_scope && file_scope.length > 0 ? file_scope.join(', ') : '(nothing — no --scope given)'}`);
     console.log(`\nAn agent can take it now:  flotilla claim ${id}`);
     return 0;
   },

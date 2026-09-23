@@ -36,6 +36,10 @@ export interface StripResult {
 
 /** Remove every code point that would not survive a durable write. */
 export function stripUnstorable(input: string): StripResult {
+  // Coerced, not asserted. This threw "input is not iterable" on `undefined` -- a message that
+  // names neither the field nor the caller, from a function whose whole job is to make untrusted
+  // values safe. A sanitiser is the last place that should assume its input is well-formed.
+  if (typeof input !== 'string') return { value: '', removed: 0 };
   const before = [...input].length;
   const value = input.replace(ASTRAL, '').replace(PICTOGRAPHIC, '').replace(EMOJI_GLUE, '');
   return { value, removed: before - [...value].length };

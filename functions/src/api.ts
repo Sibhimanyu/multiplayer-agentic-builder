@@ -25,6 +25,7 @@ import {
   PermissionError,
 } from './authority.ts';
 import { StoreAuthError, StoreBusyError, StoreError, StoreOfflineError } from '../../shared/store/errors.ts';
+import { RoleDeniedError } from '../../shared/store/directory.ts';
 import { LAYER_OF, type EventKind } from '../../shared/store/types.ts';
 import type { Logger } from '../../shared/log.ts';
 import type { FirestoreStore } from '../../firebase/store.ts';
@@ -146,6 +147,11 @@ export function statusFor(err: unknown): ApiResponse {
     return json(403, { error: 'forbidden', permission: err.permission, detail: err.message });
   }
   if (err instanceof RequestError) return json(err.status, { error: err.code, detail: err.message });
+  // A role refusing a glob is the fence working, not a crash. It fell through to 500 "internal",
+  // so an agent asking for server/** as backend was told the server broke, and never why.
+  if (err instanceof RoleDeniedError) {
+    return json(403, { error: 'role_denied', detail: err.message, role: err.role, requested: err.requested, allowed: err.allowed });
+  }
   if (err instanceof StoreBusyError) {
     return json(429, { error: 'busy', retry_after_ms: err.retry_after_ms, detail: err.message });
   }

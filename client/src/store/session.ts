@@ -68,7 +68,15 @@ export interface Session {
 }
 
 /** How a user is signed in. The board offers both; nothing chooses for them. */
-export type SignInMethod = 'google' | 'anonymous';
+/**
+ * How the BOARD signs in. Google only, since order 0073.
+ *
+ * `anonymous` is deliberately not here. The CLI's /login page still has an anonymous path
+ * (`flotilla login --anonymous`) and calls signInAnonymous directly; that is a different
+ * surface with a different caller, and keeping it out of this type is what stops the board
+ * quietly regrowing the option.
+ */
+export type SignInMethod = 'google';
 
 export const sessionOf = (u: User | null): Session | null =>
   u ? { uid: u.uid, email: u.email, anonymous: u.isAnonymous } : null;

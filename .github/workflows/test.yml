@@ -1,0 +1,98 @@
+# The test suite, on every push and pull request.
+#
+# THERE WAS NO CI AT ALL. Everything below already existed as npm scripts and shell helpers, some
+# of it carefully built; none of it ran anywhere except when a human remembered to type it. That
+# is how `firebase/directory.test.ts` -- a conformance suite for one of the two port contracts
+# this design rests on -- went from written to never-executed without anyone noticing, and how
+# `functions/` sat with a broken build for weeks while the root typecheck stayed green.
+#
+# TWO JOBS, DELIBERATELY. `fast` is seconds and gates everything; `emulator` is minutes and needs
+# a JDK. Splitting them means a typo in a CLI test does not wait on a 900-second conformance run
+# to tell you about it, and a red emulator job is unambiguous about which half broke.
+
+name: test
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# A second push to the same branch makes the first run's answer irrelevant, so stop paying for it.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast:
+    name: typecheck + fast tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # NODE 24, NOT "latest". The suite runs .ts files directly and relies on native type
+      # stripping, which is on by default from 22.18 / 23.6 -- an older runner silently fails to
+      # parse every test file, and "latest" would move under us without a commit.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Four manifests, four installs. They are NOT npm workspaces: functions/ ships its own
+      # node_modules to Cloud Functions at deploy time, so hoisting would change what deploys.
+      - run: npm ci
+      - run: npm ci --prefix client
+      - run: npm ci --prefix functions
+      - run: npm ci --prefix firebase
+
+      # Typecheck first: it is the cheapest thing that can be wrong, and a type error makes every
+      # test failure below it noise.
+      - run: npm run typecheck:all
+
+      # The board is generated from the role table, the ticket types and whether the webhook
+      # is exported. A stale board is a lie everyone reasons from, so CI refuses one.
+      - run: npm run board:check
+
+      - run: npm test
+
+  emulator:
+    name: firestore conformance + integration
+    runs-on: ubuntu-latest
+    # 900s for the conformance suite alone, plus three more emulator lifetimes.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # firebase-tools >= 15 needs a JDK 21+ to run the Firestore emulator. scripts/emulator.sh
+      # version-checks whatever it finds by RUNNING it rather than trusting the path, so an
+      # unexpected JDK here fails loudly instead of at the first query.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - run: npm ci
+      - run: npm ci --prefix functions
+      - run: npm ci --prefix firebase
+
+      - run: npm install -g firebase-tools
+
+      # Four separate emulator lifetimes, and that is not overcaution. Batched after the stress
+      # tests, the conformance suite failed at 106s with `ABORTED: Transaction lock timeout` --
+      # accumulated emulator degradation, not an adapter defect, and it took real measurement to
+      # establish that. `firebase/package.json`'s `test` keeps them apart.
+      - run: npm run test:emulator
+
+      # The emulator writes these on failure and they are the only record of what the backend was
+      # doing. Useless locally, decisive in CI, where the process is already gone.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: emulator-logs
+          path: |
+            firestore-debug.log
+            firebase-debug.log
+          if-no-files-found: ignore

@@ -1,7 +1,10 @@
 # Deploying the Firebase build
 
-**Nothing in this build has been deployed.** Two things are needed first, and one of them is a
-hard gate that a script must not paper over.
+**This build is deployed** to `multiplayer-agents-eec02` (functions `api`, `write`, `githubWebhook`,
+`reapClaims`, and hosting). The gates below are what a NEW Firebase project needs first.
+
+Redeploying: `npm run build:all`, then `firebase deploy --only functions,hosting`. build:all compiles
+`functions/lib`, which is what the deploy uploads; skip it and you ship the previous build.
 
 ## Gate 1 — the budget alert (do this first, verify it yourself)
 
@@ -56,16 +59,18 @@ npm test
 #    Deploying rules after data means a window where the database is open.
 firebase deploy --only firestore:rules,firestore:indexes
 
-# 3. The webhook secret. Generate it here, paste the same value into GitHub.
-openssl rand -hex 32                       # keep this
-firebase functions:secrets:set GITHUB_WEBHOOK_SECRET
+# 3. The webhook secret, in functions/.env (gitignored). Secret Manager is disabled on this
+#    project and the deploy account cannot enable it; see the note in functions/src/index.ts.
+printf 'GITHUB_WEBHOOK_SECRET=%s\n' "$(openssl rand -hex 32)" > functions/.env
+#    Paste the same value into the GitHub webhook settings below.
 
 # 4. Functions.
 npm run build:functions
 firebase deploy --only functions
 
-# 5. Wire the repo -> project mapping the webhook needs, or every delivery is
-#    logged and dropped as "unmapped_repo" (which is correct behaviour, but not useful).
+# 5. Repo -> project. Optional when exactly one project names the repo in repo_url; the
+#    webhook falls back to that. Needed when several do, or every delivery is dropped as
+#    "unmapped_repo".
 #    Document id is the repo full_name with "/" replaced by "__", lowercased.
 #      repos/{owner}__{repo}  ->  { project_id }
 

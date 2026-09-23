@@ -75,14 +75,14 @@ beforeEach(async () => {
   await store.seedTasks(pid, [makeTask('task_items_ui', { kind: 'frontend' }), makeTask('task_items_crud')]);
   await store.registerAgent(pid, {
     agent_id: AGENT_FE,
-    role_slug: 'frontend-builder',
+    role_slug: 'frontend',
     member_label: 'priya',
     initials: 'FE',
     harness: 'codex',
   });
   await store.registerAgent(pid, {
     agent_id: AGENT_BE,
-    role_slug: 'backend-builder',
+    role_slug: 'backend',
     member_label: 'sibhi',
     initials: 'BE',
     harness: 'claude-code',
@@ -103,6 +103,23 @@ test('a live agent keeps its claim', async () => {
   assert.equal(r.kept.length, 1);
   assert.match(r.kept[0]!.reason, /within/, 'and the reason must say why it was kept');
   assert.equal(await store.claimOwner(pid, 'task_items_ui'), AGENT_FE);
+});
+
+test('a fresh claim is not reaped because the last heartbeat is old', async () => {
+  await store.heartbeat(pid, AGENT_FE, 'connected', null, null);
+  clock.advance(CLAIM_TIMEOUT_MS + 5 * 60_000); // twenty minutes of silence since connect
+  const claim = await store.claimTask(pid, 'task_items_ui', AGENT_FE);
+  assert.equal(claim.ok, true);
+
+  clock.advance(60_000); // the claim is one minute old
+  const r = await reapProject(db, store, pid, log, { now, claim_timeout_ms: CLAIM_TIMEOUT_MS });
+  assert.equal(r.released.length, 0, 'a claim taken a minute ago must survive the sweep');
+  assert.equal(await store.claimOwner(pid, 'task_items_ui'), AGENT_FE);
+
+  // Control: the same claim IS reaped once it, too, is past the timeout.
+  clock.advance(CLAIM_TIMEOUT_MS);
+  const later = await reapProject(db, store, pid, log, { now, claim_timeout_ms: CLAIM_TIMEOUT_MS });
+  assert.equal(later.released.length, 1);
 });
 
 test('F11 a dead agent loses its claim once past claim_timeout', async () => {

@@ -40,7 +40,7 @@ const directory = createFirestoreDirectory({ db, log });
 
 await fs.mkdir(ROOT, { recursive: true });
 await git(['init', '-q'], ROOT);
-await git(['remote', 'add', 'origin', 'https://github.com/Sibhimanyu/inventory-tracker.git'], ROOT);
+await git(['remote', 'add', 'origin', 'https://github.com/flotilla-test/scratch.git'], ROOT);
 
 const created = await newProject({
   root: ROOT, name: `Agent Run ${STAMP}`, directory,

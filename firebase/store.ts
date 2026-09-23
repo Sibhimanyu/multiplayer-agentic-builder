@@ -1110,7 +1110,7 @@ export class FirestoreStore implements CoordinationStore {
     // as before. `flotilla new` always writes the policy. The gap that leaves -- a project created
     // by some other path is unenforced -- is real, and is logged rather than left silent.
     const agentDoc = await this.agentsRef(pid).doc(agent_id).get();
-    const role_slug = (agentDoc.get('role_slug') as string) ?? 'client';
+    const role_slug = (agentDoc.get('role_slug') as string) ?? 'user';
     const policy = await this.db.collection('projects').doc(pid).collection('roles').doc(role_slug).get();
     if (policy.exists) {
       // Outside the transaction and before it, deliberately: a role refusal is a permanent

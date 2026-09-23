@@ -13,12 +13,12 @@
 // a collection-group rule permitting exactly that query and no wider one.
 
 import type { FirebaseApp } from 'firebase/app';
+import { boardDb } from './db';
 import {
   collection,
   collectionGroup,
   getDoc,
   getDocs,
-  getFirestore,
   query,
   where,
   type Firestore,
@@ -39,7 +39,7 @@ export type ProjectSummary = ProjectRecord & {
 export class BrowserDirectory {
   private readonly db: Firestore;
   constructor(app: FirebaseApp) {
-    this.db = getFirestore(app);
+    this.db = boardDb(app);
   }
 
   /**
@@ -86,13 +86,13 @@ export class BrowserDirectory {
         repo_url: (p.get('repo_url') as string) ?? '',
         created_at: (p.get('created_at') as string) ?? '',
         created_by: (p.get('created_by') as string) ?? '',
-        role: (m.get('role') as RoleSlug) ?? 'client',
+        role: (m.get('role') as RoleSlug) ?? 'user',
         rollup: (p.get('rollup') as ProjectRollup) ?? {},
         agents_live,
         members: roster.docs
           .map((d) => ({
             uid: (d.get('uid') as string) ?? d.id,
-            role: (d.get('role') as RoleSlug) ?? 'client',
+            role: (d.get('role') as RoleSlug) ?? 'user',
             label: (d.get('label') as string) ?? d.id,
             revoked: d.get('revoked') === true,
             added_at: (d.get('added_at') as string) ?? '',

@@ -66,7 +66,7 @@ try {
   console.log('F1  owner creates the project and connects the repo');
   await fs.mkdir(ROOT, { recursive: true });
   await git(['init', '-q'], ROOT);
-  await git(['remote', 'add', 'origin', 'https://github.com/Sibhimanyu/inventory-tracker.git'], ROOT);
+  await git(['remote', 'add', 'origin', 'https://github.com/flotilla-test/scratch.git'], ROOT);
 
   const created = await newProject({
     root: ROOT, name: NAME, directory, owner_uid: OWNER, owner_label: 'sibhi', log,
@@ -76,7 +76,7 @@ try {
   // THE ARTIFACT, read back through a different operation than the one that wrote it.
   const rec = await directory.getProject(project_id);
   check(rec?.project_id === project_id, `the project exists in Firestore (${project_id})`);
-  check(rec?.repo_url === 'Sibhimanyu/inventory-tracker', `the repo is CONNECTED, detected from origin (${rec?.repo_url})`);
+  check(rec?.repo_url === 'flotilla-test/scratch', `the repo is CONNECTED, detected from origin (${rec?.repo_url})`);
 
   // "Connects the repo" has to mean more than a string on a document: the scaffold that makes
   // the repo usable by an agent must be on disk.

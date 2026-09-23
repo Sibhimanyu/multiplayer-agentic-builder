@@ -126,7 +126,7 @@ export class ReadClient {
         project_id: pid,
         project_name: String(p.project_name ?? pid),
         repo_url: String(p.repo_url ?? ''),
-        role: (m.role as RoleSlug) ?? 'client',
+        role: (m.role as RoleSlug) ?? 'user',
       });
     }
     return out.sort((a, b) => a.project_id.localeCompare(b.project_id));
@@ -142,7 +142,7 @@ export class ReadClient {
         const id = d.name.split('/').pop() ?? '';
         return {
           uid: String(m.uid ?? id),
-          role: (m.role as RoleSlug) ?? 'client',
+          role: (m.role as RoleSlug) ?? 'user',
           label: String(m.label ?? id),
           revoked: m.revoked === true,
         };

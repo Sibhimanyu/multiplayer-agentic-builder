@@ -23,6 +23,8 @@ export const COLUMNS: { status: TaskStatus; label: string }[] = [
 ];
 
 export type TaskKind = 'frontend' | 'backend' | 'qa' | 'docs' | 'devops';
+/** The same list as a value, for the kind picker. Mirrors shared/store/tasks.ts. */
+export const TASK_KINDS: readonly TaskKind[] = ['frontend', 'backend', 'qa', 'docs', 'devops'];
 export type AgentStatus =
   | 'connected' | 'idle' | 'working' | 'blocked' | 'reviewing' | 'offline' | 'revoked';
 

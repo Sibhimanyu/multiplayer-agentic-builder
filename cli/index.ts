@@ -17,8 +17,11 @@
 //   2  not connected yet
 
 import fs from 'node:fs/promises';
+import nodeFs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { spawn } from 'node:child_process';
 
 import {
   LAYOUT,
@@ -32,9 +35,14 @@ import {
 } from './agentic.ts';
 import { appendOutbox, drain, isConnected, readCursor, type OutboxRecord } from './outbox.ts';
 import { ApiClient, connectWithInvite, type WhoAmI } from './client.ts';
-import { materialise, publishToBlackboard } from './blackboard.ts';
+import { git, materialise, publishToBlackboard } from './blackboard.ts';
+import { serve, currentTask } from './mcp.ts';
+import { ShipError, branchFor, classifyChanges, parseStatus, scopeForTask, shipScope, shouldCompleteOnShip, openPr, scopeToAcquire } from './ship.ts';
+import { openBrowser } from './browser.ts';
+import { ensureIgnored } from './gitignore.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
 import { LAYER_OF, TASK_KINDS, type Event, type EventKind, type TaskKind } from '../shared/store/types.ts';
+import { ROLE_SLUGS, roleFor } from '../shared/store/directory.ts';
 import type { Logger } from '../shared/log.ts';
 
 /**
@@ -64,18 +72,36 @@ interface Config {
   root: string;
   api_base: string;
   repo: string;
+  /** The hosted board, or '' when this install has no project configured yet. */
+  board: string;
 }
 
 async function loadConfig(root: string): Promise<Config> {
-  // Backend URL comes from the environment, never from .agentic/ — putting it there would let
-  // the agent see which platform it is on and break the byte-identical tree (B2).
-  const api_base = process.env.BUILDER_API_URL ?? '';
+  // NEVER FROM .agentic/ -- putting it there would let the agent see which platform it is on and
+  // break the byte-identical tree (B2). That constraint is about the AGENT's tree, though, and it
+  // was being honoured by reading an environment variable that nothing on earth sets: a user who
+  // installed from the curl one-liner and ran `flotilla status` got "offline" and no reason.
+  //
+  // ~/.flotilla/config.json is the install's own config, written by `flotilla init` and by
+  // `login`. It is not the agent's tree, so deriving the URL from it keeps B2 intact. The env
+  // var still wins, for pointing a machine at an emulator or a second project.
+  let api_base = process.env.BUILDER_API_URL ?? '';
+  let board = '';
+  // Both URLs derive from the same config read, so they cannot end up pointing at two projects.
+  try {
+    const { loadConfig: installConfig, apiUrl, boardUrl } = await import('./config.ts');
+    const installed = await installConfig();
+    if (!api_base) api_base = apiUrl(installed);
+    board = boardUrl(installed);
+  } catch {
+    // Not configured yet. The commands that need it report that themselves, with the fix.
+  }
   let repo = process.env.BUILDER_REPO ?? '';
   if (!repo) {
     const raw = await fs.readFile(path.join(root, LAYOUT.project), 'utf8').catch(() => '');
     if (raw) repo = (JSON.parse(raw) as ProjectFile).repo_url ?? '';
   }
-  return { root, api_base, repo };
+  return { root, api_base, repo, board };
 }
 
 async function readToken(root: string): Promise<string> {
@@ -88,13 +114,14 @@ async function readToken(root: string): Promise<string> {
 async function cmdConnect(root: string, invite: string): Promise<number> {
   const cfg = await loadConfig(root);
   if (!cfg.api_base) {
-    log.warn('cli.flotilla_api_url_is', 'BUILDER_API_URL is not set; nothing to connect to');
+    log.warn('cli.not_configured', 'this install is not pointed at a project yet: run `flotilla init --project <firebase-project-id>`');
     return 1;
   }
 
   const res = await connectWithInvite(cfg.api_base, invite, detectHarness());
   // 0600: the token is the agent's identity for the whole session.
   await fs.writeFile(path.join(root, TOKEN_FILE), `${res.token}\n`, { mode: 0o600 });
+  const ignored = await ensureIgnored(root);
 
   const client = new ApiClient({ base_url: cfg.api_base, token: res.token, log });
   const me = await client.whoami();
@@ -114,8 +141,7 @@ async function cmdConnect(root: string, invite: string): Promise<number> {
 
   out(`connected as ${res.agent_id} (${res.role_slug}) to ${project.name}`);
   out(`wrote ${written.length} files: ${LAYOUT.agents_md} and ${LAYOUT.project.split('/')[0]}/`);
-  out('');
-  out('Add .agentic/ and .flotilla-token to .gitignore if they are not already there.');
+  if (ignored.length) out(`added to .gitignore: ${ignored.join(', ')}`);
   return 0;
 }
 
@@ -194,7 +220,7 @@ async function countPending(root: string): Promise<{ lines: number; spooled: num
   return { lines, spooled, cursor };
 }
 
-async function cmdClaim(root: string, task_id: string): Promise<number> {
+async function cmdClaim(root: string, task_id: string, args: string[] = []): Promise<number> {
   if (!(await isConnected(root))) {
     log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
     return 2;
@@ -216,8 +242,21 @@ async function cmdClaim(root: string, task_id: string): Promise<number> {
 
   // Scope is acquired AFTER the claim, and a conflict here means the claim must be given back.
   // Holding a task you cannot legally edit is worse than not holding it.
-  if (task && task.file_scope.length > 0) {
-    const scope = await client.acquireScope(task_id, task.file_scope);
+  const want = scopeToAcquire(task?.file_scope ?? [], args);
+  if (want.ignored.length > 0) out(`--scope ignored: ${task_id} declares its own scope`);
+  if (task && want.globs.length > 0) {
+    let scope;
+    try {
+      scope = await client.acquireScope(task_id, want.globs);
+    } catch (err) {
+      // A refused scope (role_denied) used to crash here with the claim still held, so the
+      // ticket sat under an agent that could never lock its files. Give it back, say why.
+      if (!(err instanceof StoreAuthError)) throw err;
+      await client.releaseTask(task_id);
+      out(`cannot take ${task_id}: ${err.message.replace(/^POST \/scope: /, '')}`);
+      out('claim released. Role scopes are the fence: ask the owner, or pick another task');
+      return 1;
+    }
     if (!scope.ok) {
       out(`cannot take ${task_id}: file scope conflicts`);
       for (const c of scope.conflicts) {
@@ -236,8 +275,37 @@ async function cmdClaim(root: string, task_id: string): Promise<number> {
     log,
   );
   out(`claimed ${task_id}`);
-  if (task) out(`scope: ${task.file_scope.join(', ') || '(none declared)'}`);
+  if (task && want.globs.length > 0) out(`scope: ${want.globs.join(', ')}${want.from === 'flag' ? '  (from --scope)' : ''}`);
+  else if (task) {
+    out('scope: (none declared) — nothing is locked, so `flotilla ship` will refuse this task');
+    out(`  name the files it touches: flotilla claim ${task_id} --scope 'server/**'`);
+  }
   out(`see ${LAYOUT.current_task}`);
+  return 0;
+}
+
+/**
+ * `flotilla release <task_id>` — give a ticket back, and its file lock with it.
+ *
+ * The API always had /release; the CLI never called it outside a failed claim. So a ticket you
+ * decided not to do stayed yours until the reaper noticed you had gone quiet -- which, for a CLI
+ * still running `start`, is never.
+ */
+async function cmdRelease(root: string, task_id: string): Promise<number> {
+  if (!(await isConnected(root))) {
+    log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
+    return 2;
+  }
+  const cfg = await loadConfig(root);
+  const client = new ApiClient({ base_url: cfg.api_base, token: await readToken(root), log });
+  const me = await client.whoami();
+  const snap = await client.readSnapshot();
+  const held = snap ? scopeForTask(snap.snapshot.locks, me.agent_id, task_id) : [];
+  await client.releaseTask(task_id);
+  // Only the lock held FOR THIS TASK. releaseScope drops the agent's one lock, so calling it
+  // unconditionally would free the files of a different task this agent is working on.
+  if (held.length > 0) await client.releaseScope();
+  out(`released ${task_id}${held.length > 0 ? ` and its lock on ${held.join(', ')}` : ''}`);
   return 0;
 }
 
@@ -281,6 +349,9 @@ async function cmdStart(root: string): Promise<number> {
     log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
     return 2;
   }
+  // Also here, so repos connected before this existed are fixed on their next session.
+  const ignored = await ensureIgnored(root);
+  if (ignored.length) out(`added to .gitignore: ${ignored.join(', ')}`);
   const cfg = await loadConfig(root);
   const token = await readToken(root);
   const client = new ApiClient({ base_url: cfg.api_base, token, log });
@@ -311,6 +382,40 @@ async function cmdStart(root: string): Promise<number> {
       if (r.published > 0 || r.duplicates > 0) {
         out(`published ${r.published}, deduped ${r.duplicates}, ${r.remaining} remaining`);
         offline = false;
+      }
+
+      // THE PROMISE, KEPT. AGENTS.md tells every agent "never run git — the bridge does both for
+      // you. A branch named above is pushed on your behalf." The agent's only way to say it is
+      // done is to append task_completed to the outbox, so that is the trigger.
+      //
+      // ON COMPLETION, NOT ON EVERY LOOP. This loop runs every 30s; shipping unconditionally
+      // would put a commit on the branch every half minute and turn the history into a
+      // keystroke log. Not on task_progress either: progress is a sentence, not a checkpoint.
+      //
+      // A FAILED SHIP DOES NOT STOP THE LOOP. The event is already published and the agent has
+      // moved on; the work is still in the tree, and `flotilla ship` retries it by hand. Killing
+      // the heartbeat over a push rejection would take the whole fleet's presence down with it.
+      if (r.completed.length > 0) {
+        for (const task_id of r.completed) {
+          try {
+            const { me, task, scope } = await shipContext(root, client);
+            const res = await shipScope({
+              root, branch: branchFor(me.role_slug, task.task_id), scope,
+              agent_id: me.agent_id, role_slug: me.role_slug,
+              task_id: task.task_id, task_title: task.title,
+            }, log);
+            if (res.unchanged) out(`${task_id} completed — nothing new to push`);
+            else out(`${task_id} completed — pushed ${res.files.length} file(s) to ${res.branch}`);
+            if (cfg.repo && me.permissions.open_prs && task.status !== 'pr_open' && task.status !== 'merged') {
+              const pr = await openPr(root, cfg.repo, res.branch, task.title, task.task_id);
+              out(pr.url ? `${task_id} PR: ${pr.url}` : `${task_id} PR not opened (${pr.opened ? "" : pr.reason})`);
+            }
+          } catch (err) {
+            log.warn('cli.ship_on_complete_failed', 'could not ship the completed task; run `flotilla ship` to retry', {
+              task_id, error: (err as Error).message,
+            });
+          }
+        }
       }
     } catch (err) {
       if (err instanceof StoreAuthError) {
@@ -464,9 +569,214 @@ function detectHarness(): string {
   return 'manual';
 }
 
+/**
+ * Read .agentic/project.json, NORMALISED.
+ *
+ * `flotilla new` writes {project_id, project_name, repo_url} and `connect` writes
+ * {project_id, name, repo_url, brief, protocol_version}. A cast pretended those were the same
+ * object, so `claim` in a `new`-created project reached sanitizeText with brief=undefined and
+ * died on "input is not iterable" -- AFTER the claim had already landed on the server, which is
+ * the worst place to fail. Every field is defaulted here rather than asserted.
+ */
 async function projectFile(root: string): Promise<ProjectFile> {
   const raw = await fs.readFile(path.join(root, LAYOUT.project), 'utf8');
-  return JSON.parse(raw) as ProjectFile;
+  const j = JSON.parse(raw) as Partial<ProjectFile> & { project_name?: string };
+  return {
+    project_id: j.project_id ?? '',
+    name: j.name ?? j.project_name ?? j.project_id ?? '',
+    repo_url: j.repo_url ?? '',
+    brief: j.brief ?? '',
+    protocol_version: j.protocol_version ?? '0.2',
+  };
+}
+
+
+/**
+ * `flotilla mcp` — the MCP server, on stdio.
+ *
+ * Not meant to be typed by a human: `flotilla work` wires it into the agent. It is a real
+ * command rather than a hidden flag because `claude --mcp-config` has to name something it can
+ * spawn, and a documented command is easier to debug than a private one.
+ *
+ * NOTHING MAY WRITE TO STDOUT HERE except the protocol. `out()` and the logger both go to stdout
+ * elsewhere in this file; a single stray line corrupts the JSON-RPC stream and the server
+ * disappears from Claude Code with no error anywhere.
+ */
+async function cmdMcp(root: string): Promise<number> {
+  if (!(await isConnected(root))) {
+    // stderr, deliberately. stdout belongs to the protocol.
+    process.stderr.write('flotilla mcp: not connected; run `flotilla connect <invite>` first\n');
+    return 2;
+  }
+  const cfg = await loadConfig(root);
+  const token = await readToken(root);
+  const client = new ApiClient({ base_url: cfg.api_base, token, log });
+
+  await serve({
+    client,
+    root,
+    log,
+    // The API's own answer, not a table duplicated here -- the same rule rolePackFor follows.
+    allowedScope: async () => rolePackFor(await client.whoami()).may_edit,
+  });
+  return 0;
+}
+
+/**
+ * `flotilla work` — open the agent you already have, with live fleet context.
+ *
+ * This is the whole point of the design: Flotilla does not host the conversation, it FURNISHES
+ * one. Claude Code keeps its own UX -- tool display, permission prompts, diff review -- and
+ * gains four tools that answer what it could not know: your task, your scope, who holds what
+ * right now, and how to report back.
+ *
+ * The agent runs on this machine under this user's own subscription. Flotilla never holds a
+ * model key; it spawns a binary the user already installed.
+ */
+async function cmdWork(root: string, rest: string[]): Promise<number> {
+  if (!(await isConnected(root))) {
+    log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
+    return 2;
+  }
+  const i = rest.indexOf('--agent');
+  const want = i > -1 ? rest[i + 1] : undefined;
+  const agent = want ?? (whichAgent('claude') ? 'claude' : whichAgent('codex') ? 'codex' : undefined);
+  if (!agent) {
+    log.warn('cli.no_agent_found', 'no coding agent found on PATH. Install Claude Code or Codex, or pass --agent <name>.');
+    return 1;
+  }
+  if (!whichAgent(agent)) {
+    log.warn('cli.agent_not_on_path', `${agent} is not on your PATH.`);
+    return 1;
+  }
+
+  // A per-invocation config file rather than `claude mcp add`: adding a global server would
+  // outlive this repo and follow the user into unrelated projects. This one is scoped to the
+  // run and thrown away with the temp directory.
+  const configPath = await writeMcpConfig(root);
+
+  const opening = [
+    'You are working inside a Flotilla project, where several coding agents share one repository.',
+    '',
+    'Before you edit anything, call `my_assignment` to learn your task and which file globs your',
+    'role may write, and `fleet_status` to see which files other agents currently hold. Never edit',
+    'a glob another agent holds. Use `report` for decisions and blockers a teammate would want.',
+    '',
+    'Start by telling me my assignment and what the rest of the fleet is doing.',
+  ].join('\n');
+
+  // THE PROMPT GOES FIRST. `--mcp-config` is variadic (`<configs...>`), so anything after it is
+  // read as another config file: putting the prompt there made claude try to open the prompt
+  // TEXT as a path and die with ENAMETOOLONG. Found by running it, not by reading the help.
+  const args = agent === 'claude'
+    ? [opening, '--mcp-config', configPath]
+    : [opening, '--config', `mcp_servers.flotilla.command=${process.execPath}`];
+
+  if (rest.includes('--print')) {
+    out(`${agent} ${args.map((a) => (a.includes(' ') ? JSON.stringify(a) : a)).join(' ')}`);
+    out(`\nmcp config: ${configPath}`);
+    return 0;
+  }
+
+  out(`flotilla work — launching ${agent} with live fleet context`);
+  const child = spawn(agent, args, { stdio: 'inherit' });
+  return await new Promise<number>((resolve) => {
+    child.on('error', (err) => {
+      log.warn('cli.agent_spawn_failed', `could not start ${agent}`, { error: err.message });
+      resolve(1);
+    });
+    child.on('exit', (code) => resolve(code ?? 0));
+  });
+}
+
+/** Is this agent binary on PATH? Synchronous and cheap; used before spawning. */
+function whichAgent(bin: string): boolean {
+  const dirs = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
+  return dirs.some((d) => {
+    try {
+      nodeFs.accessSync(path.join(d, bin), nodeFs.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * Write the per-invocation MCP config both `work` and `chat` hand to the agent.
+ *
+ * ONE WRITER, because two copies of this object would eventually give the terminal and the
+ * browser different tools, and the whole point of phase 2 is that they share an engine.
+ *
+ * Per-invocation rather than `claude mcp add`: a globally registered server would follow the
+ * user into unrelated repositories.
+ */
+async function writeMcpConfig(root: string): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'flotilla-mcp-'));
+  const configPath = path.join(dir, 'mcp.json');
+  const self = process.argv[1] ?? 'flotilla';
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify({
+      mcpServers: {
+        flotilla: { command: process.execPath, args: [self, 'mcp'], cwd: root },
+      },
+    }, null, 2)}\n`,
+  );
+  return configPath;
+}
+
+/**
+ * `flotilla chat` — the same conversation, in a browser.
+ *
+ * FOR THE PEOPLE WHO WILL NOT OPEN A TERMINAL. `work` hands the terminal to Claude Code, which
+ * serves developers and nobody else; a ui designer holds a real file scope in this product and
+ * cannot use it. This serves the same four tools over loopback with a fleet rail beside the
+ * conversation.
+ *
+ * The agent still runs here, under this user's own subscription. Flotilla holds no model key.
+ */
+async function cmdChat(root: string, rest: string[]): Promise<number> {
+  if (!(await isConnected(root))) {
+    log.warn('cli.not_connected_run_flotilla', 'not connected: run \`flotilla connect <invite>\` first');
+    return 2;
+  }
+  const i = rest.indexOf('--agent');
+  const want = i > -1 ? rest[i + 1] : undefined;
+  const agent = want ?? (whichAgent('claude') ? 'claude' : whichAgent('codex') ? 'codex' : undefined);
+  if (!agent || !whichAgent(agent)) {
+    log.warn('cli.no_agent_found', 'no coding agent found on PATH. Install Claude Code or Codex.');
+    return 1;
+  }
+
+  const cfg = await loadConfig(root);
+  const client = new ApiClient({ base_url: cfg.api_base, token: await readToken(root), log });
+  const pi = rest.indexOf('--port');
+  const port = pi > -1 ? Number(rest[pi + 1]) || 0 : 0;
+
+  const { serveChat } = await import('./chat.ts');
+  const { url, close } = await serveChat({
+    client, root, log,
+    mcpConfig: await writeMcpConfig(root),
+    agent,
+    allowedScope: async () => rolePackFor(await client.whoami()).may_edit,
+    // So the chat is not a dead end. Derived from the project id like every other URL here.
+    ...(cfg.board ? { boardUrl: cfg.board } : {}),
+  }, port);
+
+  out(`flotilla chat — ${agent}, on this machine`);
+  out('');
+  out(`  ${url}`);
+  out('');
+  out('The link carries a one-time secret: this endpoint can run your agent, so anything');
+  out('without it is refused. Leave this terminal open; ctrl-c stops the server.');
+  if (!rest.includes('--no-browser')) void openBrowser(url);
+
+  return await new Promise<number>((resolve) => {
+    const stop = () => { close(); resolve(0); };
+    process.on('SIGINT', stop);
+    process.on('SIGTERM', stop);
+  });
 }
 
 /**
@@ -476,7 +786,7 @@ async function projectFile(root: string): Promise<ProjectFile> {
  * from a table duplicated here. A local table would eventually disagree with the server, and
  * AGENTS.md would tell the agent it can do something the API refuses.
  */
-function rolePackFor(me: WhoAmI): RolePack {
+export function rolePackFor(me: WhoAmI): RolePack {
   const SCOPES: Record<string, { edit: string[]; not: string[]; prefix: string; title: string; what: string }> = {
     architect: {
       edit: ['contracts/**', 'schema/**', 'decisions/**'],
@@ -514,15 +824,57 @@ function rolePackFor(me: WhoAmI): RolePack {
       what: 'You own the written documentation for this project.',
     },
   };
-  const s = SCOPES[me.role_slug] ?? {
+  // THE SCOPE COMES FROM THE SHARED ROLE TABLE, NOT FROM SCOPES ABOVE.
+  //
+  // SCOPES was keyed on slugs that no longer exist -- 'backend-builder' where the real slug is
+  // 'backend', and no 'owner' at all -- so every role except architect fell through to the
+  // fail-closed default and was told, in AGENTS.md and in my_assignment, that it may write
+  // NOTHING. An owner whose file_scope is ['**'] read "(nothing — read only)".
+  //
+  // The comment on this function already said scope must not come from a table duplicated here.
+  // It was duplicated anyway, and it drifted. Prose still comes from SCOPES, because a title and
+  // a sentence are not facts the server owns; the globs are, so they come from roleFor().
+  const shared = roleFor(me.role_slug);
+  const prose = SCOPES[me.role_slug] ?? {
     edit: [],
     not: ['**'],
     prefix: `agent/${me.role_slug || 'unknown'}/`,
     title: me.role_slug || 'Unknown role',
-    // Fail closed and say so, rather than inventing a scope for a role nobody defined.
-    what:
-      'This role has no file scope defined. Do not edit anything; ask the project owner to ' +
-      'assign a known role.',
+    what: `You are acting as ${me.role_slug || 'an unknown role'} on this project.`,
+  };
+  // AND `not` IS DERIVED TOO, for the same reason `edit` is.
+  //
+  // The fix above took `edit` from roleFor() and left `not` coming from SCOPES, which has no
+  // `owner` key -- so an owner fell through to the default and AGENTS.md rendered
+  //
+  //     You may edit:      **
+  //     You may not edit:  **
+  //
+  // on adjacent lines. A live agent read that, called it "a template artifact", and decided for
+  // itself which line to believe. It guessed right. A contract an agent has to guess at is not a
+  // contract, and the next one guesses the other way.
+  //
+  // The deny list is now the other roles' scopes minus this role's own, so it cannot contradict
+  // the allow list by construction: a glob this role may edit is removed from it. A role that may
+  // edit everything forbids nothing, and the renderer drops the line rather than printing an
+  // empty one.
+  const mine = new Set(shared.file_scope);
+  const others = ROLE_SLUGS
+    .filter((r) => r !== me.role_slug)
+    .flatMap((r) => roleFor(r).file_scope)
+    .filter((g) => !mine.has(g))
+    // `**` IS NOT A DIRECTORY ANY ROLE OWNS, it is the absence of a scope -- the owner's. Left
+    // in, it made the first version of this fix reintroduce the same contradiction one step
+    // further out: frontend rendered "You may edit: client/** / You may not edit: **, ...",
+    // which denies the line above it. Caught by rendering the file rather than by the
+    // intersection test, which `**` passes because it is genuinely not in `client/**`.
+    .filter((g) => g !== '**');
+  const s = {
+    ...prose,
+    edit: shared.file_scope,
+    // Fail closed only when the SERVER says the role has no scope, not when this file has no
+    // prose for it: no scope means nothing is writable, which is a real deny-everything.
+    not: shared.file_scope.length === 0 ? ['**'] : mine.has('**') ? [] : [...new Set(others)],
   };
   return {
     role_slug: me.role_slug,
@@ -539,6 +891,131 @@ function rolePackFor(me: WhoAmI): RolePack {
 
 // ---- entry ------------------------------------------------------------------------------
 
+/**
+ * The version this binary reports.
+ *
+ * INJECTED BY THE BUILD from packaging/package.json (scripts/build-cli.mjs), so a published
+ * binary cannot disagree with the tarball it shipped in. Running from source has no define, and
+ * says so rather than claiming a release number it is not.
+ */
+declare const __FLOTILLA_VERSION__: string | undefined;
+const CLI_VERSION = typeof __FLOTILLA_VERSION__ === 'string' ? __FLOTILLA_VERSION__ : '0.1.0-dev';
+
+/**
+ * Everything `flotilla ship` needs, read from the board rather than from a flag.
+ *
+ * The task and the scope are facts the server owns. Asking the human to name them on the
+ * command line would let them name a task they do not hold and a glob they never acquired, and
+ * the branch would then claim work under an assignment that was never theirs.
+ */
+async function shipContext(root: string, client: ApiClient) {
+  const me = await client.whoami();
+  const read = await client.readSnapshot();
+  if (!read) throw new ShipError('the board returned no snapshot', 'you may be offline');
+  const task = currentTask(read.snapshot, me.agent_id);
+  if (!task) {
+    throw new ShipError(
+      'no task is claimed on this machine',
+      'run `flotilla claim <task_id>` first — a branch is named after a task',
+    );
+  }
+  const scope = scopeForTask(read.snapshot.locks, me.agent_id, task.task_id);
+  if (scope.length === 0) {
+    throw new ShipError(
+      `task ${task.task_id} is claimed but holds no file scope`,
+      'nothing can be committed under a lock that was never acquired',
+    );
+  }
+  return { me, task, scope };
+}
+
+async function cmdShip(root: string, rest: string[]): Promise<number> {
+  if (!(await isConnected(root))) {
+    log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
+    return 2;
+  }
+  const cfg = await loadConfig(root);
+  const client = new ApiClient({ base_url: cfg.api_base, token: await readToken(root), log });
+
+  let ctx;
+  try {
+    ctx = await shipContext(root, client);
+  } catch (err) {
+    if (err instanceof ShipError) {
+      log.warn('cli.ship_not_ready', err.message);
+      return 1;
+    }
+    throw err;
+  }
+  const { me, task, scope } = ctx;
+  const branch = branchFor(me.role_slug, task.task_id);
+
+  // --dry-run BEFORE anything is pushed, because the first question anyone asks of a command
+  // that commits on their behalf is "what exactly are you about to commit".
+  if (rest.includes('--dry-run')) {
+    const status = await git(['status', '--porcelain', '-z', '-uall'], root);
+    // The SAME classifier shipScope uses. A preview computed a second way is a preview that
+    // will eventually disagree with the commit it claims to describe.
+    const { files, skipped } = classifyChanges(parseStatus(status.stdout), scope);
+    out(`branch:  ${branch}`);
+    out(`scope:   ${scope.join(', ')}`);
+    out('');
+    out(files.length > 0 ? 'would commit:' : 'would commit: (nothing in scope has changed)');
+    for (const f of files) out(`  ${f}`);
+    if (skipped.length > 0) {
+      out('');
+      out('would NOT commit — outside your scope:');
+      for (const f of skipped) out(`  ${f}`);
+    }
+    return 0;
+  }
+
+  try {
+    const r = await shipScope({
+      root, branch, scope,
+      agent_id: me.agent_id, role_slug: me.role_slug,
+      task_id: task.task_id, task_title: task.title,
+    }, log);
+
+    if (r.unchanged) {
+      out(`nothing to ship — ${branch} already holds your in-scope work`);
+    } else {
+      out(`pushed ${branch}`);
+      out(`  ${r.commit_sha.slice(0, 12)}  ${r.files.length} file${r.files.length === 1 ? '' : 's'}`);
+      for (const f of r.files) out(`    ${f}`);
+    }
+    if (shouldCompleteOnShip(task.status, rest)) {
+      // Through the outbox, the same way an agent says it: one path to "complete", not two.
+      // Drained now so the board moves without `start` running; if offline it stays queued
+      // and the next `start` publishes it (and its ship-on-complete finds nothing new).
+      await appendOutbox(root, { kind: 'task_completed', body: { task_id: task.task_id } }, log);
+      const d = await drain(root, makePublisher(client, root, cfg, log), log, { onOffline: () => {} });
+      out(d.published > 0 ? `marked ${task.task_id} complete — needs review` : `queued ${task.task_id} complete — \`flotilla start\` will publish it`);
+    }
+    // Step 6 on the board. Opened here; RECORDED by the webhook when GitHub reports it, so the
+    // card moves on GitHub's word, not the CLI's. A checkpoint (--wip) opens nothing.
+    const wantsPr = !rest.includes('--wip') && task.status !== 'pr_open' && task.status !== 'merged';
+    if (cfg.repo && wantsPr && me.permissions.open_prs) {
+      const pr = await openPr(root, cfg.repo, branch, task.title, task.task_id);
+      if (pr.opened) out(`opened ${pr.url}`);
+      else if (pr.url) out(`PR already open: ${pr.url}`);
+      else {
+        out(`could not open the PR (${pr.reason}) — open it here:`);
+        out(`  https://github.com/${cfg.repo}/compare/${branch}?expand=1`);
+      }
+    } else if (cfg.repo && !r.unchanged) {
+      out(`  open a PR: https://github.com/${cfg.repo}/compare/${branch}?expand=1`);
+    }
+    return 0;
+  } catch (err) {
+    if (err instanceof ShipError) {
+      log.warn('cli.ship_failed', err.message);
+      return 1;
+    }
+    throw err;
+  }
+}
+
 const USAGE = `flotilla — agentic coordination CLI
 
   flotilla init --project <id>  point this install at a Firebase project
@@ -550,14 +1027,31 @@ const USAGE = `flotilla — agentic coordination CLI
   flotilla new <name>           create a project here, connect this repo, write .agentic/
   flotilla ls                   projects you are a member of
   flotilla members <project_id> the roster
+  flotilla invite <role>        mint a single-use invite code for a teammate
+                                --label "Their Name"
 
+  flotilla role <role> --scope <globs>
+                                redraw what a role may edit in this project (owner only)
   flotilla connect <invite>     write AGENTS.md + .agentic/, store the agent token
   flotilla status               what the board thinks is happening
-  flotilla task <title> --kind <${TASK_KINDS.join('|')}>
+  flotilla task <title> --kind <${TASK_KINDS.join('|')}> --scope "<globs>"
                                 create a task on the board; --id overrides the derived id
   flotilla claim <task_id>      atomic claim, then acquire the declared file scope
+                                --scope <glob> names it for a ticket that declared none
+  flotilla release <task_id>    give a ticket back, and its file lock with it
   flotilla report "<message>"   queue one progress line in the outbox
+  flotilla ship                 commit your in-scope changes to agent/<role>/<task> and push
+                                marks the task complete and opens its PR (needs gh)
+                                --wip pushes a checkpoint and does neither
+                                --dry-run lists what would be committed and stops
   flotilla start                drain the outbox, deliver the inbox, heartbeat
+                                ships automatically when the agent reports the task complete
+
+  flotilla work                 open your agent with live fleet context, in this terminal
+                                --agent <claude|codex>, --print to show the command only
+  flotilla chat                 the same conversation in a browser, with a fleet rail
+                                --port <n>, --no-browser, --agent <claude|codex>
+  flotilla mcp                  speak MCP on stdio; work wires this up for you
 
 Environment:
   FLOTILLA_UID         your member id; defaults to uid_$USER
@@ -586,7 +1080,15 @@ export interface ProjectCommands {
    * deployed function with the USER's token, not an agent token, because creating work is a
    * triage act and triage is a member capability. See docs/decisions/0005-work-appears-by-triage.md.
    */
-  task: (root: string, title: string, kind: TaskKind, task_id?: string) => Promise<number>;
+  task: (root: string, title: string, kind: TaskKind, task_id?: string, file_scope?: string[]) => Promise<number>;
+  /**
+   * `flotilla invite`. The one command that turns a one-person project into a team, and the
+   * reason membership was unreachable until now: the invite document `connect` consumes was
+   * read by the API and written by nothing.
+   */
+  invite: (root: string, role_slug: string, label?: string) => Promise<number>;
+  /** `flotilla role <slug> --scope <globs>`. Redraws a role's file fence for this project. Owner only. */
+  roleScope: (root: string, role_slug: string, globs: string[]) => Promise<number>;
 }
 
 let projectCommands: ProjectCommands | null = null;
@@ -678,7 +1180,7 @@ export async function main(argv: string[]): Promise<number> {
         return i > -1 ? rest[i + 1] : undefined;
       };
       const flagged = new Set<number>();
-      for (const name of ['--kind', '--id']) {
+      for (const name of ['--kind', '--id', '--scope']) {
         const i = rest.indexOf(name);
         if (i > -1) { flagged.add(i); flagged.add(i + 1); }
       }
@@ -686,7 +1188,7 @@ export async function main(argv: string[]): Promise<number> {
       const kind = flag('--kind');
 
       if (!title || !kind) {
-        log.warn('cli.usage_flotilla_task', `usage: flotilla task "<title>" --kind <${TASK_KINDS.join('|')}> [--id <task_id>]`);
+        log.warn('cli.usage_flotilla_task', `usage: flotilla task "<title>" --kind <${TASK_KINDS.join('|')}> [--scope "glob glob"] [--id <task_id>]`);
         return 1;
       }
       if (!(TASK_KINDS as readonly string[]).includes(kind)) {
@@ -696,7 +1198,16 @@ export async function main(argv: string[]): Promise<number> {
         return 1;
       }
       if (!projectCommands) return needsBackend();
-      return projectCommands.task(root, title, kind as TaskKind, flag('--id'));
+      // A TASK WITH NO SCOPE LOCKS NOTHING, which makes the collision prevention this product
+      // exists for inert. The board's form has always had the field; the CLI did not, so every
+      // task created from a terminal was unlockable. Comma or whitespace separated, because a
+      // person typing two globs will use either.
+      const scope = (flag('--scope') ?? '').split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+      if (scope.length === 0) {
+        log.warn('cli.task_without_scope',
+          'no --scope given: this task will lock no files, so two agents can edit the same code');
+      }
+      return projectCommands.task(root, title, kind as TaskKind, flag('--id'), scope);
     }
     case 'status':
       return cmdStatus(root);
@@ -706,7 +1217,15 @@ export async function main(argv: string[]): Promise<number> {
         log.warn('cli.usage_flotilla_claim_task', 'usage: flotilla claim <task_id>');
         return 1;
       }
-      return cmdClaim(root, task);
+      return cmdClaim(root, task, rest.slice(1));
+    }
+    case 'release': {
+      const task = rest[0];
+      if (!task) {
+        log.warn('cli.usage_flotilla_release', 'usage: flotilla release <task_id>');
+        return 1;
+      }
+      return cmdRelease(root, task);
     }
     case 'report': {
       const message = rest.join(' ').trim();
@@ -716,8 +1235,45 @@ export async function main(argv: string[]): Promise<number> {
       }
       return cmdReport(root, message);
     }
+    case 'ship':
+      return cmdShip(root, rest);
     case 'start':
       return cmdStart(root);
+    case 'invite': {
+      const role = rest.find((a) => !a.startsWith('--'));
+      if (!role) {
+        log.warn('cli.usage_flotilla_invite', `usage: flotilla invite <${ROLE_SLUGS.join('|')}> [--label "Name"]`);
+        return 1;
+      }
+      if (!projectCommands) return needsBackend();
+      const li = rest.indexOf('--label');
+      return projectCommands.invite(root, role, li > -1 ? rest[li + 1] : undefined);
+    }
+    case 'role': {
+      const role = rest.find((a) => !a.startsWith('--'));
+      const si = rest.indexOf('--scope');
+      const globs = si > -1 && rest[si + 1] ? rest[si + 1]!.split(',').map((g) => g.trim()).filter(Boolean) : [];
+      if (!role || globs.length === 0) {
+        log.warn('cli.usage_flotilla_role', `usage: flotilla role <${ROLE_SLUGS.join('|')}> --scope "server/**,test/**"`);
+        return 1;
+      }
+      if (!projectCommands) return needsBackend();
+      return projectCommands.roleScope(root, role, globs);
+    }
+    case 'chat':
+      return cmdChat(root, rest);
+    case 'mcp':
+      return cmdMcp(root);
+    case 'work':
+      return cmdWork(root, rest);
+    // `--version` fell through to `default`, which printed 'unknown command: --version'
+    // followed by the whole help text. The installer's own success line runs
+    // `flotilla --version`, so the last thing a new install said was the help screen with the
+    // word flotilla in front of it. Order 0074.
+    case '-v':
+    case '--version':
+      out(CLI_VERSION);
+      return 0;
     case undefined:
     case '-h':
     case '--help':

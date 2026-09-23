@@ -183,7 +183,7 @@ console.log('\n5. flotilla new, in a repo the stranger just made');
 const demo = path.join(SANDBOX, 'my-repo');
 await fs.mkdir(demo, { recursive: true });
 await run('git', ['init', '-q'], { cwd: demo, env });
-await run('git', ['remote', 'add', 'origin', 'https://github.com/Sibhimanyu/inventory-tracker.git'], { cwd: demo, env });
+await run('git', ['remote', 'add', 'origin', 'https://github.com/flotilla-test/scratch.git'], { cwd: demo, env });
 const NAME = `Stranger ${Date.now().toString(36)}`;
 const created = await run(bin, ['new', NAME], { cwd: demo, env: { ...env, FLOTILLA_UID: UID, BUILDER_ROOT: demo } });
 console.log(quote(created.out, 7));
@@ -217,7 +217,7 @@ const store = createFirestoreStore({ db, log, clock: systemClock, debounce_ms: 0
 try {
   const projDoc = await db.collection('projects').doc(PID).get();
   check(projDoc.exists, 'the PROJECT DOCUMENT exists in Firestore');
-  check(projDoc.get('repo_url') === 'Sibhimanyu/inventory-tracker', 'and records the repo from origin');
+  check(projDoc.get('repo_url') === 'flotilla-test/scratch', 'and records the repo from origin');
 
   // ---------------------------------------------------------------- 6. agent claims
   console.log('\n6. the agent appends claim_requested; the BRIDGE claims');
