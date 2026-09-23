@@ -56,6 +56,9 @@ export interface ReapOptions {
  * counter, and firing twenty at once would make them all contend and retry, turning a tidy
  * twenty writes into sixty.
  */
+/** Statuses whose work has left the machine. See the shipped-task note in reapProject. */
+const SHIPPED = new Set(['needs_review', 'pr_open', 'merged', 'done']);
+
 export async function reapProject(
   db: Firestore,
   store: FirestoreStore,
@@ -66,10 +69,12 @@ export async function reapProject(
   const timeout = opts.claim_timeout_ms ?? CLAIM_TIMEOUT_MS;
   const now = opts.now ?? (() => Date.now());
 
-  const [claimsSnap, agentsSnap] = await Promise.all([
+  const [claimsSnap, agentsSnap, tasksSnap] = await Promise.all([
     db.collection('projects').doc(project_id).collection('claims').get(),
     db.collection('projects').doc(project_id).collection('agents').get(),
+    db.collection('projects').doc(project_id).collection('tasks').get(),
   ]);
+  const statusOf = new Map(tasksSnap.docs.map((d) => [d.id, d.get('status') as string]));
 
   const heartbeats = new Map<string, number | null>();
   const revoked = new Set<string>();
@@ -85,6 +90,14 @@ export async function reapProject(
     const agent_id = claim.get('agent_id') as string;
     const claimed_at_ms = Date.parse((claim.get('claimed_at') as string) ?? '');
     const heartbeat = heartbeats.get(agent_id) ?? null;
+
+    // A SHIPPED TASK'S CLAIM IS NOT REAPED. Its work is out as a branch or a PR, and the card
+    // cannot go back to open, so releasing the claim only let a second agent claim it while the
+    // board -- refusing pr_open -> claimed -- still named the first. The claim ends with the merge.
+    if (SHIPPED.has(statusOf.get(task_id) ?? '')) {
+      result.kept.push({ task_id, agent_id, reason: `task is ${statusOf.get(task_id)}; the claim ends with the merge` });
+      continue;
+    }
 
     // A revoked agent's claim goes immediately: the token is dead, the work is not resuming,
     // and waiting out the timeout just leaves the task parked.

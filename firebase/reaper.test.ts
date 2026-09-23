@@ -122,6 +122,23 @@ test('a fresh claim is not reaped because the last heartbeat is old', async () =
   assert.equal(later.released.length, 1);
 });
 
+test('a shipped task keeps its claim however long the agent is silent', async () => {
+  await store.heartbeat(pid, AGENT_FE, 'working', 'task_items_ui', null);
+  await store.claimTask(pid, 'task_items_ui', AGENT_FE);
+  await store.appendEvent(pid, {
+    layer: 'coordination', kind: 'task_completed', actor_type: 'agent', actor_id: AGENT_FE,
+    body: { task_id: 'task_items_ui' },
+  }, 'complete-ui');
+  await store.claimTask(pid, 'task_items_crud', AGENT_FE);
+
+  clock.advance(CLAIM_TIMEOUT_MS * 3);
+  const r = await reapProject(db, store, pid, log, { now, claim_timeout_ms: CLAIM_TIMEOUT_MS });
+  assert.equal(await store.claimOwner(pid, 'task_items_ui'), AGENT_FE, 'the shipped claim must survive');
+  assert.match(r.kept.find((k) => k.task_id === 'task_items_ui')!.reason, /needs_review/);
+  // Control: the unshipped claim by the same silent agent IS reaped.
+  assert.deepEqual(r.released.map((x) => x.task_id), ['task_items_crud']);
+});
+
 test('F11 a dead agent loses its claim once past claim_timeout', async () => {
   await store.heartbeat(pid, AGENT_FE, 'working', 'task_items_ui', 'agent/frontend/task-items-ui');
   await store.claimTask(pid, 'task_items_ui', AGENT_FE);

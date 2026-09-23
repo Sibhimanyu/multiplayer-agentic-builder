@@ -40,6 +40,7 @@ import { serve, currentTask } from './mcp.ts';
 import { ShipError, branchFor, classifyChanges, parseStatus, scopeForTask, shipScope, shouldCompleteOnShip, openPr, scopeToAcquire } from './ship.ts';
 import { openBrowser } from './browser.ts';
 import { ensureIgnored } from './gitignore.ts';
+import { positional } from './args.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
 import { LAYER_OF, TASK_KINDS, type Event, type EventKind, type TaskKind } from '../shared/store/types.ts';
 import { ROLE_SLUGS, roleFor } from '../shared/store/directory.ts';
@@ -1143,7 +1144,7 @@ export async function main(argv: string[]): Promise<number> {
       if (!authCommands) return needsBackend();
       return authCommands.whoami();
     case 'new': {
-      const name = rest.filter((a) => !a.startsWith('--')).join(' ').trim();
+      const name = positional(rest, ['--repo']);
       if (!name) {
         log.warn('cli.usage_flotilla_new_name', 'usage: flotilla new <name> [--repo owner/repo]');
         return 1;
@@ -1179,12 +1180,7 @@ export async function main(argv: string[]): Promise<number> {
         const i = rest.indexOf(name);
         return i > -1 ? rest[i + 1] : undefined;
       };
-      const flagged = new Set<number>();
-      for (const name of ['--kind', '--id', '--scope']) {
-        const i = rest.indexOf(name);
-        if (i > -1) { flagged.add(i); flagged.add(i + 1); }
-      }
-      const title = rest.filter((a, i) => !flagged.has(i) && !a.startsWith('--')).join(' ').trim();
+      const title = positional(rest, ['--kind', '--id', '--scope']);
       const kind = flag('--kind');
 
       if (!title || !kind) {
