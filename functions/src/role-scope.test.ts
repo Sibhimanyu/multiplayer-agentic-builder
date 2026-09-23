@@ -30,3 +30,20 @@ test('negations, absolute paths and .. are refused', () => {
     assert.equal(validateRoleScope('backend', [g]).ok, false, g);
   }
 });
+
+// ---- validateCancel ---------------------------------------------------------------------
+
+import { validateCancel } from './write-api.ts';
+
+test('a live ticket with a reason can be cancelled', () => {
+  for (const s of ['open', 'claimed', 'in_progress', 'blocked', 'needs_review', 'pr_open']) {
+    assert.deepEqual(validateCancel(s, '  duplicate of #4 '), { ok: true, reason: 'duplicate of #4' }, s);
+  }
+});
+
+test('a finished or missing ticket cannot be, and a reason is required', () => {
+  for (const s of ['merged', 'done', 'cancelled']) assert.equal(validateCancel(s, 'x').ok, false, s);
+  assert.deepEqual(validateCancel(null, 'x'), { ok: false, status: 404, error: 'no such task' });
+  assert.equal(validateCancel('open', '   ').ok, false);
+  assert.equal(validateCancel('open', undefined).ok, false);
+});

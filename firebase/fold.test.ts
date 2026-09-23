@@ -58,3 +58,15 @@ test('releasing a shipped card leaves it where it is', () => {
   applyEvent(p, ev('task_unblocked', { task_id: 'task_a', was_blocked_by: null, reason_resolved: 'claim reaped: silent' }));
   assert.equal(p.tasks.get('task_a')!.status, 'needs_review');
 });
+
+test('a cancelled ticket is terminal and has no owner', () => {
+  const p = projectionWith('task_a');
+  applyEvent(p, ev('task_claimed', { task_id: 'task_a', agent_id: 'agent_1' }));
+  applyEvent(p, ev('task_cancelled', { task_id: 'task_a', reason: 'duplicate' }));
+  assert.equal(p.tasks.get('task_a')!.status, 'cancelled');
+  assert.equal(p.tasks.get('task_a')!.claimed_by, null);
+  // And nothing moves it again.
+  const out = applyEvent(p, ev('task_claimed', { task_id: 'task_a', agent_id: 'agent_2' }));
+  assert.equal(out.ignored.length, 1);
+  assert.equal(p.tasks.get('task_a')!.status, 'cancelled');
+});

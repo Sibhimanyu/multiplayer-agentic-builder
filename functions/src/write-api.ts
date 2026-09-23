@@ -44,7 +44,7 @@ export interface WriteRequest {
     | 'claim' | 'release' | 'acquire_scope' | 'release_scope' | 'append_event' | 'heartbeat'
     | 'deploy' | 'create_project' | 'create_task' | 'create_invite'
     | 'raise_suggestion' | 'accept_suggestion' | 'decline_suggestion'
-    | 'set_role_scope';
+    | 'set_role_scope' | 'cancel_task';
   /** Operation payload. Shape depends on `op`. */
   body: Record<string, unknown>;
 }
@@ -72,6 +72,8 @@ export interface WriteDeps {
     raiseSuggestion?(pid: string, input: { title: string; body: string; report: ReportType; raised_by: string; raised_by_label: string }): Promise<{ suggestion_id: string }>;
     acceptSuggestion?(pid: string, suggestion_id: string, by: string, task: { task_id: string; title: string; kind: TaskKind; file_scope: string[] }): Promise<{ ok: true; task_id: string } | { ok: false; resolved_by: string; status: string }>;
     declineSuggestion?(pid: string, suggestion_id: string, by: string, reason: string): Promise<{ ok: true } | { ok: false; resolved_by: string; status: string }>;
+    /** System-authority claim release. Optional: without it, cancel refuses a claimed ticket. */
+    reapClaim?(pid: string, task_id: string, agent_id: string, reason: string): Promise<{ released: boolean }>;
   };
   /** The directory's createProject. Separate port, so the write path does not grow a second one. */
   createProject: (input: {
@@ -105,6 +107,9 @@ const REQUIRES: Partial<Record<WriteRequest["op"], Capability>> = {
   // who is in the project. `invite` already means that and only the owner holds it; a new
   // capability would be a second gate to keep in agreement with this one (decision 0005).
   set_role_scope: 'invite',
+  // Cancelling is the other half of creating: the same people who may put work on the board may
+  // take it off. No new capability, for the reason create_task gives.
+  cancel_task: 'triage',
   claim: 'claim',
   release: 'claim',
   acquire_scope: 'acquire_scope',
@@ -144,6 +149,22 @@ export function validateRoleScope(
     if (!clean.includes(t)) clean.push(t);
   }
   return { ok: true, globs: clean };
+}
+
+/**
+ * Whether a ticket may be cancelled, and the cleaned reason. Pure, so both branches are testable.
+ *
+ * A status existed for this (`cancelled`) and the state machine allowed it from every live
+ * status, but no event reached it and no command sent one: a ticket nobody would do sat on the
+ * board forever. A reason is required because a card that vanishes without one is a card
+ * somebody re-files next week.
+ */
+export function validateCancel(status: string | null, reason: unknown): { ok: true; reason: string } | { ok: false; status: number; error: string } {
+  if (status === null) return { ok: false, status: 404, error: 'no such task' };
+  if (['merged', 'done', 'cancelled'].includes(status)) return { ok: false, status: 409, error: `task is already ${status}` };
+  const r = typeof reason === 'string' ? reason.trim() : '';
+  if (!r) return { ok: false, status: 400, error: 'cancel needs a reason' };
+  return { ok: true, reason: r.slice(0, 500) };
 }
 
 export class Unauthorized extends Error {
@@ -481,6 +502,34 @@ export async function handleWrite(
         // Existing locks are untouched: the fence applies to the next acquireScope, not
         // retroactively to files someone already holds.
         return { status: 200, body: { ok: true, role_slug, file_scope: v.globs } };
+      }
+      case 'cancel_task': {
+        const task_id = typeof req.body.task_id === 'string' ? req.body.task_id : '';
+        const proj = deps.db.collection('projects').doc(req.project_id);
+        const doc = task_id ? await proj.collection('tasks').doc(task_id).get() : null;
+        const v = validateCancel(doc?.exists ? ((doc.get('status') as string) ?? 'open') : null, req.body.reason);
+        if (!v.ok) return { status: v.status, body: { error: v.error } };
+
+        // Free what the ticket holds BEFORE it becomes terminal: the claim (as the system, since
+        // the caller is not the holder) and any lock on its files. Otherwise a cancelled ticket
+        // would keep somebody's files locked until the reaper noticed, which for a live agent is never.
+        const claim = await proj.collection('claims').doc(task_id).get();
+        const holder = claim.exists ? (claim.get('agent_id') as string) : null;
+        if (holder) {
+          if (!deps.store.reapClaim) return { status: 501, body: { error: 'this backend cannot release a claim it does not hold' } };
+          await deps.store.reapClaim(req.project_id, task_id, holder, `task cancelled: ${v.reason}`);
+        }
+        const locks = await proj.collection('locks').where('task_id', '==', task_id).get();
+        for (const l of locks.docs) {
+          try { await deps.store.releaseScope(req.project_id, l.id); }
+          catch (err) { deps.log.warn('api.cancel_lock_release_failed', 'could not release a lock on a cancelled task', { task_id, agent_id: l.id, error: String(err) }); }
+        }
+        await deps.store.appendEvent(req.project_id, {
+          layer: 'coordination', kind: 'task_cancelled', actor_type: 'member', actor_id: caller.uid,
+          body: { task_id, reason: v.reason },
+        }, `cancel:${req.project_id}:${task_id}`);
+        deps.log.info('api.task_cancelled', 'task cancelled', { project_id: req.project_id, uid: caller.uid, task_id, released: holder });
+        return { status: 200, body: { ok: true, task_id, released_claim: holder, released_locks: locks.size } };
       }
       case 'claim': {
         const r = await deps.store.claimTask(req.project_id, String(req.body.task_id ?? ''), agent_id);

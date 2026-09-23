@@ -193,6 +193,14 @@ export function applyEvent(p: Projection, e: Event): FoldOutcome {
       break;
     }
 
+    case 'task_cancelled': {
+      if (!task) { ignore(`unknown task_id ${taskId}`); break; }
+      // Terminal, and it takes the owner off the card: a cancelled ticket held by somebody is a
+      // ticket that still looks like work. The write path releases the claim and the lock first.
+      move(task, 'cancelled', { claimed_by: null });
+      break;
+    }
+
     case 'merged': {
       if (!task) { ignore(`unknown task_id ${taskId}`); break; }
       move(task, 'merged', { pr_number: num(b.pr_number) ?? task.pr_number });

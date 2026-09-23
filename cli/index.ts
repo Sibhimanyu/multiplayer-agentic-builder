@@ -1112,6 +1112,8 @@ const USAGE = `flotilla — agentic coordination CLI
                                 no id: take the oldest open ticket inside your fence
                                 --scope <glob> names it for a ticket that declared none
   flotilla release <task_id>    give a ticket back, and its file lock with it
+  flotilla cancel <task_id> --reason "<why>"
+                                take a ticket off the board, freeing its claim and lock
   flotilla sync                 after a merge: drop shipped copies, then fast-forward
   flotilla report "<message>"   queue one progress line in the outbox
   flotilla ship                 commit your in-scope changes to agent/<role>/<task> and push
@@ -1163,6 +1165,8 @@ export interface ProjectCommands {
   invite: (root: string, role_slug: string, label?: string) => Promise<number>;
   /** `flotilla role <slug> --scope <globs>`. Redraws a role's file fence for this project. Owner only. */
   roleScope: (root: string, role_slug: string, globs: string[]) => Promise<number>;
+  /** `flotilla cancel <task_id> --reason "..."`. Takes a ticket off the board, freeing its claim and lock. */
+  cancel: (root: string, task_id: string, reason: string) => Promise<number>;
 }
 
 let projectCommands: ProjectCommands | null = null;
@@ -1318,6 +1322,17 @@ export async function main(argv: string[]): Promise<number> {
       if (!projectCommands) return needsBackend();
       const li = rest.indexOf('--label');
       return projectCommands.invite(root, role, li > -1 ? rest[li + 1] : undefined);
+    }
+    case 'cancel': {
+      const task = rest.find((a) => !a.startsWith('--'));
+      const ri = rest.indexOf('--reason');
+      const reason = ri > -1 ? (rest[ri + 1] ?? '') : '';
+      if (!task || !reason.trim()) {
+        log.warn('cli.usage_flotilla_cancel', 'usage: flotilla cancel <task_id> --reason "why nobody will do it"');
+        return 1;
+      }
+      if (!projectCommands) return needsBackend();
+      return projectCommands.cancel(root, task, reason);
     }
     case 'role': {
       const role = rest.find((a) => !a.startsWith('--'));
