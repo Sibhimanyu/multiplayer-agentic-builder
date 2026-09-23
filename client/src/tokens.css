@@ -657,3 +657,29 @@ pre{background:var(--paper);border:1px solid var(--line);border-radius:9px;paddi
 
 /* ---- selection, order 0077 ---- */
 ::selection{background:rgba(45,212,191,.28);color:var(--ink)}
+
+/* ---- suggestions (web raise) ---------------------------------------------------------------
+   The report is the one thing a reporter answers, so it is the row's leading mark, where a task
+   shows its id. Colour follows urgency the way the board's badges already do: red for broken,
+   amber for confusing, neutral for the two that are not wrong. */
+.report{display:inline-block;font-family:var(--mono);font-size:10.5px;letter-spacing:.02em;
+     border-radius:var(--r-tag);padding:1px 5px;background:var(--line);color:var(--ink2)}
+.report[data-r="broken"]{background:var(--red-soft);color:var(--red)}
+.report[data-r="confusing"]{background:var(--amber-soft);color:var(--amber)}
+.newtask .reports{border:0;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:8px}
+.newtask .reports legend{font-size:12px;color:var(--ink2);margin-bottom:6px;padding:0}
+.newtask .report-opt{display:inline-flex;flex-direction:row;align-items:center;gap:6px;
+     border:1px solid var(--line2);border-radius:var(--r-ctl);padding:6px 10px;font-size:12.5px;
+     color:var(--ink);cursor:pointer}
+.newtask .report-opt:has(input:checked){border-color:var(--teal);background:var(--teal-soft)}
+.newtask .report-opt input{margin:0}
+.newtask textarea{font:400 13.5px var(--sans);color:var(--ink);background:transparent;
+     border:1px solid var(--line2);border-radius:var(--r-ctl);padding:8px 10px;resize:vertical}
+.newtask .opt{color:var(--muted)}
+/* The report chip leads the row where a task shows its id; "confusing" is wider than an id. */
+.qrow[data-suggestion]{grid-template-columns:78px minmax(0,1fr) auto}
+.qrow .meta .sub{font-size:11.5px;color:var(--muted)}
+.qrow .decide{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+.qrow .decide input,.qrow .decide select{font:400 13px var(--sans);color:var(--ink);
+     background:transparent;border:1px solid var(--line2);border-radius:var(--r-ctl);padding:6px 9px}
+.qrow .decide input{min-width:220px}

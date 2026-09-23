@@ -34,12 +34,13 @@ import {
   limit,
   onSnapshot,
   query,
+  where,
   type Firestore,
 } from 'firebase/firestore';
 import { boardDb } from './db';
 
 import { explainAuthError, watchSession } from './session';
-import { STALE_AFTER_MS } from './types';
+import { REPORT_ORDER, STALE_AFTER_MS } from './types';
 import type {
   AgentPresence,
   ContractPointer,
@@ -49,6 +50,7 @@ import type {
   ScopeLock,
   Seq,
   Snapshot,
+  SuggestionView,
   TaskView,
 } from './types';
 
@@ -266,6 +268,7 @@ class BrowserFirestoreStore implements BrowserStore {
     const agents = new Map<string, StoredAgent>();
     const locks = new Map<string, ScopeLock>();
     const contracts = new Map<string, ContractPointer>();
+    const suggestions = new Map<string, SuggestionView>();
     const ready = new Set<string>();
     let seq = 0;
     let project_name = project_id;
@@ -341,6 +344,9 @@ class BrowserFirestoreStore implements BrowserStore {
         locks: [...locks.values()].slice(0, LOCKS_CAP).sort((a, b) => a.agent_id.localeCompare(b.agent_id)),
         contracts: [...contracts.values()].sort(
           (a, b) => a.name.localeCompare(b.name) || a.version - b.version,
+        ),
+        suggestions: [...suggestions.values()].sort(
+          (a, b) => REPORT_ORDER[a.report] - REPORT_ORDER[b.report] || a.raised_at.localeCompare(b.raised_at),
         ),
       });
     };
@@ -446,6 +452,20 @@ class BrowserFirestoreStore implements BrowserStore {
           mark('contracts');
         },
         onErr('contracts'),
+      ),
+      // NOT one of the six, and its errors do not set the board's status. The lane is additive:
+      // a project whose rules predate it, or a backend without suggestions, must still show its
+      // tickets. It never gates the first frame, so it cannot hold the board on "Connecting".
+      onSnapshot(
+        query(collection(this.db, 'projects', project_id, 'suggestions'), where('status', '==', 'open')),
+        (s) => {
+          for (const ch of s.docChanges()) {
+            if (ch.type === 'removed') suggestions.delete(ch.doc.id);
+            else suggestions.set(ch.doc.id, ch.doc.data() as SuggestionView);
+          }
+          if (firstFrameSent) schedule();
+        },
+        (err) => console.warn('[store] suggestions listener', { project_id, error: String(err) }),
       ),
     ];
 

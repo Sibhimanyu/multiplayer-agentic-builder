@@ -12,7 +12,9 @@
 import { boardAuth } from './session';
 
 /** Every op the board is allowed to perform. Narrower than WriteRequest['op'] on purpose. */
-export type BoardOp = 'create_task' | 'claim' | 'release';
+export type BoardOp =
+  | 'create_task' | 'claim' | 'release'
+  | 'raise_suggestion' | 'accept_suggestion' | 'decline_suggestion';
 
 export class NotSignedIn extends Error {
   constructor() {
@@ -82,6 +84,8 @@ export async function boardWrite(
 
   return {
     ok: payload.ok !== false,
+    // accept/decline return their result flat (ok, task_id, resolved_by), not under `result`.
+    ...(payload.ok === false && !payload.result ? { result: payload } : {}),
     ...(typeof payload.task_id === 'string' ? { task_id: payload.task_id } : {}),
     ...(payload.result && typeof payload.result === 'object'
       ? { result: payload.result as Record<string, unknown> }
@@ -109,3 +113,19 @@ export const claimTask = (project_id: string, task_id: string): Promise<WriteOut
 
 export const releaseTask = (project_id: string, task_id: string): Promise<WriteOutcome> =>
   boardWrite(project_id, 'release', { task_id });
+
+/** Raise a suggestion. The raiser is the verified uid on the server; nothing here can name another. */
+export const raiseSuggestion = (
+  project_id: string,
+  s: { title: string; report: string; body: string },
+): Promise<WriteOutcome> => boardWrite(project_id, 'raise_suggestion', { ...s });
+
+/** Make it a ticket. Atomic on the server: of two people accepting at once, one wins. */
+export const acceptSuggestion = (
+  project_id: string,
+  a: { suggestion_id: string; title: string; kind: string; file_scope: string[] },
+): Promise<WriteOutcome> => boardWrite(project_id, 'accept_suggestion', { ...a });
+
+/** Turn it down. The reason is required, and the person who raised it reads it. */
+export const declineSuggestion = (project_id: string, suggestion_id: string, reason: string): Promise<WriteOutcome> =>
+  boardWrite(project_id, 'decline_suggestion', { suggestion_id, reason });

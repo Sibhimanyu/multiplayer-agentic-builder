@@ -164,7 +164,7 @@ function NothingReady({
 
 export function Queue({
   project_id, projectName, ready, mine, canClaim, canCreate,
-  agentConnected, onClaimed, onNewTask, projectEmpty,
+  agentConnected, onClaimed, onNewTask, projectEmpty, children,
 }: {
   project_id: string;
   projectName: string;
@@ -176,6 +176,8 @@ export function Queue({
   onClaimed: (task_id: string) => void;
   onNewTask: () => void;
   projectEmpty: boolean;
+  /** Further groups on this page (the suggestions lane), inside .queue so they share its rhythm. */
+  children?: React.ReactNode;
 }) {
   const heldScopes = mine.flatMap((m) => m.task.file_scope);
 
@@ -225,6 +227,7 @@ export function Queue({
           </div>
         </section>
       )}
+      {children}
     </main>
   );
 }
