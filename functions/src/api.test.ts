@@ -428,3 +428,17 @@ test('an unknown route is 404 with the route named', async () => {
   assert.equal(res.status, 404);
   assert.equal(res.body.route, 'POST /nonsense');
 });
+
+// ---- whoami reports the project's fence ----------------------------------------------------
+
+test('whoami carries the project policy file_scope, not the template', async () => {
+  const roles = db.collection('projects').doc(PID).collection('roles');
+  // Control: with no policy doc there is no file_scope, so the CLI falls back to the template.
+  await roles.doc('backend').delete();
+  assert.equal((await call('GET', '/whoami', {})).body.file_scope, undefined);
+
+  await roles.doc('backend').set({ slug: 'backend', file_scope: ['server/**', 'test/**'], deploy_scope: [], capabilities: [] });
+  const res = await call('GET', '/whoami', {});
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.file_scope, ['server/**', 'test/**']);
+});
