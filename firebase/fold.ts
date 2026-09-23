@@ -131,14 +131,20 @@ export function applyEvent(p: Projection, e: Event): FoldOutcome {
 
     case 'task_unblocked': {
       if (!task) { ignore(`unknown task_id ${taskId}`); break; }
-      // A reaper-released claim returns the task to open; an unblocked consumer resumes work.
-      const to: TaskStatus = task.claimed_by ? 'in_progress' : 'open';
-      move(task, to, {
+      // task_unblocked IS A RELEASE. Its only producers are releaseTask and reapClaim, and both
+      // delete the claim document in the same transaction. So the card goes to open with no
+      // owner, always -- as the memory adapter already did.
+      //
+      // This used to keep the claimer whenever there was one, which for a claimed task is
+      // always: a released card stayed in_progress under its old owner, and the next agent's
+      // task_claimed was then refused as in_progress -> claimed. The claim document said one
+      // agent held it; the board said another, for good. A shipped card (needs_review, pr_open)
+      // cannot move to open and is left where it is: its work is out, only the claim went.
+      move(task, 'open', {
         blocked_reason: null,
         blocked_by: null,
         blocked_since: null,
-        // Released by the reaper: the claim is gone with it.
-        claimed_by: to === 'open' ? null : task.claimed_by,
+        claimed_by: null,
       });
       break;
     }

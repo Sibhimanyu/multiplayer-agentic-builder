@@ -93,7 +93,7 @@ before(async () => {
   backendAgentId = 'agent_be000001';
   await db.collection('projects').doc(PID).collection('agents').doc(backendAgentId).set({
     agent_id: backendAgentId,
-    role_slug: 'backend-builder',
+    role_slug: 'backend',
     member_label: 'sibhi',
     initials: 'BE',
     harness: 'claude-code',
@@ -109,7 +109,7 @@ before(async () => {
   frontendToken = mintToken();
   await db.collection('projects').doc(PID).collection('agents').doc('agent_fe000002').set({
     agent_id: 'agent_fe000002',
-    role_slug: 'frontend-builder',
+    role_slug: 'frontend',
     member_label: 'priya',
     initials: 'FE',
     harness: 'codex',
@@ -177,7 +177,7 @@ test('H agents cannot merge: even a grant_merge agent cannot append `merged`', a
   const integratorToken = mintToken();
   await db.collection('projects').doc(PID).collection('agents').doc('agent_int00003').set({
     agent_id: 'agent_int00003',
-    role_slug: 'backend-builder',
+    role_slug: 'backend',
     member_label: 'integrator',
     initials: 'IN',
     harness: 'manual',
@@ -324,7 +324,7 @@ test('a revoked token is 401 and stays 401', async () => {
   const doomed = mintToken();
   await db.collection('projects').doc(PID).collection('agents').doc('agent_rv000004').set({
     agent_id: 'agent_rv000004',
-    role_slug: 'qa-verifier',
+    role_slug: 'qa',
     member_label: 'ci',
     initials: 'QA',
     harness: 'manual',

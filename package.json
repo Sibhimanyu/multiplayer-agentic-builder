@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Several AI coding agents build one app together, without stepping on each other.",
   "scripts": {
-    "test": "scripts/run-tests.sh \"shared/**/*.test.ts\" \"cli/**/*.test.ts\" firebase/errors.test.ts functions/src/webhook.test.ts functions/src/authority.test.ts",
+    "test": "scripts/run-tests.sh \"shared/**/*.test.ts\" \"cli/**/*.test.ts\" firebase/errors.test.ts firebase/fold.test.ts functions/src/webhook.test.ts functions/src/authority.test.ts functions/src/role-scope.test.ts",
     "test:emulator": "npm --prefix firebase test",
     "test:all": "npm run typecheck:all && npm test && npm run test:emulator",
     "test:memory": "node --test shared/store/memory.test.ts",

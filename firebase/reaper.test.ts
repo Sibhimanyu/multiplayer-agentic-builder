@@ -75,14 +75,14 @@ beforeEach(async () => {
   await store.seedTasks(pid, [makeTask('task_items_ui', { kind: 'frontend' }), makeTask('task_items_crud')]);
   await store.registerAgent(pid, {
     agent_id: AGENT_FE,
-    role_slug: 'frontend-builder',
+    role_slug: 'frontend',
     member_label: 'priya',
     initials: 'FE',
     harness: 'codex',
   });
   await store.registerAgent(pid, {
     agent_id: AGENT_BE,
-    role_slug: 'backend-builder',
+    role_slug: 'backend',
     member_label: 'sibhi',
     initials: 'BE',
     harness: 'claude-code',
