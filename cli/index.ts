@@ -37,7 +37,7 @@ import { appendOutbox, drain, isConnected, readCursor, type OutboxRecord } from 
 import { ApiClient, connectWithInvite, type WhoAmI } from './client.ts';
 import { git, materialise, publishToBlackboard } from './blackboard.ts';
 import { serve, currentTask } from './mcp.ts';
-import { ShipError, branchFor, classifyChanges, parseStatus, scopeForTask, shipScope, shouldCompleteOnShip } from './ship.ts';
+import { ShipError, branchFor, classifyChanges, parseStatus, scopeForTask, shipScope, shouldCompleteOnShip, openPr } from './ship.ts';
 import { openBrowser } from './browser.ts';
 import { ensureIgnored } from './gitignore.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
@@ -364,6 +364,10 @@ async function cmdStart(root: string): Promise<number> {
             }, log);
             if (res.unchanged) out(`${task_id} completed — nothing new to push`);
             else out(`${task_id} completed — pushed ${res.files.length} file(s) to ${res.branch}`);
+            if (cfg.repo && me.permissions.open_prs && task.status !== 'pr_open' && task.status !== 'merged') {
+              const pr = await openPr(root, cfg.repo, res.branch, task.title, task.task_id);
+              out(pr.url ? `${task_id} PR: ${pr.url}` : `${task_id} PR not opened (${pr.opened ? "" : pr.reason})`);
+            }
           } catch (err) {
             log.warn('cli.ship_on_complete_failed', 'could not ship the completed task; run `flotilla ship` to retry', {
               task_id, error: (err as Error).message,
@@ -946,9 +950,18 @@ async function cmdShip(root: string, rest: string[]): Promise<number> {
       const d = await drain(root, makePublisher(client, root, cfg, log), log, { onOffline: () => {} });
       out(d.published > 0 ? `marked ${task.task_id} complete — needs review` : `queued ${task.task_id} complete — \`flotilla start\` will publish it`);
     }
-    if (r.unchanged) return 0;
-    if (cfg.repo) {
-      out('');
+    // Step 6 on the board. Opened here; RECORDED by the webhook when GitHub reports it, so the
+    // card moves on GitHub's word, not the CLI's. A checkpoint (--wip) opens nothing.
+    const wantsPr = !rest.includes('--wip') && task.status !== 'pr_open' && task.status !== 'merged';
+    if (cfg.repo && wantsPr && me.permissions.open_prs) {
+      const pr = await openPr(root, cfg.repo, branch, task.title, task.task_id);
+      if (pr.opened) out(`opened ${pr.url}`);
+      else if (pr.url) out(`PR already open: ${pr.url}`);
+      else {
+        out(`could not open the PR (${pr.reason}) — open it here:`);
+        out(`  https://github.com/${cfg.repo}/compare/${branch}?expand=1`);
+      }
+    } else if (cfg.repo && !r.unchanged) {
       out(`  open a PR: https://github.com/${cfg.repo}/compare/${branch}?expand=1`);
     }
     return 0;
@@ -982,7 +995,8 @@ const USAGE = `flotilla — agentic coordination CLI
   flotilla claim <task_id>      atomic claim, then acquire the declared file scope
   flotilla report "<message>"   queue one progress line in the outbox
   flotilla ship                 commit your in-scope changes to agent/<role>/<task> and push
-                                and marks the task complete; --wip pushes without that
+                                marks the task complete and opens its PR (needs gh)
+                                --wip pushes a checkpoint and does neither
                                 --dry-run lists what would be committed and stops
   flotilla start                drain the outbox, deliver the inbox, heartbeat
                                 ships automatically when the agent reports the task complete

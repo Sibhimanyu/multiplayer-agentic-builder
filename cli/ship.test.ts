@@ -12,7 +12,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { git } from './blackboard.ts';
-import { ShipError, branchFor, classifyChanges, inScope, parseStatus, scopeForTask, shipScope, shouldCompleteOnShip, slugFor } from './ship.ts';
+import { ShipError, branchFor, classifyChanges, inScope, parseStatus, scopeForTask, shipScope, shouldCompleteOnShip, slugFor, openPr, prCreateArgs } from './ship.ts';
 import type { Logger } from '../shared/log.ts';
 
 const nullLog: Logger = { debug() {}, info() {}, warn() {}, error() {} };
@@ -263,4 +263,39 @@ test('--wip pushes without marking complete', () => {
 
 test('a task already past in_progress is not re-announced', () => {
   for (const s of ['needs_review', 'pr_open', 'merged', 'done']) assert.equal(shouldCompleteOnShip(s, []), false, s);
+});
+
+// ---- opening the PR ---------------------------------------------------------------------
+
+const fake = (r: { code: number; stdout?: string; stderr?: string } | 'missing') =>
+  async () => {
+    if (r === 'missing') throw Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' });
+    return { code: r.code, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+
+test('prCreateArgs targets the repo and branch and names the task', () => {
+  const a = prCreateArgs('o/r', 'agent/owner/x', 'Do X', 'task_x');
+  assert.deepEqual(a.slice(0, 8), ['pr', 'create', '--repo', 'o/r', '--head', 'agent/owner/x', '--title', 'Do X']);
+  assert.ok(a[9]!.includes('task_x'));
+  assert.ok(!a.includes('--base'), 'the default branch is gh\'s to pick');
+});
+
+test('openPr reports the URL gh printed', async () => {
+  const r = await openPr('/tmp', 'o/r', 'b', 't', 'task_t', fake({ code: 0, stdout: 'https://github.com/o/r/pull/7\n' }));
+  assert.deepEqual(r, { opened: true, url: 'https://github.com/o/r/pull/7' });
+});
+
+test('openPr treats an existing PR as not-an-error, with its URL', async () => {
+  const r = await openPr('/tmp', 'o/r', 'b', 't', 'task_t', fake({
+    code: 1, stderr: 'a pull request for branch "b" into branch "master" already exists:\nhttps://github.com/o/r/pull/3\n',
+  }));
+  assert.equal(r.opened, false);
+  assert.equal(r.url, 'https://github.com/o/r/pull/3');
+});
+
+test('openPr falls back cleanly when gh is missing or fails', async () => {
+  assert.deepEqual(await openPr('/tmp', 'o/r', 'b', 't', 'task_t', fake('missing')), { opened: false, reason: 'gh is not installed' });
+  const r = await openPr('/tmp', 'o/r', 'b', 't', 'task_t', fake({ code: 4, stderr: 'To get started with GitHub CLI, please run:  gh auth login\n' }));
+  assert.equal(r.opened, false);
+  assert.equal(r.url, undefined);
 });

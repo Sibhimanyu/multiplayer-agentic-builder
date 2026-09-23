@@ -336,3 +336,56 @@ export async function shipScope(req: ShipRequest, log: Logger): Promise<ShipResu
     await fs.rm(path.dirname(indexFile), { recursive: true, force: true }).catch(() => {});
   }
 }
+
+/**
+ * `gh pr create` arguments for a shipped task. Pure, so the exact command is testable.
+ *
+ * No --base: gh targets the repo's default branch, which is the only base an agent branch is
+ * ever cut from. Passing one would be a second place to be wrong about it.
+ */
+export function prCreateArgs(repo: string, branch: string, title: string, task_id: string): string[] {
+  return [
+    'pr', 'create', '--repo', repo, '--head', branch, '--title', title,
+    '--body', `Shipped by flotilla for \`${task_id}\`.\n\nMerging this marks the task merged and frees its file lock.`,
+  ];
+}
+
+export type PrResult = { opened: true; url: string } | { opened: false; url?: string; reason: string };
+
+/**
+ * Open the task's PR with the GitHub CLI, if the human has it. Never throws.
+ *
+ * gh, not the REST API, because gh already holds the human's GitHub login and Flotilla holds no
+ * GitHub credential of its own -- that is a property worth keeping. No gh, or gh not signed in,
+ * falls back to the compare link, which is what `ship` printed before. An existing PR for the
+ * branch is not an error: shipping a follow-up commit updates it, and gh names its URL.
+ */
+export async function openPr(
+  root: string, repo: string, branch: string, title: string, task_id: string,
+  run: (args: string[], cwd: string) => Promise<GitResult> = gh,
+): Promise<PrResult> {
+  let r: GitResult;
+  try {
+    r = await run(prCreateArgs(repo, branch, title, task_id), root);
+  } catch {
+    return { opened: false, reason: 'gh is not installed' };
+  }
+  const text = `${r.stdout}\n${r.stderr}`;
+  const url = /https:\/\/github\.com\/\S+\/pull\/\d+/.exec(text)?.[0];
+  if (r.code === 0 && url) return { opened: true, url };
+  if (/already exists/i.test(text)) return { opened: false, url, reason: 'a PR for this branch is already open' };
+  return { opened: false, reason: r.stderr.trim().split('\n')[0] || `gh exited ${r.code}` };
+}
+
+async function gh(args: string[], cwd: string): Promise<GitResult> {
+  const { spawn } = await import('node:child_process');
+  return new Promise((resolve, reject) => {
+    const child = spawn('gh', args, { cwd, env: { ...process.env, GH_PROMPT_DISABLED: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => (stdout += d));
+    child.stderr.on('data', (d) => (stderr += d));
+    child.on('error', reject); // ENOENT: gh is not installed
+    child.on('close', (code) => resolve({ code: code ?? 1, stdout, stderr }));
+  });
+}
