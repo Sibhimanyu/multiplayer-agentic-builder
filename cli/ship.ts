@@ -389,3 +389,25 @@ async function gh(args: string[], cwd: string): Promise<GitResult> {
     child.on('close', (code) => resolve({ code: code ?? 1, stdout, stderr }));
   });
 }
+
+/**
+ * Which globs `claim` should lock. The task's declared scope wins; `--scope` only fills a gap.
+ *
+ * A ticket raised from the board -- a user report, an accepted suggestion -- has no file scope,
+ * because the person who raised it cannot know the repo layout. Claiming one took no lock, and
+ * `ship` then refused it: a ticket anyone could pick up that nobody could finish. `--scope` is
+ * how the claimer, who can see the code, says which files the fix touches. It does NOT override
+ * a declared scope: that was decided by whoever wrote the ticket, and widening it quietly at
+ * claim time would defeat the lock.
+ */
+export function scopeToAcquire(
+  declared: readonly string[], args: readonly string[],
+): { globs: string[]; from: 'task' | 'flag' | 'none'; ignored: string[] } {
+  const flagged: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--scope' && args[i + 1]) flagged.push(...args[++i]!.split(',').map((g) => g.trim()).filter(Boolean));
+  }
+  if (declared.length > 0) return { globs: [...declared], from: 'task', ignored: flagged };
+  if (flagged.length > 0) return { globs: flagged, from: 'flag', ignored: [] };
+  return { globs: [], from: 'none', ignored: [] };
+}

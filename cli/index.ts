@@ -37,7 +37,7 @@ import { appendOutbox, drain, isConnected, readCursor, type OutboxRecord } from 
 import { ApiClient, connectWithInvite, type WhoAmI } from './client.ts';
 import { git, materialise, publishToBlackboard } from './blackboard.ts';
 import { serve, currentTask } from './mcp.ts';
-import { ShipError, branchFor, classifyChanges, parseStatus, scopeForTask, shipScope, shouldCompleteOnShip, openPr } from './ship.ts';
+import { ShipError, branchFor, classifyChanges, parseStatus, scopeForTask, shipScope, shouldCompleteOnShip, openPr, scopeToAcquire } from './ship.ts';
 import { openBrowser } from './browser.ts';
 import { ensureIgnored } from './gitignore.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
@@ -220,7 +220,7 @@ async function countPending(root: string): Promise<{ lines: number; spooled: num
   return { lines, spooled, cursor };
 }
 
-async function cmdClaim(root: string, task_id: string): Promise<number> {
+async function cmdClaim(root: string, task_id: string, args: string[] = []): Promise<number> {
   if (!(await isConnected(root))) {
     log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
     return 2;
@@ -242,8 +242,10 @@ async function cmdClaim(root: string, task_id: string): Promise<number> {
 
   // Scope is acquired AFTER the claim, and a conflict here means the claim must be given back.
   // Holding a task you cannot legally edit is worse than not holding it.
-  if (task && task.file_scope.length > 0) {
-    const scope = await client.acquireScope(task_id, task.file_scope);
+  const want = scopeToAcquire(task?.file_scope ?? [], args);
+  if (want.ignored.length > 0) out(`--scope ignored: ${task_id} declares its own scope`);
+  if (task && want.globs.length > 0) {
+    const scope = await client.acquireScope(task_id, want.globs);
     if (!scope.ok) {
       out(`cannot take ${task_id}: file scope conflicts`);
       for (const c of scope.conflicts) {
@@ -262,7 +264,11 @@ async function cmdClaim(root: string, task_id: string): Promise<number> {
     log,
   );
   out(`claimed ${task_id}`);
-  if (task) out(`scope: ${task.file_scope.join(', ') || '(none declared)'}`);
+  if (task && want.globs.length > 0) out(`scope: ${want.globs.join(', ')}${want.from === 'flag' ? '  (from --scope)' : ''}`);
+  else if (task) {
+    out('scope: (none declared) — nothing is locked, so `flotilla ship` will refuse this task');
+    out(`  name the files it touches: flotilla claim ${task_id} --scope 'server/**'`);
+  }
   out(`see ${LAYOUT.current_task}`);
   return 0;
 }
@@ -993,6 +999,7 @@ const USAGE = `flotilla — agentic coordination CLI
   flotilla task <title> --kind <${TASK_KINDS.join('|')}> --scope "<globs>"
                                 create a task on the board; --id overrides the derived id
   flotilla claim <task_id>      atomic claim, then acquire the declared file scope
+                                --scope <glob> names it for a ticket that declared none
   flotilla report "<message>"   queue one progress line in the outbox
   flotilla ship                 commit your in-scope changes to agent/<role>/<task> and push
                                 marks the task complete and opens its PR (needs gh)
@@ -1169,7 +1176,7 @@ export async function main(argv: string[]): Promise<number> {
         log.warn('cli.usage_flotilla_claim_task', 'usage: flotilla claim <task_id>');
         return 1;
       }
-      return cmdClaim(root, task);
+      return cmdClaim(root, task, rest.slice(1));
     }
     case 'report': {
       const message = rest.join(' ').trim();

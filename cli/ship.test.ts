@@ -12,7 +12,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { git } from './blackboard.ts';
-import { ShipError, branchFor, classifyChanges, inScope, parseStatus, scopeForTask, shipScope, shouldCompleteOnShip, slugFor, openPr, prCreateArgs } from './ship.ts';
+import { ShipError, branchFor, classifyChanges, inScope, parseStatus, scopeForTask, shipScope, shouldCompleteOnShip, slugFor, openPr, prCreateArgs, scopeToAcquire } from './ship.ts';
 import type { Logger } from '../shared/log.ts';
 
 const nullLog: Logger = { debug() {}, info() {}, warn() {}, error() {} };
@@ -298,4 +298,20 @@ test('openPr falls back cleanly when gh is missing or fails', async () => {
   const r = await openPr('/tmp', 'o/r', 'b', 't', 'task_t', fake({ code: 4, stderr: 'To get started with GitHub CLI, please run:  gh auth login\n' }));
   assert.equal(r.opened, false);
   assert.equal(r.url, undefined);
+});
+
+// ---- claim --scope ----------------------------------------------------------------------
+
+test('a declared task scope is what claim locks, and --scope cannot widen it', () => {
+  assert.deepEqual(scopeToAcquire(['docs/**'], ['--scope', '**']), { globs: ['docs/**'], from: 'task', ignored: ['**'] });
+});
+
+test('--scope fills in for a ticket that declared none', () => {
+  assert.deepEqual(scopeToAcquire([], ['--scope', 'server/**', '--scope', 'test/**']).globs, ['server/**', 'test/**']);
+  assert.deepEqual(scopeToAcquire([], ['--scope', 'server/**,test/**']).globs, ['server/**', 'test/**']);
+});
+
+test('no declared scope and no flag locks nothing', () => {
+  assert.deepEqual(scopeToAcquire([], []), { globs: [], from: 'none', ignored: [] });
+  assert.deepEqual(scopeToAcquire([], ['--scope']).globs, [], 'a dangling flag is not a glob');
 });
