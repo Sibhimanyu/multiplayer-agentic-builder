@@ -43,7 +43,8 @@ export interface WriteRequest {
   op:
     | 'claim' | 'release' | 'acquire_scope' | 'release_scope' | 'append_event' | 'heartbeat'
     | 'deploy' | 'create_project' | 'create_task' | 'create_invite'
-    | 'raise_suggestion' | 'accept_suggestion' | 'decline_suggestion';
+    | 'raise_suggestion' | 'accept_suggestion' | 'decline_suggestion'
+    | 'set_role_scope';
   /** Operation payload. Shape depends on `op`. */
   body: Record<string, unknown>;
 }
@@ -100,6 +101,10 @@ const REQUIRES: Partial<Record<WriteRequest["op"], Capability>> = {
   // Minting an invite is how a project gains a member, so it is gated by the capability that
   // already means exactly that. Only the owner holds it.
   create_invite: 'invite',
+  // Redrawing a role's fence decides who may touch what, which is the same authority as deciding
+  // who is in the project. `invite` already means that and only the owner holds it; a new
+  // capability would be a second gate to keep in agreement with this one (decision 0005).
+  set_role_scope: 'invite',
   claim: 'claim',
   release: 'claim',
   acquire_scope: 'acquire_scope',
@@ -108,6 +113,38 @@ const REQUIRES: Partial<Record<WriteRequest["op"], Capability>> = {
   heartbeat: 'suggest',
   deploy: 'deploy',
 };
+
+/**
+ * Validate a new file scope for a role. Returns the cleaned globs, or the reason it is refused.
+ *
+ * WHY THIS EXISTS: role policy is copied into a project at birth from DEFAULT_ROLES, whose
+ * globs describe THIS repo (functions/**, client/**). Nothing could change them afterwards, so in
+ * a repo laid out as server/ and web/ the backend role could lock nothing it needed to edit and
+ * every claim was refused. The policy was per-project in storage and fixed in practice.
+ *
+ * The owner's scope is not editable: it is ** so a lock the owner cannot take is a lock nobody
+ * can break, and narrowing it is how an owner locks themselves out. `user` holds no scope by
+ * design. Negations, absolute paths and .. are refused: a fence is a set of places in the repo.
+ */
+export function validateRoleScope(
+  role_slug: string, globs: unknown,
+): { ok: true; globs: string[] } | { ok: false; error: string } {
+  if (!ROLE_SLUGS.includes(role_slug as RoleSlug)) return { ok: false, error: `role_slug must be one of ${ROLE_SLUGS.join(', ')}` };
+  if (role_slug === 'owner') return { ok: false, error: 'the owner scope is ** and is not editable' };
+  if (role_slug === 'user') return { ok: false, error: 'the user seat holds no file scope by design' };
+  if (!Array.isArray(globs) || globs.length === 0) return { ok: false, error: 'file_scope must be a non-empty list of globs' };
+  if (globs.length > 20) return { ok: false, error: 'at most 20 globs' };
+  const clean: string[] = [];
+  for (const g of globs) {
+    if (typeof g !== 'string' || !g.trim()) return { ok: false, error: 'every glob must be a non-empty string' };
+    const t = g.trim();
+    if (t.startsWith('!') || t.startsWith('/') || t.split('/').includes('..')) {
+      return { ok: false, error: `refusing "${t}": no negations, absolute paths or ..` };
+    }
+    if (!clean.includes(t)) clean.push(t);
+  }
+  return { ok: true, globs: clean };
+}
 
 export class Unauthorized extends Error {
   readonly status: number;
@@ -426,6 +463,24 @@ export async function handleWrite(
           project_id: req.project_id, uid: caller.uid, role_slug,
         });
         return { status: 200, body: { ok: true, invite: code, role_slug, member_label, expires_at_ms: Date.now() + ttl_ms } };
+      }
+      case 'set_role_scope': {
+        const role_slug = typeof req.body.role_slug === 'string' ? req.body.role_slug : '';
+        const v = validateRoleScope(role_slug, req.body.file_scope);
+        if (!v.ok) return { status: 400, body: { error: v.error } };
+        const ref = deps.db.collection('projects').doc(req.project_id).collection('roles').doc(role_slug);
+        const before = await ref.get();
+        // Update, never create: a project with no policy doc for a role is one authorize() fails
+        // closed on, and this op must not be the way such a project quietly acquires one.
+        if (!before.exists) return { status: 404, body: { error: `project has no policy for "${role_slug}"` } };
+        await ref.update({ file_scope: v.globs });
+        deps.log.info('api.role_scope_set', 'role file scope changed', {
+          project_id: req.project_id, uid: caller.uid, role_slug,
+          from: (before.get('file_scope') as string[]) ?? [], to: v.globs,
+        });
+        // Existing locks are untouched: the fence applies to the next acquireScope, not
+        // retroactively to files someone already holds.
+        return { status: 200, body: { ok: true, role_slug, file_scope: v.globs } };
       }
       case 'claim': {
         const r = await deps.store.claimTask(req.project_id, String(req.body.task_id ?? ''), agent_id);
