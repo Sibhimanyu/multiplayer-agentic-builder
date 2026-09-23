@@ -284,6 +284,31 @@ async function cmdClaim(root: string, task_id: string, args: string[] = []): Pro
   return 0;
 }
 
+/**
+ * `flotilla release <task_id>` — give a ticket back, and its file lock with it.
+ *
+ * The API always had /release; the CLI never called it outside a failed claim. So a ticket you
+ * decided not to do stayed yours until the reaper noticed you had gone quiet -- which, for a CLI
+ * still running `start`, is never.
+ */
+async function cmdRelease(root: string, task_id: string): Promise<number> {
+  if (!(await isConnected(root))) {
+    log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
+    return 2;
+  }
+  const cfg = await loadConfig(root);
+  const client = new ApiClient({ base_url: cfg.api_base, token: await readToken(root), log });
+  const me = await client.whoami();
+  const snap = await client.readSnapshot();
+  const held = snap ? scopeForTask(snap.snapshot.locks, me.agent_id, task_id) : [];
+  await client.releaseTask(task_id);
+  // Only the lock held FOR THIS TASK. releaseScope drops the agent's one lock, so calling it
+  // unconditionally would free the files of a different task this agent is working on.
+  if (held.length > 0) await client.releaseScope();
+  out(`released ${task_id}${held.length > 0 ? ` and its lock on ${held.join(', ')}` : ''}`);
+  return 0;
+}
+
 async function cmdReport(root: string, message: string): Promise<number> {
   if (!(await isConnected(root))) {
     log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
@@ -1013,6 +1038,7 @@ const USAGE = `flotilla — agentic coordination CLI
                                 create a task on the board; --id overrides the derived id
   flotilla claim <task_id>      atomic claim, then acquire the declared file scope
                                 --scope <glob> names it for a ticket that declared none
+  flotilla release <task_id>    give a ticket back, and its file lock with it
   flotilla report "<message>"   queue one progress line in the outbox
   flotilla ship                 commit your in-scope changes to agent/<role>/<task> and push
                                 marks the task complete and opens its PR (needs gh)
@@ -1192,6 +1218,14 @@ export async function main(argv: string[]): Promise<number> {
         return 1;
       }
       return cmdClaim(root, task, rest.slice(1));
+    }
+    case 'release': {
+      const task = rest[0];
+      if (!task) {
+        log.warn('cli.usage_flotilla_release', 'usage: flotilla release <task_id>');
+        return 1;
+      }
+      return cmdRelease(root, task);
     }
     case 'report': {
       const message = rest.join(' ').trim();
