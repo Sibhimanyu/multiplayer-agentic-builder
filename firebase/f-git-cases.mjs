@@ -36,7 +36,7 @@ if (process.env.FIRESTORE_EMULATOR_HOST) {
 
 const PROJECT = process.env.FB_PROJECT_ID ?? 'multiplayer-agents-eec02';
 const PID = `proj_git_${Date.now().toString(36)}`;
-const REPO = 'Sibhimanyu/inventory-tracker';
+const REPO = 'flotilla-test/scratch';
 const ROOT = path.resolve('.agentic', 'f-git');
 
 let failed = 0;

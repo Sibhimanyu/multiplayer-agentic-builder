@@ -55,7 +55,7 @@ console.log(`ROLES AS PERMISSIONS + THE CLIENT SEAT -- real Firestore ${PROJECT}
 console.log(`namespace ${PID}\n`);
 
 try {
-  await store.ensureProject(PID, { project_name: 'Roles', repo_url: 'Sibhimanyu/inventory-tracker' });
+  await store.ensureProject(PID, { project_name: 'Roles', repo_url: 'flotilla-test/scratch' });
   // The role POLICY is what makes the gate live. ensureProject does not write one (it is the
   // coordination-tier call); createProject does. Written here directly so this file tests the
   // gate rather than the directory.
