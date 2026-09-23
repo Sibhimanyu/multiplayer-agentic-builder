@@ -933,7 +933,7 @@ export function rolePackFor(me: WhoAmI): RolePack {
   const mine = new Set(shared.file_scope);
   const others = ROLE_SLUGS
     .filter((r) => r !== me.role_slug)
-    .flatMap((r) => roleFor(r).file_scope)
+    .flatMap((r) => me.role_scopes?.[r] ?? roleFor(r).file_scope)
     .filter((g) => !mine.has(g))
     // `**` IS NOT A DIRECTORY ANY ROLE OWNS, it is the absence of a scope -- the owner's. Left
     // in, it made the first version of this fix reintroduce the same contradiction one step

@@ -441,4 +441,5 @@ test('whoami carries the project policy file_scope, not the template', async () 
   const res = await call('GET', '/whoami', {});
   assert.equal(res.status, 200);
   assert.deepEqual(res.body.file_scope, ['server/**', 'test/**']);
+  assert.deepEqual((res.body.role_scopes as Record<string, string[]>).backend, ['server/**', 'test/**']);
 });

@@ -86,3 +86,16 @@ test('an unknown role may write nothing, and is told so without contradiction', 
   assert.deepEqual(unknown.may_edit, []);
   assert.deepEqual(unknown.may_not_edit, ['**']);
 });
+
+test('the deny list is the other roles PROJECT fences when the backend sends them', () => {
+  const me = {
+    ...who('backend'),
+    file_scope: ['server/**', 'test/**'],
+    role_scopes: { backend: ['server/**', 'test/**'], frontend: ['web/**'], qa: ['test/**'] },
+  } as WhoAmI;
+  const pack = rolePackFor(me);
+  assert.deepEqual(pack.may_edit, ['server/**', 'test/**']);
+  assert.ok(pack.may_not_edit.includes('web/**'), 'the project frontend fence is named');
+  assert.ok(!pack.may_not_edit.includes('client/**'), 'the template frontend fence is not');
+  assert.ok(!pack.may_not_edit.includes('test/**'), 'and nothing I may edit is forbidden');
+});
