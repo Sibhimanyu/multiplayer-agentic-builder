@@ -57,7 +57,7 @@ import { applyEvent, emptyProjection, toSnapshot, type FoldOutcome, type Project
 import { isEmptyDelta, rollupDelta } from '../shared/store/rollup.ts';
 import { deriveTaskId, taskCreatedBody, type NewTask } from '../shared/store/tasks.ts';
 import { StoreAuthError, StoreBusyError, StoreError, StoreOfflineError } from '../shared/store/errors.ts';
-import { sanitizeBody, sanitizeText, VARCHAR_MAX } from '../shared/sanitize.ts';
+import { sanitizeBody, sanitizeText, TEXT_MAX, VARCHAR_MAX } from '../shared/sanitize.ts';
 import { consoleLogger, type Logger } from '../shared/log.ts';
 import { systemClock, type Clock } from '../shared/clock.ts';
 import { backoffMs } from '../shared/store/retry.ts';
@@ -81,6 +81,12 @@ import {
   type TaskActor,
   type TaskId,
   type TaskView,
+  REPORT_ORDER,
+  type ReportType,
+  type SuggestionId,
+  type SuggestionStatus,
+  type SuggestionView,
+  type TaskKind,
 } from '../shared/store/types.ts';
 
 export interface FirestoreStoreOptions {
@@ -522,6 +528,9 @@ export class FirestoreStore implements CoordinationStore {
   }
   private claimsRef(pid: ProjectId) {
     return this.proj(pid).collection('claims');
+  }
+  private suggestionsRef(pid: ProjectId) {
+    return this.proj(pid).collection('suggestions');
   }
   private locksRef(pid: ProjectId) {
     return this.proj(pid).collection('locks');
@@ -1312,6 +1321,96 @@ export class FirestoreStore implements CoordinationStore {
 
   // ---- read + notify -----------------------------------------------------------------
 
+  // ---- suggestions (order 0089, built for Firestore in the web-raise order) ----------------
+  //
+  // THE API HAD THESE AND PRODUCTION DID NOT. Only the memory adapter implemented them, so every
+  // raise, accept and decline against the deployed backend answered 501, and the board's "the
+  // API exists" was true only in tests. A separate collection, never the ledger: a user's words
+  // must not reach an agent's inbox, and a collection agents are never fed gets that by construction.
+
+  async raiseSuggestion(
+    pid: ProjectId,
+    input: { title: string; body: string; report: ReportType; raised_by: string; raised_by_label: string },
+  ): Promise<{ suggestion_id: SuggestionId }> {
+    return guard('raiseSuggestion', async () => {
+      // A user types this: sanitised exactly as the memory adapter does. The least trusted seat.
+      const title = sanitizeText(input.title, { field: 'suggestion.title', max: VARCHAR_MAX, log: this.log });
+      const body = sanitizeText(input.body, { field: 'suggestion.body', max: TEXT_MAX, log: this.log });
+      if (title.trim() === '') throw new StoreError('a suggestion needs a title');
+      const ref = this.suggestionsRef(pid).doc();
+      const suggestion_id = `sug_${ref.id}`;
+      const view: SuggestionView = {
+        suggestion_id, title, body, report: input.report, status: 'open',
+        raised_by: input.raised_by,
+        raised_by_label: sanitizeText(input.raised_by_label, { field: 'raised_by_label', max: VARCHAR_MAX, log: this.log }),
+        raised_at: this.iso(),
+        resolved_by: null, resolved_at: null, accepted_task_id: null, declined_reason: null,
+      };
+      await this.suggestionsRef(pid).doc(suggestion_id).set(view);
+      return { suggestion_id };
+    });
+  }
+
+  async acceptSuggestion(
+    pid: ProjectId, suggestion_id: SuggestionId, by: string,
+    task: { task_id: TaskId; title: string; kind: TaskKind; file_scope: string[] },
+  ): Promise<{ ok: true; task_id: TaskId } | { ok: false; resolved_by: string; status: SuggestionStatus }> {
+    const ref = this.suggestionsRef(pid).doc(suggestion_id);
+    // ATOMIC, like a claim: two people pick the same suggestion up seconds apart, and the loser
+    // gets the winner named rather than a second ticket for one complaint.
+    const marked = await guard('acceptSuggestion', () => this.tx('acceptSuggestion', async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) throw new StoreError(`no such suggestion: ${suggestion_id}`);
+      const s = snap.data() as SuggestionView;
+      if (s.status !== 'open') return { ok: false as const, resolved_by: s.resolved_by ?? '(unknown)', status: s.status, s };
+      tx.update(ref, { status: 'accepted', resolved_by: by, resolved_at: this.iso(), accepted_task_id: task.task_id });
+      return { ok: true as const, s };
+    }));
+    if (!marked.ok) return { ok: false, resolved_by: marked.resolved_by, status: marked.status };
+
+    // The ticket is an ordinary task_created, made AFTER the mark. If it fails the suggestion is
+    // put back to open, so it never points at a ticket that does not exist.
+    const s = marked.s;
+    const reopen = () => ref.update({ status: 'open', resolved_by: null, resolved_at: null, accepted_task_id: null });
+    try {
+      const r = await this.createTask(pid, {
+        task_id: task.task_id, title: task.title, kind: task.kind, file_scope: task.file_scope,
+        description: `Raised as ${s.report} by ${s.raised_by_label} (${suggestion_id}).\n\n${s.body}`,
+      }, { actor_type: 'member', actor_id: by });
+      if (!r.ok) {
+        await reopen();
+        throw new StoreError(`task ${task.task_id} already exists; suggestion left open`);
+      }
+    } catch (err) {
+      if (!(err instanceof StoreError && /already exists/.test(err.message))) await reopen().catch(() => {});
+      throw err;
+    }
+    return { ok: true, task_id: task.task_id };
+  }
+
+  async declineSuggestion(
+    pid: ProjectId, suggestion_id: SuggestionId, by: string, reason: string,
+  ): Promise<{ ok: true } | { ok: false; resolved_by: string; status: SuggestionStatus }> {
+    const why = sanitizeText(reason, { field: 'declined_reason', max: TEXT_MAX, log: this.log });
+    if (why.trim() === '') throw new StoreError('declining a suggestion needs a reason');
+    const ref = this.suggestionsRef(pid).doc(suggestion_id);
+    return guard('declineSuggestion', () => this.tx('declineSuggestion', async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) throw new StoreError(`no such suggestion: ${suggestion_id}`);
+      const s = snap.data() as SuggestionView;
+      if (s.status !== 'open') return { ok: false as const, resolved_by: s.resolved_by ?? '(unknown)', status: s.status };
+      tx.update(ref, { status: 'declined', resolved_by: by, resolved_at: this.iso(), declined_reason: why });
+      return { ok: true as const };
+    }));
+  }
+
+  /** Open ones, most urgent first. One query; history is not a lane. */
+  private async openSuggestions(pid: ProjectId): Promise<SuggestionView[]> {
+    const q = await this.suggestionsRef(pid).where('status', '==', 'open').get();
+    return q.docs.map((d) => d.data() as SuggestionView)
+      .sort((a, b) => REPORT_ORDER[a.report] - REPORT_ORDER[b.report] || (a.raised_at < b.raised_at ? -1 : 1));
+  }
+
   async readSnapshot(
     pid: ProjectId,
     etag?: string,
@@ -1329,6 +1428,8 @@ export class FirestoreStore implements CoordinationStore {
       // back to the server costs a handful of reads and cannot lie.
       const usable = cached && cached.ready.size >= LISTENER_COUNT;
       const snapshot = usable ? this.assemble(pid, cached) : await this.assembleFromServer(pid);
+      const suggestions = await this.openSuggestions(pid);
+      if (suggestions.length > 0) snapshot.suggestions = suggestions;
       const frozen = this.frozenAt.get(pid);
       if (frozen !== undefined && frozen >= 0) {
         // Report the fold as it stood when the freeze began. The ledger is unaffected:
