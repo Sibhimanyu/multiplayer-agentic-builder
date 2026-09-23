@@ -12,7 +12,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { git } from './blackboard.ts';
-import { ShipError, branchFor, classifyChanges, inScope, parseStatus, scopeForTask, shipScope, slugFor } from './ship.ts';
+import { ShipError, branchFor, classifyChanges, inScope, parseStatus, scopeForTask, shipScope, shouldCompleteOnShip, slugFor } from './ship.ts';
 import type { Logger } from '../shared/log.ts';
 
 const nullLog: Logger = { debug() {}, info() {}, warn() {}, error() {} };
@@ -250,4 +250,17 @@ test('one branch gets one task\'s lock, never the union of every claim', () => {
   assert.deepEqual(scopeForTask(locks, 'me', 'task_web'), ['web/**']);
   // And never a lock belonging to someone else, however the task id is spelled.
   assert.deepEqual(scopeForTask(locks, 'me', 'task_api'), []);
+});
+
+test('a hand-run ship marks an in-progress task complete', () => {
+  assert.equal(shouldCompleteOnShip('in_progress', []), true);
+  assert.equal(shouldCompleteOnShip('claimed', []), true);
+});
+
+test('--wip pushes without marking complete', () => {
+  assert.equal(shouldCompleteOnShip('in_progress', ['--wip']), false);
+});
+
+test('a task already past in_progress is not re-announced', () => {
+  for (const s of ['needs_review', 'pr_open', 'merged', 'done']) assert.equal(shouldCompleteOnShip(s, []), false, s);
 });

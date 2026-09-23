@@ -37,7 +37,7 @@ import { appendOutbox, drain, isConnected, readCursor, type OutboxRecord } from 
 import { ApiClient, connectWithInvite, type WhoAmI } from './client.ts';
 import { git, materialise, publishToBlackboard } from './blackboard.ts';
 import { serve, currentTask } from './mcp.ts';
-import { ShipError, branchFor, classifyChanges, parseStatus, scopeForTask, shipScope } from './ship.ts';
+import { ShipError, branchFor, classifyChanges, parseStatus, scopeForTask, shipScope, shouldCompleteOnShip } from './ship.ts';
 import { openBrowser } from './browser.ts';
 import { ensureIgnored } from './gitignore.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
@@ -933,11 +933,20 @@ async function cmdShip(root: string, rest: string[]): Promise<number> {
 
     if (r.unchanged) {
       out(`nothing to ship — ${branch} already holds your in-scope work`);
-      return 0;
+    } else {
+      out(`pushed ${branch}`);
+      out(`  ${r.commit_sha.slice(0, 12)}  ${r.files.length} file${r.files.length === 1 ? '' : 's'}`);
+      for (const f of r.files) out(`    ${f}`);
     }
-    out(`pushed ${branch}`);
-    out(`  ${r.commit_sha.slice(0, 12)}  ${r.files.length} file${r.files.length === 1 ? '' : 's'}`);
-    for (const f of r.files) out(`    ${f}`);
+    if (shouldCompleteOnShip(task.status, rest)) {
+      // Through the outbox, the same way an agent says it: one path to "complete", not two.
+      // Drained now so the board moves without `start` running; if offline it stays queued
+      // and the next `start` publishes it (and its ship-on-complete finds nothing new).
+      await appendOutbox(root, { kind: 'task_completed', body: { task_id: task.task_id } }, log);
+      const d = await drain(root, makePublisher(client, root, cfg, log), log, { onOffline: () => {} });
+      out(d.published > 0 ? `marked ${task.task_id} complete — needs review` : `queued ${task.task_id} complete — \`flotilla start\` will publish it`);
+    }
+    if (r.unchanged) return 0;
     if (cfg.repo) {
       out('');
       out(`  open a PR: https://github.com/${cfg.repo}/compare/${branch}?expand=1`);
@@ -973,6 +982,7 @@ const USAGE = `flotilla — agentic coordination CLI
   flotilla claim <task_id>      atomic claim, then acquire the declared file scope
   flotilla report "<message>"   queue one progress line in the outbox
   flotilla ship                 commit your in-scope changes to agent/<role>/<task> and push
+                                and marks the task complete; --wip pushes without that
                                 --dry-run lists what would be committed and stops
   flotilla start                drain the outbox, deliver the inbox, heartbeat
                                 ships automatically when the agent reports the task complete

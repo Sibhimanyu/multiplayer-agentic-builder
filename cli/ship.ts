@@ -191,6 +191,20 @@ export function branchFor(role_slug: string, task_id: string): string {
 }
 
 /**
+ * Whether a hand-run `flotilla ship` should also mark the task complete.
+ *
+ * YES BY DEFAULT. Shipping by hand left the ticket at in_progress: the board only moves on
+ * task_completed, and a human who pushed their finished work had no reason to know that. Two
+ * paths to "done" that end in different board states is the bug. `--wip` is the way to push a
+ * checkpoint without saying you are finished. A task already past in_progress is left alone,
+ * so shipping a follow-up fix does not re-announce it.
+ */
+export function shouldCompleteOnShip(status: string, args: readonly string[]): boolean {
+  if (args.includes('--wip')) return false;
+  return status === 'claimed' || status === 'in_progress';
+}
+
+/**
  * Commit the agent's in-scope changes onto its task branch and push.
  *
  * Returns `unchanged: true` when the scope held nothing, which is the common case on a loop and
