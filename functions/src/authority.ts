@@ -16,6 +16,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Firestore } from 'firebase-admin/firestore';
 
+import { hasCapability, ROLE_SLUGS } from '../../shared/store/directory.ts';
 import { StoreAuthError } from '../../shared/store/errors.ts';
 import type { AgentId, ProjectId } from '../../shared/store/types.ts';
 
@@ -37,20 +38,30 @@ export interface Identity {
 }
 
 /**
- * Role packs. `merge: false` for every agent role without exception.
+ * Role packs, DERIVED from the shared role table. `merge: false` for every role without exception.
+ *
+ * THIS WAS A HAND-WRITTEN TABLE KEYED ON SLUGS THAT NO LONGER EXIST -- 'backend-builder' where
+ * the real slug is 'backend', and no 'owner' at all -- so every role except architect fell
+ * through to DENY_ALL. The owner was told "branches pushed for you: no". Order 0089 fixed the
+ * same drift in the CLI's SCOPES; deriving from DEFAULT_ROLES is what stops it happening a third time.
  *
  * The integrator role exists in the protocol but is not in this table: granting merge is an
  * owner action that writes an explicit override onto the agent document, so the default for
  * every role a `connect` can produce is "cannot merge". A typo in a role slug therefore fails
  * closed rather than granting merge.
  */
-export const ROLE_PACKS: Record<string, Permissions> = {
-  architect: { push_branches: true, open_prs: true, merge: false, publish_contracts: true },
-  'backend-builder': { push_branches: true, open_prs: true, merge: false, publish_contracts: true },
-  'frontend-builder': { push_branches: true, open_prs: true, merge: false, publish_contracts: false },
-  'qa-verifier': { push_branches: true, open_prs: true, merge: false, publish_contracts: false },
-  'docs-writer': { push_branches: true, open_prs: true, merge: false, publish_contracts: false },
-};
+export const ROLE_PACKS: Record<string, Permissions> = Object.fromEntries(
+  ROLE_SLUGS.map((slug) => [
+    slug,
+    {
+      // Anyone who can hold a file lock does work that has to leave the machine as a branch.
+      push_branches: hasCapability(slug, 'acquire_scope'),
+      open_prs: hasCapability(slug, 'open_pr'),
+      merge: false,
+      publish_contracts: hasCapability(slug, 'publish_contract'),
+    },
+  ]),
+);
 
 const DENY_ALL: Permissions = {
   push_branches: false,
