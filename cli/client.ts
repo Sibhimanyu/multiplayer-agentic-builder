@@ -43,6 +43,8 @@ export interface WhoAmI {
   freshness: Freshness;
   /** The project's own fence for this role. Absent from older backends: fall back to the template. */
   file_scope?: string[];
+  /** Every role's fence in this project, for the "may not edit" line. Absent from older backends. */
+  role_scopes?: Record<string, string[]>;
 }
 
 export class ApiClient {

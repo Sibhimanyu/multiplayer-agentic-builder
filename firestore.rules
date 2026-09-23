@@ -104,6 +104,14 @@ service cloud.firestore {
         allow create, update, delete: if false;
       }
 
+      // Suggestions: what users have raised. Every member reads them -- the board shows the lane,
+      // and the person who raised one sees what became of it. Written ONLY by the write function,
+      // which checks `suggest` / `triage`; a browser that could write here could accept its own.
+      match /suggestions/{sid} {
+        allow get, list: if isMember(pid);
+        allow write: if false;
+      }
+
       // seq counter. One document, read by the dashboard to display ledger position.
       match /meta/{docId} {
         allow get, list: if isMember(pid);

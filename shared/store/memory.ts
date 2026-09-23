@@ -793,6 +793,9 @@ export class MemoryStore implements CoordinationStore {
       case 'ci_passed': if (task) stamp(task, { ci: 'passed' }); break;
       case 'ci_failed': if (task) stamp(task, { ci: 'failed' }); break;
       case 'merged': if (task) stamp(task, { status: 'merged' }); break;
+      case 'task_cancelled':
+        if (task && !['merged', 'done', 'cancelled'].includes(task.status)) stamp(task, { status: 'cancelled', claimed_by: null });
+        break;
       // Claims and locks are live store state, folded in #buildSnapshot.
       // Human-layer events never change board state.
       case 'task_claimed': case 'scope_locked': case 'scope_released':

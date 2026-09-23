@@ -18,6 +18,7 @@ import {
 import { loadProjects, type ProjectRow } from './store/projects';
 import { Sidebar, TopBar, Unbuilt, ScopeRail, SECTIONS, QUEUE_SECTION, type Section } from './Shell';
 import { Queue, NewTaskForm, type QueueRow } from './Queue';
+import { SuggestionsGroup } from './Suggestions';
 import { hasCapability } from './store/directory-types';
 
 /**
@@ -409,7 +410,15 @@ function ProjectShell({
             projectEmpty={snap.tasks.length === 0}
             onClaimed={() => { /* the snapshot subscription re-renders this */ }}
             onNewTask={() => setComposing(true)}
-          />
+          >
+            <SuggestionsGroup
+              project_id={project_id}
+              suggestions={snap.suggestions ?? []}
+              canSuggest={hasCapability(role, 'suggest')}
+              canTriage={canCreate}
+              kinds={TASK_KINDS}
+            />
+          </Queue>
         </div>
       ) : (
         <main className="main"><Unbuilt section={meta} /></main>

@@ -355,6 +355,25 @@ registerProjectCommands({
     return 0;
   },
 
+  async cancel(root, task_id, reason) {
+    const cfg = await loadConfig();
+    const raw = await readFile(join(root, '.agentic/project.json'), 'utf8').catch(() => '');
+    const project_id = raw ? ((JSON.parse(raw) as { project_id?: string }).project_id ?? '') : '';
+    if (!project_id) {
+      console.error('\nno project here. Run this in a repo with .agentic/project.json.');
+      return 1;
+    }
+    const client = new WriteClient({ api_url: writeUrl(cfg), api_key: cfg.api_key, log: consoleLogger });
+    const res = await client.write(project_id, 'cancel_task', { task_id, reason });
+    if (!res.ok) {
+      console.error(`\n${String(res.body.error ?? `write refused (HTTP ${res.status})`)}`);
+      return 1;
+    }
+    const held = res.body.released_claim ? `, released ${String(res.body.released_claim)}'s claim` : '';
+    console.log(`\ncancelled ${task_id}${held}`);
+    return 0;
+  },
+
   async task(root, title, kind, task_id, file_scope) {
     const cfg = await loadConfig();
     const raw = await readFile(join(root, '.agentic/project.json'), 'utf8').catch(() => '');

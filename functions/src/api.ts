@@ -288,8 +288,17 @@ export async function handleApi(req: ApiRequest, deps: ApiDeps): Promise<ApiResp
         // `flotilla new` redraw it, and a CLI reading the template would tell the agent the old
         // fence in AGENTS.md and hand it tickets it can never lock. Absent when the project has no
         // policy doc, so the CLI can fall back rather than be told "nothing".
-        const policy = await deps.db.collection('projects').doc(id.project_id).collection('roles').doc(id.role_slug).get();
-        const file_scope = policy.exists ? (policy.get('file_scope') as string[] | undefined) : undefined;
+        //
+        // role_scopes is EVERY role's fence, because AGENTS.md's "may not edit" line is the other
+        // roles' scopes; built from the template, it told backend not to touch client/** in a repo
+        // whose frontend lives in web/**. Six small documents, read once per whoami.
+        const roleDocs = await deps.db.collection('projects').doc(id.project_id).collection('roles').get();
+        const role_scopes: Record<string, string[]> = {};
+        for (const d of roleDocs.docs) {
+          const g = d.get('file_scope') as unknown;
+          if (Array.isArray(g)) role_scopes[d.id] = g as string[];
+        }
+        const file_scope = role_scopes[id.role_slug];
         return json(200, {
           agent_id: id.agent_id,
           project_id: id.project_id,
@@ -297,6 +306,7 @@ export async function handleApi(req: ApiRequest, deps: ApiDeps): Promise<ApiResp
           permissions: id.permissions,
           freshness: store.freshness,
           ...(Array.isArray(file_scope) ? { file_scope } : {}),
+          ...(Object.keys(role_scopes).length > 0 ? { role_scopes } : {}),
         });
       }
 

@@ -73,6 +73,24 @@ export interface Snapshot {
   project_name: string; repo_url: string;
   tasks: TaskView[]; agents: AgentPresence[];
   locks: ScopeLock[]; contracts: ContractPointer[];
+  /** OPEN suggestions, most urgent first. Absent means none (or an older backend). */
+  suggestions?: SuggestionView[];
+}
+
+/** Mirrors shared/store/types.ts. "Is it broken, or would it just be better" -- not a priority. */
+export type ReportType = 'broken' | 'confusing' | 'improvement' | 'idea';
+export const REPORT_TYPES: readonly ReportType[] = ['broken', 'confusing', 'improvement', 'idea'];
+export const REPORT_ORDER: Record<ReportType, number> = { broken: 0, confusing: 1, improvement: 2, idea: 3 };
+
+export interface SuggestionView {
+  suggestion_id: string;
+  title: string;
+  body: string;
+  report: ReportType;
+  status: 'open' | 'accepted' | 'declined';
+  raised_by: string;
+  raised_by_label: string;
+  raised_at: string;
 }
 
 /**

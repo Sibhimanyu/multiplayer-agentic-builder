@@ -30,7 +30,9 @@ export type ContractEventKind =
 
 export type CoordinationEventKind =
   | 'task_created' | 'task_claimed' | 'task_completed' | 'task_blocked'
-  | 'branch_pushed' | 'pr_opened' | 'ci_passed' | 'ci_failed' | 'merged';
+  | 'branch_pushed' | 'pr_opened' | 'ci_passed' | 'ci_failed' | 'merged'
+  // A ticket nobody will do. Only a member with `triage` appends it, through the write path.
+  | 'task_cancelled';
 
 /** Dashboard only. Delivering these to an agent is a protocol violation. */
 export type HumanEventKind = 'agent_heartbeat' | 'task_progress';
@@ -56,6 +58,7 @@ export const LAYER_OF: Record<EventKind, Layer> = {
   task_claimed: 'coordination', task_completed: 'coordination', task_blocked: 'coordination',
   branch_pushed: 'coordination', pr_opened: 'coordination',
   ci_passed: 'coordination', ci_failed: 'coordination', merged: 'coordination',
+  task_cancelled: 'coordination',
   agent_heartbeat: 'human', task_progress: 'human',
 };
 
