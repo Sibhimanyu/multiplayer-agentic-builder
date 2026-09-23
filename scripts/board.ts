@@ -99,8 +99,8 @@ const DECLARED = {
   /** Gaps that are facts about the world. Code-derived gaps are appended to these. */
   gaps: [
     '<b>A user cannot raise anything yet from the web.</b> The seat, the four report types and the API exist; the sign-in form and the suggestions lane on the board do not.',
-    '<b>Nothing hands tickets out.</b> A human writes them, an agent takes whichever it likes.',
-    '<b>Two agents at once has never been run.</b> The locks are built and untested in the wild.',
+    '<b>Hand-out is first come, not planned.</b> <code>flotilla claim</code> gives you the oldest open ticket inside your fence; nothing decides who <em>should</em> do what, or in which order.',
+    '<b>Several agents at once has run on one machine only.</b> Three checkouts shared a repo and the locks held, but every checkout was signed in as the same person.',
     '<b>Nobody reviews anybody&rsquo;s work</b> inside the product.',
   ],
 };
