@@ -11,6 +11,15 @@
 import { loadCredential, mintIdToken, type StoredCredential } from './auth.ts';
 import type { Logger } from '../shared/log.ts';
 
+/** Transport errors that happen before a request is on the wire, so a retry cannot double-apply. */
+export const NEVER_SENT = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'ENETUNREACH']);
+
+/** undici wraps the socket error: `TypeError: fetch failed` with the real code on `.cause`. */
+export function causeCode(err: unknown): string {
+  const c = (err as { cause?: { code?: unknown } })?.cause?.code ?? (err as { code?: unknown })?.code;
+  return typeof c === 'string' ? c : '';
+}
+
 export class NotLoggedIn extends Error {
   constructor() {
     super('not signed in. Run `flotilla login`.');
@@ -63,14 +72,36 @@ export class WriteClient {
     body: Record<string, unknown>,
   ): Promise<{ ok: boolean; status: number; body: Record<string, unknown> }> {
     const doFetch = this.opts.fetchImpl ?? fetch;
-    const res = await doFetch(this.opts.api_url, {
+    // Outside the retry: "not signed in" is not a network failure and must surface as itself.
+    const id_token = await this.idToken();
+    const send = async () => doFetch(this.opts.api_url, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        authorization: `Bearer ${await this.idToken()}`,
+        authorization: `Bearer ${id_token}`,
       },
       body: JSON.stringify({ project_id, op, body }),
     });
+
+    // RETRIED ONLY WHEN THE REQUEST NEVER LEFT. `flotilla invite` failed with a bare "fetch
+    // failed" on a cold start and worked on the next run. But writes are not all idempotent -- a
+    // suggestion raised twice is two suggestions -- so a failure after the request may have
+    // arrived (a reset mid-response) is reported, never replayed.
+    let res: Response;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        res = await send();
+        break;
+      } catch (err) {
+        const code = causeCode(err);
+        if (attempt < 3 && NEVER_SENT.has(code)) {
+          this.opts.log.warn('cli.write_retry', 'could not reach the write API, retrying', { op, attempt, code });
+          await new Promise((r) => setTimeout(r, 400 * attempt));
+          continue;
+        }
+        throw new Error(`could not reach the write API (${code || (err as Error).message}). Check your connection and re-run.`);
+      }
+    }
 
     let parsed: Record<string, unknown>;
     try {
