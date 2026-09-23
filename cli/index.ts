@@ -245,7 +245,18 @@ async function cmdClaim(root: string, task_id: string, args: string[] = []): Pro
   const want = scopeToAcquire(task?.file_scope ?? [], args);
   if (want.ignored.length > 0) out(`--scope ignored: ${task_id} declares its own scope`);
   if (task && want.globs.length > 0) {
-    const scope = await client.acquireScope(task_id, want.globs);
+    let scope;
+    try {
+      scope = await client.acquireScope(task_id, want.globs);
+    } catch (err) {
+      // A refused scope (role_denied) used to crash here with the claim still held, so the
+      // ticket sat under an agent that could never lock its files. Give it back, say why.
+      if (!(err instanceof StoreAuthError)) throw err;
+      await client.releaseTask(task_id);
+      out(`cannot take ${task_id}: ${err.message.replace(/^POST \/scope: /, '')}`);
+      out('claim released. Role scopes are the fence: ask the owner, or pick another task');
+      return 1;
+    }
     if (!scope.ok) {
       out(`cannot take ${task_id}: file scope conflicts`);
       for (const c of scope.conflicts) {
@@ -994,6 +1005,8 @@ const USAGE = `flotilla — agentic coordination CLI
   flotilla invite <role>        mint a single-use invite code for a teammate
                                 --label "Their Name"
 
+  flotilla role <role> --scope <globs>
+                                redraw what a role may edit in this project (owner only)
   flotilla connect <invite>     write AGENTS.md + .agentic/, store the agent token
   flotilla status               what the board thinks is happening
   flotilla task <title> --kind <${TASK_KINDS.join('|')}> --scope "<globs>"
@@ -1048,6 +1061,8 @@ export interface ProjectCommands {
    * read by the API and written by nothing.
    */
   invite: (root: string, role_slug: string, label?: string) => Promise<number>;
+  /** `flotilla role <slug> --scope <globs>`. Redraws a role's file fence for this project. Owner only. */
+  roleScope: (root: string, role_slug: string, globs: string[]) => Promise<number>;
 }
 
 let projectCommands: ProjectCommands | null = null;
@@ -1199,6 +1214,17 @@ export async function main(argv: string[]): Promise<number> {
       if (!projectCommands) return needsBackend();
       const li = rest.indexOf('--label');
       return projectCommands.invite(root, role, li > -1 ? rest[li + 1] : undefined);
+    }
+    case 'role': {
+      const role = rest.find((a) => !a.startsWith('--'));
+      const si = rest.indexOf('--scope');
+      const globs = si > -1 && rest[si + 1] ? rest[si + 1]!.split(',').map((g) => g.trim()).filter(Boolean) : [];
+      if (!role || globs.length === 0) {
+        log.warn('cli.usage_flotilla_role', `usage: flotilla role <${ROLE_SLUGS.join('|')}> --scope "server/**,test/**"`);
+        return 1;
+      }
+      if (!projectCommands) return needsBackend();
+      return projectCommands.roleScope(root, role, globs);
     }
     case 'chat':
       return cmdChat(root, rest);

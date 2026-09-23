@@ -5,6 +5,8 @@ import { test } from 'node:test';
 
 import { DEFAULT_ROLES, ROLE_SLUGS } from '../../shared/store/directory.ts';
 import { ROLE_PACKS } from './authority.ts';
+import { statusFor } from './api.ts';
+import { RoleDeniedError } from '../../shared/store/directory.ts';
 
 test('every real role slug has a role pack', () => {
   // Control: the scan below must have something to scan.
@@ -39,4 +41,15 @@ test('packs follow the shared capabilities, both ways', () => {
 
 test('no role pack grants merge', () => {
   for (const [slug, pack] of Object.entries(ROLE_PACKS)) assert.equal(pack.merge, false, slug);
+});
+
+test('a role refusing a glob is a 403 that says why, not a 500', () => {
+  const r = statusFor(new RoleDeniedError('backend', 'edit outside its file scope', ['server/**'], ['functions/**']));
+  assert.equal(r.status, 403);
+  assert.equal((r.body as { error: string }).error, 'role_denied');
+  assert.match((r.body as { detail: string }).detail, /server\/\*\*/);
+});
+
+test('a genuinely unexpected error is still a bare 500', () => {
+  assert.equal(statusFor(new Error('boom')).status, 500);
 });
