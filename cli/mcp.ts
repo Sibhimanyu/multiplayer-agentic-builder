@@ -21,6 +21,7 @@ import { LAYOUT } from './agentic.ts';
 import { readFactsQuietly, renderStaleForAgent, staleTouching, type Fact } from './facts.ts';
 import type { Logger } from '../shared/log.ts';
 import type { Snapshot, TaskView } from '../shared/store/types.ts';
+import { cleanHandoffNote, latestHandoff } from '../shared/store/handoff.ts';
 
 /** Every version of the MCP handshake this server has been tested against. */
 const KNOWN_PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
@@ -75,6 +76,23 @@ export const TOOLS: ToolDef[] = [
       + 'committed. Call this before relying on a contract or decision, and re-verify a stale one '
       + 'against the code instead of trusting it.',
     inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'handoff',
+    description:
+      'Pass your current task to whoever claims it next, with a note. Use it when you are about '
+      + 'to run out of budget or context mid-task: your in-scope work is pushed to the task branch, '
+      + 'the task and its lock are released, and the next claimant reads your note first. The note '
+      + 'is required: say what is done, what is next, and anything that bit you. Stop working on '
+      + 'the task after calling this.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        note: { type: 'string', description: 'What is done, what is next, and the gotchas. Plain language.' },
+        task_id: { type: 'string', description: 'Optional. Defaults to the task in current-task.md.' },
+      },
+      required: ['note'],
+    },
   },
   {
     name: 'claim_task',
@@ -185,6 +203,7 @@ export function renderAssignment(
       'Ask the user which task to take, then call claim_task with its id.',
     ].join('\n');
   }
+  const handed = latestHandoff(task);
   return [
     ...head,
     `Current task ${task.task_id} (${task.status}): ${task.title}`,
@@ -194,6 +213,9 @@ export function renderAssignment(
       ? `This task locks: ${task.file_scope.join(', ')}`
       : 'This task declares no file scope. Ask before editing outside your role scope.',
     task.blocked_by ? `\nBLOCKED by ${task.blocked_by}: ${task.blocked_reason ?? ''}` : '',
+    // The note a teammate left when they handed this on. Here as well as in current-task.md,
+    // because this is the call the agent is told to make first.
+    handed ? `\nHANDED OFF by ${handed.from.label} (${handed.at}):\n${handed.note}${handed.branch ? `\nContinue on ${handed.branch}.` : ''}` : '',
   ].join('\n');
 }
 
@@ -267,6 +289,23 @@ async function callTool(name: string, args: Record<string, unknown>, deps: McpDe
       const task_id = /^task_id:\s*(\S+)/m.exec(current)?.[1] ?? null;
       await appendOutbox(deps.root, { kind: 'task_progress', body: { task_id, summary: message } }, deps.log);
       return text('Queued. It reaches the board on the next publish by `flotilla start`.');
+    }
+    case 'handoff': {
+      // Refused HERE, before anything is queued, so the agent learns in the same turn. A queued
+      // line with no note would only be refused later on the inbox, after the agent had stopped.
+      const note = cleanHandoffNote(args.note);
+      if (!note.ok) return text(`Not queued: ${note.error}.`);
+      const current = await fs.readFile(path.join(deps.root, LAYOUT.current_task), 'utf8').catch(() => '');
+      const task_id = String(args.task_id ?? '').trim() || (/^task_id:\s*(\S+)/m.exec(current)?.[1] ?? '');
+      if (!task_id) return text('No task is claimed on this machine, so there is nothing to hand off.');
+      // THE OUTBOX, like `report`, not the API: the push and the release are `flotilla start`'s
+      // job, and a direct call would be a second handoff path that silently fails offline.
+      await appendOutbox(deps.root, { kind: 'handoff_requested', body: { task_id, note: note.note } }, deps.log);
+      return text(
+        `Queued a handoff of ${task_id}. \`flotilla start\` pushes your in-scope work, releases the task `
+        + 'and passes your note on. Stop working on this task now; if it cannot be done, a '
+        + 'handoff_refused line arrives on your inbox and you still hold it.',
+      );
     }
     case 'claim_task': {
       const task_id = String(args.task_id ?? '').trim();

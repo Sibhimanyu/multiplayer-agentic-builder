@@ -27,6 +27,7 @@ import {
 import { StoreAuthError, StoreBusyError, StoreError, StoreOfflineError } from '../../shared/store/errors.ts';
 import { RoleDeniedError } from '../../shared/store/directory.ts';
 import { LAYER_OF, type EventKind } from '../../shared/store/types.ts';
+import { cleanHandoffNote, mayHandOff } from '../../shared/store/handoff.ts';
 import type { Logger } from '../../shared/log.ts';
 import type { FirestoreStore } from '../../firebase/store.ts';
 import type { Firestore } from 'firebase-admin/firestore';
@@ -222,6 +223,47 @@ export async function handleApi(req: ApiRequest, deps: ApiDeps): Promise<ApiResp
         if (!task_id) return json(400, { error: 'missing_task_id' });
         await store.releaseTask(id.project_id, task_id, id.agent_id);
         return json(200, { ok: true });
+      }
+
+      case 'POST /handoff': {
+        // A release that carries a note. Enforced here the way release is: the store refuses a
+        // non-holder atomically, and the ROLE half of the rule (an owner may hand off anybody's
+        // ticket) is decided from the token, never from the body.
+        const task_id = str(req.body, 'task_id');
+        if (!task_id) return json(400, { error: 'missing_task_id' });
+        const note = cleanHandoffNote(obj(req.body).note);
+        if (!note.ok) return json(400, { error: 'missing_note', detail: note.error });
+
+        const holder = await store.claimOwner(id.project_id, task_id);
+        const may = mayHandOff(holder, id.agent_id, id.role_slug === 'owner');
+        if (!may.ok) {
+          // A VALUE, not a 4xx, like a lost claim. A 403 here would reach the CLI as
+          // StoreAuthError, and `flotilla start` STOPS on that -- one agent asking to hand off a
+          // ticket it no longer holds would take its whole session down.
+          log.info('fn.handoff_refused', 'handoff refused: caller is neither the claimant nor an owner', {
+            project_id: id.project_id, task_id, agent_id: id.agent_id, holder,
+          });
+          return json(200, { ok: false, owner: may.owner, detail: may.reason });
+        }
+        // The label shown on the card is the HOLDER's, from their agent document -- an owner
+        // handing off a teammate's ticket must not put the owner's name on the teammate's work.
+        const from_label = holder === id.agent_id
+          ? id.member_label
+          : ((await deps.db.collection('projects').doc(id.project_id).collection('agents').doc(holder!).get())
+            .get('member_label') as string | undefined) ?? holder!;
+        const r = await store.handoffTask(id.project_id, task_id, {
+          holder: holder!,
+          from_label,
+          by: { actor_type: 'agent', actor_id: id.agent_id },
+          note: note.note,
+          // Pointers, cleaned to their git shapes by the store; anything else is dropped.
+          branch: str(req.body, 'branch'),
+          head_sha: str(req.body, 'head_sha'),
+        });
+        log.info('fn.handoff', 'task handed off', {
+          project_id: id.project_id, task_id, by: id.agent_id, holder, ok: r.ok,
+        });
+        return json(200, { ...r });
       }
 
       case 'POST /scope': {

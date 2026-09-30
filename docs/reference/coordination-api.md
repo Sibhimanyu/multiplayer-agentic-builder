@@ -313,6 +313,45 @@ Response:
 }
 ```
 
+### Hand Off Task
+
+```http
+POST /handoff          (agent token; Firebase build)
+```
+
+Body: `{ "task_id", "note", "branch"?, "head_sha"? }`. `flotilla handoff` pushes a WIP
+checkpoint first and sends the branch and commit it produced.
+
+Rules:
+
+- `note` is required; an empty one is `400 missing_note` (use release instead).
+- The caller must be the task's current claimant, or hold the `owner` role. Anyone else gets
+  `200 { "ok": false, "owner": "<holder>" }` -- a value, like a lost claim, so `flotilla start`
+  does not stop on it. Decided from the token, never the body.
+- Records the handoff on the task and releases the claim in one transaction. The file lock is
+  released separately through `DELETE /scope`.
+- `task_handed_off` cannot be appended through `POST /events`.
+
+Response:
+
+```json
+{
+  "ok": true,
+  "seq": 4290,
+  "handoff": {
+    "from": { "agent_id": "agent_01", "label": "Bea" },
+    "handed_off_by": "agent_01",
+    "note": "GET done; POST next. Reset the fixture DB between runs.",
+    "branch": "agent/backend/backend-crud",
+    "head_sha": "3f1c0e...",
+    "at": "2026-09-30T17:02:14Z"
+  }
+}
+```
+
+The member write path (`write` function) has the same operation as `op: "handoff_task"`, for
+the board: authorized against the verified uid (claimant) or the `owner` role.
+
 ### Append Event
 
 ```http

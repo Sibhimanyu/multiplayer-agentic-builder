@@ -32,6 +32,7 @@ import { materialise, publishToBlackboard, type BlackboardOptions } from './blac
 import { readPending, writeCursor, type OutboxRecord } from './outbox.ts';
 import type { Logger } from '../shared/log.ts';
 import { StoreAuthError } from '../shared/store/errors.ts';
+import { cleanHandoffNote } from '../shared/store/handoff.ts';
 import {
   HEARTBEAT_INTERVAL_MS,
   LAYER_OF,
@@ -207,6 +208,37 @@ export async function publishRecord(
       );
     }
     return { published: true, seq };
+  }
+
+  // `handoff_requested`: an agent passing its ticket on with a note. Same translation as a claim
+  // request -- intent in, the atomic operation out. NARROWER THAN `flotilla start`: this dev
+  // bridge holds no ship configuration, so it records the handoff and frees the claim and lock
+  // but pushes no checkpoint. `start` is the path that does both, and the one agents run under.
+  if (rec.kind === 'handoff_requested') {
+    if (!task_id) return { published: false, seq: 0, note: 'handoff_requested without task_id' };
+    if (!store.handoffTask) return { published: false, seq: 0, note: 'this store does not support handoffs' };
+    const note = cleanHandoffNote(body.note);
+    if (!note.ok) return { published: false, seq: 0, note: note.error };
+    const r = await store.handoffTask(project_id, task_id, {
+      holder: agent_id, from_label: agent_id, by: { actor_type: 'agent', actor_id: agent_id },
+      note: note.note, branch: null, head_sha: null,
+    });
+    if (!r.ok) {
+      log.info('bridge.handoff_refused', 'handoff refused: the agent does not hold the task', { project_id, task_id, agent_id, owner: r.owner });
+      if (inbox_root) {
+        await appendInbox(inbox_root, {
+          v: '0.2', seq: 0, layer: 'coordination', kind: 'handoff_refused', ts: new Date().toISOString(),
+          body: { task_id, reason: 'not_claimant', owner: r.owner },
+        }, log);
+      }
+      return { published: true, seq: 0, note: `refused, held by ${r.owner ?? 'nobody'}` };
+    }
+    // The lock, only if it is THIS task's -- releaseScope drops the agent's single lock.
+    const snap = await store.readSnapshot(project_id);
+    if (snap?.snapshot.locks.some((l) => l.agent_id === agent_id && l.task_id === task_id)) {
+      await store.releaseScope(project_id, agent_id);
+    }
+    return { published: true, seq: r.seq };
   }
 
   const res = await store.appendEvent(

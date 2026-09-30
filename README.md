@@ -63,6 +63,8 @@ flotilla ls                    projects you are a member of
 flotilla members <project_id>  the roster
 flotilla connect <invite>      write AGENTS.md + .agentic/, store the agent token
 flotilla claim <task_id>       atomic claim, then acquire the declared file scope
+flotilla handoff <task_id> --note "..."
+                               push a WIP checkpoint, release with a note for the next claimant
 flotilla start                 drain the outbox, deliver the inbox, heartbeat
 flotilla ask <file>:<line> "…"  a ticket pointed at that code: file, lines, snippet, request
 flotilla ask --scan            one ticket per FLOTILLA marker comment, idempotently

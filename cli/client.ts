@@ -20,6 +20,7 @@ import type {
   Event,
   EventKind,
   Freshness,
+  HandoffResult,
   ScopeLock,
   Seq,
   Snapshot,
@@ -195,6 +196,20 @@ export class ApiClient {
     return this.retry(async () => {
       await this.request('POST', '/release', { task_id });
     }, 'releaseTask');
+  }
+
+  /**
+   * Hand a claimed task on with a note. A refusal (not the claimant) is a VALUE, like a lost
+   * claim: the API answers 200 + ok:false with the holder named.
+   */
+  handoffTask(
+    task_id: TaskId,
+    h: { note: string; branch: string | null; head_sha: string | null },
+  ): Promise<HandoffResult> {
+    return this.retry(async () => {
+      const r = await this.request<HandoffResult>('POST', '/handoff', { task_id, ...h });
+      return r.data.ok ? r.data : { ok: false, owner: r.data.owner ?? null };
+    }, 'handoffTask');
   }
 
   acquireScope(

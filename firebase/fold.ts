@@ -21,6 +21,7 @@
 import type { ContractPointer, Event, ScopeLock, Snapshot, TaskStatus, TaskView } from '../shared/store/types.ts';
 import { LAYER_OF } from '../shared/store/types.ts';
 import { newTaskView } from '../shared/store/tasks.ts';
+import { HANDOFF_HISTORY_MAX, handoffFromEvent, statusAfterHandoff, withHandoff } from '../shared/store/handoff.ts';
 
 /** The mutable projection an adapter persists. Everything here is derivable from the ledger. */
 export interface Projection {
@@ -198,6 +199,31 @@ export function applyEvent(p: Projection, e: Event): FoldOutcome {
       // Terminal, and it takes the owner off the card: a cancelled ticket held by somebody is a
       // ticket that still looks like work. The write path releases the claim and the lock first.
       move(task, 'cancelled', { claimed_by: null });
+      break;
+    }
+
+    case 'task_handed_off': {
+      if (!task) { ignore(`unknown task_id ${taskId}`); break; }
+      // A release that keeps its context. Its only producer is handoffTask, which deletes the
+      // claim document in the same transaction -- so, like task_unblocked, the owner comes off
+      // the card always. Parse, cap and status rule are shared with the memory fold.
+      const parsed = handoffFromEvent(b, e.created_at);
+      if (!parsed.ok) { ignore(parsed.reason); break; }
+      const { handoffs, dropped } = withHandoff(task.handoffs, parsed.handoff);
+      // Recorded as an ignore so the adapter logs it: the event applied, but history fell off.
+      if (dropped > 0) ignore(`handoff history for ${task.task_id} at its cap of ${HANDOFF_HISTORY_MAX}; dropped ${dropped} oldest`);
+      const patch: Partial<TaskView> = {
+        handoffs,
+        claimed_by: null,
+        branch: parsed.handoff.branch ?? task.branch,
+      };
+      const to = statusAfterHandoff(task.status);
+      if (to !== task.status) move(task, to, patch);
+      else {
+        // A shipped card (needs_review, pr_open) keeps its column; only the claim and the note move.
+        Object.assign(task, patch, { updated_at: e.created_at });
+        touched.push(task.task_id);
+      }
       break;
     }
 
