@@ -11,6 +11,7 @@
 import { useState } from 'react';
 import type { TaskView, AgentPresence } from './store/types';
 import { claimTask, createTask } from './store/write';
+import { kindLabel } from './format';
 
 /** What a row needs to decide whether it can be claimed, and to say why not. */
 export interface QueueRow {
@@ -25,7 +26,7 @@ function Chips({ row }: { row: QueueRow }) {
   const scopes = row.task.file_scope;
   return (
     <div className="meta">
-      <span className="chip kind" data-k={row.task.kind}>{row.task.kind}</span>
+      <span className="chip kind" data-k={row.task.kind}>{kindLabel(row.task.kind)}</span>
       {scopes.map((s) => (
         <span className="chip scope" key={s}><span className="k">locks</span> {s}</span>
       ))}

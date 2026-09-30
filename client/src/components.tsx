@@ -2,6 +2,7 @@
 // If a backend SDK appears in this file, the store seam has leaked.
 
 import { useEffect, useState } from 'react';
+import { formatAge } from './format';
 // COLUMNS, not a local list: the index must not invent a second definition of the board's
 // columns. If the board gains a column, this gains it too, or the two screens disagree.
 import { COLUMNS } from './store/types';
@@ -121,8 +122,8 @@ export function TaskCard({
   task: TaskView; agent?: AgentPresence; selected: boolean;
   onSelect: () => void; contractVersion?: number;
 }) {
-  const blockedMins = task.blocked_since
-    ? Math.round((Date.now() - new Date(task.blocked_since).getTime()) / 60000)
+  const blockedFor = task.blocked_since
+    ? formatAge(Date.now() - new Date(task.blocked_since).getTime())
     : null;
 
   return (
@@ -136,7 +137,7 @@ export function TaskCard({
         {contractVersion != null && <span className="verpill">v{contractVersion}</span>}
         {task.blocked_by && (
           <span className="badge" data-t="blocked">
-            Blocked{blockedMins != null ? ` ${blockedMins}m` : ''}
+            Blocked{blockedFor != null ? ` ${blockedFor}` : ''}
           </span>
         )}
         {task.ci === 'failed' && <span className="badge" data-t="ci-failed">CI failed</span>}
