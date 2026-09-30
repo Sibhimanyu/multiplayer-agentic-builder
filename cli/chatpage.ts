@@ -5,7 +5,7 @@
 // already holds the agent token -- a different trust boundary and a different lifetime. Bundling
 // the React app here would mean shipping a build step inside the CLI tarball to render one screen.
 //
-// The design language is DESIGN.md's instrument panel, deliberately: a designer opening this
+// The design language is DESIGN.md's Graphite, deliberately: a designer opening this
 // should recognise it as the same product as the board. Order 0083 made that literally true --
 // the type scale below is DESIGN.md's `--t-*`, and the fonts are the same two files the board
 // serves, now shipped in the CLI tarball and served from disk by `serveChat`.
@@ -37,15 +37,17 @@ export function chatPage(nonce: string): string {
     font-weight:500;font-style:normal;font-display:swap}
 
   :root{
-    --paper:#0D1117; --card:#161B22; --raise:#1B222B;
-    --ink:#E6EDF3; --ink2:#ADBAC7; --muted:#7C8894;
-    --line:#21262D; --line2:#30363D;
-    --teal:#2DD4BF; --teal-soft:rgba(45,212,191,.13);
-    --red:#FF7B72; --amber:#E3B341;
+    /* DESIGN.md "Graphite" -- the same values as client/src/tokens.css, by hand, because this
+       page has no build step. Neutral greys, no hue; colour for state only. */
+    --paper:#121212; --card:#1A1A1A; --raise:#232323;
+    --ink:#EDEDED; --ink2:#B8B8B8; --muted:#8C8C8C;
+    --line:#262626; --line2:#363636; --line3:#4A4A4A;
+    --inverse:#EDEDED; --on-inverse:#121212; --inverse-hover:#FFFFFF;
+    --red:#E5877E; --red-soft:rgba(229,135,126,.12); --green:#86B98F;
     --sans:'Plex Sans',ui-sans-serif,system-ui,sans-serif;
     --mono:'Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
     /* DESIGN.md "Type". Integers only, 11px floor. Not one value off this list. */
-    --t-0:11px; --t-1:12px; --t-2:14px; --t-3:16px; --t-4:18px; --t-5:21px;
+    --t-0:11px; --t-1:12px; --t-2:14px; --t-3:16px; --t-4:18px; --t-5:21px; --t-6:24px; --t-7:28px;
     --lh-tight:1.2; --lh:1.5; --lh-read:1.6;
     /* DESIGN.md "Spacing". */
     --sp-1:2px; --sp-2:4px; --sp-3:6px; --sp-4:8px; --sp-5:12px;
@@ -64,37 +66,44 @@ export function chatPage(nonce: string): string {
        font:400 var(--t-2)/var(--lh) var(--sans);
        -webkit-font-smoothing:antialiased;
        display:grid;grid-template-columns:minmax(0,1fr) 336px}
-  ::selection{background:rgba(45,212,191,.28)}
+  ::selection{background:rgba(237,237,237,.22);color:var(--ink)}
   /* One ring, one place. The old page set outline AND recoloured the border, so an autofocused
      textarea opened wearing a 4px double neon halo -- AI look #2 (near-black, one neon accent,
      glowing edges) arriving on page load, before the user did anything. */
   :where(a,button,textarea,[tabindex]):focus-visible{
-    outline:2px solid var(--teal);outline-offset:2px}
+    outline:2px solid var(--ink);outline-offset:2px}
   @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 
   /* ---- conversation ---- */
   main{display:grid;grid-template-rows:auto minmax(0,1fr) auto;min-height:0}
   header{padding:var(--sp-5) var(--sp-7);border-bottom:1px solid var(--line);
          display:flex;align-items:center;gap:var(--sp-4)}
-  header .mk{width:24px;height:20px;flex:none}
+  /* The real mark, inline, in ink -- not the three-triangle stand-in this header used to draw,
+     which was a second, different logo on the second surface. Its viewBox carries 9.1% dead
+     space on the left and 18.0% on the right (DESIGN.md "Logo spacing"), cancelled here so the
+     header gap is ink to glyph, the same way the board's lockup does it. */
+  header .mk{--mark-w:26px;width:var(--mark-w);height:21px;flex:none;color:var(--ink);
+       margin-left:calc(var(--mark-w) * -.091);margin-right:calc(var(--mark-w) * -.18)}
   header .name{font-size:var(--t-3);font-weight:600;letter-spacing:-.01em}
   /* Wayfinding: which of the two surfaces is this. The old header said "Flotilla chat" as one
      15px string and offered no way back to the board -- a dead end, and the trunk test's
-     "where am I in the scheme of things" had no answer at all. */
+     "where am I in the scheme of things" had no answer at all. An outlined neutral tag now:
+     it was teal on teal-soft, the brightest object on the page, for a word that is a label. */
   header .where{font-family:var(--mono);font-size:var(--t-0);letter-spacing:.06em;
-        text-transform:uppercase;color:var(--teal);background:var(--teal-soft);
-        border-radius:var(--r-tag);padding:3px var(--sp-3)}
+        text-transform:uppercase;color:var(--ink2);border:1px solid var(--line2);
+        border-radius:var(--r-tag);padding:var(--sp-1) var(--sp-3)}
   header .ctx{font-family:var(--mono);font-size:var(--t-1);color:var(--muted);
               margin-left:auto;font-variant-numeric:tabular-nums}
-  header .board{font-size:var(--t-1);color:var(--ink2);text-decoration:none;
-        border:1px solid var(--line2);border-radius:var(--r-ctl);padding:var(--sp-2) var(--sp-4);
-        transition:border-color var(--motion-fast) var(--ease),color var(--motion-fast) var(--ease)}
-  header .board:hover{border-color:var(--teal);color:var(--teal)}
+  header .board{font-size:var(--t-1);font-weight:500;color:var(--ink);text-decoration:none;
+        border:1px solid var(--line3);border-radius:var(--r-ctl);padding:var(--sp-2) var(--sp-5);
+        transition:border-color var(--motion-fast) var(--ease),background var(--motion-fast) var(--ease)}
+  header .board:hover{border-color:var(--ink2);background:var(--raise)}
   header .board[hidden]{display:none}
 
-  #log{overflow-y:auto;padding:var(--sp-7);display:grid;gap:var(--sp-7);align-content:start}
+  #log{overflow-y:auto;padding:var(--sp-8) var(--sp-7);display:grid;gap:var(--sp-7);
+       align-content:start}
   .turn{display:grid;gap:var(--sp-3);max-width:72ch}
-  .turn .who{font-family:var(--mono);font-size:var(--t-0);letter-spacing:.09em;
+  .turn .who{font-family:var(--mono);font-size:var(--t-0);letter-spacing:.08em;
              text-transform:uppercase;color:var(--muted)}
   .turn .body{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink);
               font-size:var(--t-3);line-height:var(--lh-read)}
@@ -113,55 +122,58 @@ export function chatPage(nonce: string): string {
      worth asking, written from the live task and the live scope, as buttons that send. It
      answers "what do I type" by being the answer. */
   .start{display:grid;gap:var(--sp-6);max-width:68ch;align-content:start}
-  .start h2{font-size:var(--t-5);font-weight:600;line-height:var(--lh-tight);
-            letter-spacing:-.015em;text-wrap:balance}
+  .start h2{font-size:var(--t-7);font-weight:600;line-height:var(--lh-tight);
+            letter-spacing:-.025em;text-wrap:balance}
   .start .sub{color:var(--ink2);font-size:var(--t-3);line-height:var(--lh-read);
               overflow-wrap:anywhere}
-  /* ONE CARD WITH FOUR ROWS, NOT FOUR CARDS. Four separately bordered, separately shadowed,
+  /* ONE LIST WITH FOUR ROWS, NOT FOUR CARDS. Four separately bordered, separately shadowed,
      identically shaped boxes is the card-grid tell -- content of equal weight given equal boxes
      until the page reads as a template. These are four rows of one list, so they are drawn as
-     one list. The teal mono keyword and the pointer are the static affordance; nothing here
-     depends on hover to be discoverable. */
-  .prompts{display:grid;background:var(--card);border:1px solid var(--line);
-     box-shadow:var(--shadow);border-radius:var(--r-card);overflow:hidden}
-  .prompts button{display:grid;grid-template-columns:5.5rem minmax(0,1fr);gap:var(--sp-4);
+     one list, hairline-ruled on the ground like the board's queue. The mono verb and the arrow
+     are the static affordance; nothing here depends on hover to be discoverable. */
+  .prompts{display:grid;border-top:1px solid var(--line2);border-bottom:1px solid var(--line2)}
+  .prompts button{display:grid;grid-template-columns:6rem minmax(0,1fr) auto;gap:var(--sp-5);
      align-items:baseline;text-align:left;background:none;color:var(--ink);
      border:none;border-top:1px solid var(--line);
-     padding:var(--sp-5) var(--sp-6);font:400 var(--t-2)/var(--lh) var(--sans);cursor:pointer;
+     padding:var(--sp-5) var(--sp-5);font:500 var(--t-2)/var(--lh) var(--sans);cursor:pointer;
      transition:background var(--motion-fast) var(--ease)}
   .prompts button:first-child{border-top:none}
-  .prompts button:hover{background:var(--raise)}
+  .prompts button::after{content:'\\2192';color:var(--muted);
+     transition:color var(--motion-fast) var(--ease)}
+  .prompts button:hover{background:var(--card)}
+  .prompts button:hover::after{color:var(--ink)}
   .prompts button:focus-visible{outline-offset:-2px}
-  .prompts button .k{font-family:var(--mono);font-size:var(--t-0);color:var(--teal);
-     letter-spacing:.06em;text-transform:uppercase}
+  .prompts button .k{font-family:var(--mono);font-size:var(--t-0);font-weight:400;
+     color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
   .prompts button .q{overflow-wrap:anywhere}
   /* Upfront about the limit rather than letting the user discover it by being refused. */
-  .cando{font-size:var(--t-1);color:var(--muted);line-height:var(--lh);
-         border-top:1px solid var(--line);padding-top:var(--sp-5)}
-  .cando b{color:var(--ink2);font-weight:500}
+  .cando{font-size:var(--t-1);color:var(--muted);line-height:var(--lh-read)}
+  .cando b{color:var(--ink2);font-weight:600}
 
   /* ---- composer ---- */
-  form{border-top:1px solid var(--line);padding:var(--sp-6) var(--sp-7) var(--sp-7);
+  form{border-top:1px solid var(--line);padding:var(--sp-6) var(--sp-7) var(--sp-6);
        display:grid;gap:var(--sp-4)}
   .box{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--sp-4);align-items:end}
   textarea{font:400 var(--t-3)/var(--lh) var(--sans);color:var(--ink);background:var(--card);
-     border:1px solid var(--line2);border-radius:var(--r-ctl);
+     border:1px solid var(--line2);border-radius:var(--r-ctl);caret-color:var(--ink);
      padding:var(--sp-5);resize:none;min-height:54px;max-height:208px;box-shadow:var(--shadow);
      transition:border-color var(--motion-fast) var(--ease)}
+  textarea:hover{border-color:var(--line3)}
   textarea::placeholder{color:var(--muted)}
   /* THE COMPOSER IS AUTOFOCUSED, SO THE GENERIC RING IS WRONG HERE. A text field always matches
      :focus-visible while focused, so the shared 2px offset ring fired on page load and the first
      thing anyone saw was a glowing teal halo around an empty box -- near-black with one neon
      accent and glowing edges, arriving before the user had done anything. A focused text cursor
-     in a box whose border has gone teal is unambiguous without shouting; the shared ring stays
-     for every control where focus really is the only signal. */
-  textarea:focus-visible{outline:none;border-color:var(--teal)}
-  button.send{background:var(--teal);color:var(--paper);border:none;border-radius:var(--r-ctl);
-     padding:var(--sp-5) var(--sp-6);font:500 var(--t-2) var(--sans);cursor:pointer;
-     transition:background var(--motion-fast) var(--ease)}
-  button.send:hover:not(:disabled){background:#5EE3D2}
-  button.send:disabled{background:var(--line2);color:var(--muted);cursor:not-allowed}
-  .hint{font-family:var(--mono);font-size:var(--t-1);color:var(--muted)}
+     in a box whose border has stepped up to ink2 is unambiguous without shouting; the shared
+     ring stays for every control where focus really is the only signal. */
+  textarea:focus-visible{outline:none;border-color:var(--ink2)}
+  /* The primary is the inversion, as on the board: near-white, ground-coloured label, 16.00:1. */
+  button.send{background:var(--inverse);color:var(--on-inverse);border:none;
+     border-radius:var(--r-ctl);padding:var(--sp-5) var(--sp-6);font:600 var(--t-2) var(--sans);
+     cursor:pointer;transition:background var(--motion-fast) var(--ease)}
+  button.send:hover:not(:disabled){background:var(--inverse-hover)}
+  button.send:disabled{background:var(--raise);color:var(--muted);cursor:not-allowed}
+  .hint{font-family:var(--mono);font-size:var(--t-0);color:var(--muted)}
 
   /* ---- rail ---- */
   /* THE RAIL IS FIRST IN THE DOM AND SECOND ON SCREEN. It comes first in the markup so that a
@@ -171,34 +183,42 @@ export function chatPage(nonce: string): string {
      336px one, which is what happened the first time. */
   aside{grid-column:2;grid-row:1;
         border-left:1px solid var(--line);background:var(--card);overflow-y:auto;
-        padding:var(--sp-6);display:grid;gap:var(--sp-7);align-content:start}
+        padding:var(--sp-7) var(--sp-6);display:grid;gap:var(--sp-8);align-content:start}
   main{grid-column:1;grid-row:1}
   .sec{display:grid;gap:var(--sp-4)}
-  .lbl{font-family:var(--mono);font-size:var(--t-0);letter-spacing:.09em;
+  .lbl{font-family:var(--mono);font-size:var(--t-0);font-weight:500;letter-spacing:.08em;
        text-transform:uppercase;color:var(--muted)}
   /* THE RAIL USED TO SCROLL SIDEWAYS. A task id is one unbroken 47-character mono token, and
      nothing told it to break, so the rail measured 347px inside a 319px box: the id was clipped
      at the window edge and the one identifier this panel exists to show could not be read.
      'anywhere' rather than 'break-word', because a mono id has no break opportunities at all. */
   .id,.g{overflow-wrap:anywhere}
-  .task-title{font-size:var(--t-3);font-weight:500;line-height:var(--lh);letter-spacing:-.01em}
-  .id{font-family:var(--mono);font-size:var(--t-1);color:var(--muted)}
-  .state{font-family:var(--mono);font-size:var(--t-0);letter-spacing:.06em;text-transform:uppercase;
-         color:var(--amber)}
+  .task-title{font-size:var(--t-3);font-weight:600;line-height:var(--lh-tight);letter-spacing:-.01em}
+  .id{font-family:var(--mono);font-size:var(--t-0);color:var(--muted)}
+  /* The task's state is a label, not a warning: it was amber, and amber means an anonymous
+     session. An outlined tag in ink, sitting above the title it describes. */
+  .state{justify-self:start;font-family:var(--mono);font-size:var(--t-0);letter-spacing:.06em;
+         text-transform:uppercase;color:var(--ink);border:1px solid var(--line3);
+         border-radius:var(--r-tag);padding:var(--sp-1) var(--sp-3)}
   .globs{display:flex;flex-wrap:wrap;gap:var(--sp-2)}
-  .g{font-family:var(--mono);font-size:var(--t-0);padding:2px var(--sp-3);
-     border-radius:var(--r-tag);background:var(--raise);border:1px solid var(--line);
-     color:var(--ink2)}
-  .who-row{display:grid;gap:var(--sp-2);padding:var(--sp-4) 0;border-bottom:1px solid var(--line)}
+  .g{font-family:var(--mono);font-size:var(--t-0);padding:var(--sp-1) var(--sp-3);
+     border-radius:var(--r-tag);background:transparent;border:1px solid var(--line2);
+     color:var(--ink)}
+  .who-row{display:grid;gap:var(--sp-2);padding:var(--sp-5) 0;border-bottom:1px solid var(--line)}
+  .who-row:first-child{padding-top:0}
   .who-row:last-child{border-bottom:none}
   .who-row .n{font-size:var(--t-2);font-weight:600;display:flex;align-items:baseline;gap:var(--sp-3)}
-  .who-row .r{font-family:var(--mono);font-size:var(--t-1);color:var(--muted)}
-  .you{font-size:var(--t-0);background:var(--teal-soft);color:var(--teal);
-       border-radius:var(--r-tag);padding:1px var(--sp-2);font-family:var(--mono);
-       letter-spacing:.05em;font-weight:400}
-  .off{font-family:var(--mono);font-size:var(--t-0);color:var(--amber)}
-  .warn{border:1px solid rgba(255,123,114,.35);background:rgba(255,123,114,.08);
-        border-radius:var(--r-card);padding:var(--sp-5);font-size:var(--t-1);color:var(--ink2);
+  .who-row .r{font-family:var(--mono);font-size:var(--t-0);color:var(--muted)}
+  .who-row .globs{margin-top:var(--sp-2)}
+  .you{font-size:var(--t-0);background:var(--raise);color:var(--ink);
+       border-radius:var(--r-tag);padding:0 var(--sp-3);font-family:var(--mono);
+       letter-spacing:.05em;font-weight:500}
+  /* Offline is the quietest state, so it is the dimmest text, not a warning colour. */
+  .off{font-family:var(--mono);font-size:var(--t-0);font-weight:400;color:var(--muted)}
+  /* Held by others IS a state -- your agent will be refused there -- so it keeps red, quietly:
+     red text on red-soft over card, 5.57:1, and a hairline not a glow. */
+  .warn{border:1px solid var(--line2);background:var(--red-soft);
+        border-radius:var(--r-ctl);padding:var(--sp-5);font-size:var(--t-1);color:var(--ink2);
         display:grid;gap:var(--sp-3);line-height:var(--lh)}
   .warn b{color:var(--red);font-size:var(--t-0);font-family:var(--mono);
           letter-spacing:.06em;text-transform:uppercase;font-weight:500}
@@ -214,6 +234,9 @@ export function chatPage(nonce: string): string {
           grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:var(--sp-6)}
     main{grid-column:1;grid-row:2}
     header{padding:var(--sp-5)}
+    header .ctx{display:none}
+    .start h2{font-size:var(--t-5)}
+    #log{padding-top:var(--sp-7)}
     #log,form{padding-left:var(--sp-5);padding-right:var(--sp-5)}
   }
 </style>
@@ -233,7 +256,7 @@ export function chatPage(nonce: string): string {
 
 <main>
   <header>
-    <svg class="mk" viewBox="0 0 520 420" aria-hidden="true"><path fill="#2DD4BF" d="M60 40l180 90-180 40zM60 210l300 60-300 50zM300 110l160 100-160 60z"/></svg>
+    <svg class="mk" viewBox="0 0 520 420" aria-hidden="true"><g fill="currentColor" transform="rotate(-7 260 210)"><path transform="translate(0 -12)" d="M184 39C245 46 346 75 429 112C442 118 444 128 430 135C376 164 311 185 249 199C235 202 231 193 239 181C259 151 266 121 256 94C246 68 220 50 184 39Z"/><path transform="translate(-4 6)" d="M86 143C132 151 198 173 239 193C250 198 250 207 239 213C192 238 139 261 54 281C41 284 37 275 46 264C75 235 98 211 101 188C103 170 98 155 86 143Z"/><path transform="translate(0 12)" d="M190 245C233 253 290 274 326 293C337 299 337 307 326 313C287 336 243 353 176 369C163 372 159 363 168 352C192 326 210 304 212 284C213 268 207 254 190 245Z"/></g></svg>
     <span class="name">Flotilla</span>
     <span class="where">chat</span>
     <span class="ctx" id="ctx">connecting…</span>
