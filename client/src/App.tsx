@@ -76,7 +76,9 @@ export function ProjectsIndex({
         {session && onSignOut && <AccountChip session={session} onSignOut={onSignOut} />}
       </nav>
       <div className="stage">
-        <div className="board">
+        {/* data-index: the index is one list at reading width, not a board column. Same flag on
+            ProjectsSkeleton, so the skeleton and the list stay the same box (locked pattern 7). */}
+        <div className="board" data-index="true">
           <section className="col" key="projects">
             <div className="col-head">
               <h3>Projects</h3><span className="count">{projects.length}</span>
@@ -101,14 +103,11 @@ export function ProjectsIndex({
 /**
  * The pre-board states, rendered as themselves.
  *
- * Deliberately the same shape as the "Connecting…" placeholder this replaces -- a padded block
- * using the existing colour tokens -- because components.tsx and tokens.css are frozen and a
- * failure message is not a reason to invent chrome. What changes is that it now SAYS which
- * failure it is, and what fixes it.
+ * One `.notice` block in tokens.css, rather than the inline `base` object and a `marginTop:8` per
+ * line these used to carry. Same content, same order; the heading carries the state and the
+ * command to run is set as code. What it SAYS -- which failure, and what fixes it -- is unchanged.
  */
 function Notice({ status }: { status: StoreStatus }) {
-  const base = { padding: 28, color: 'var(--muted)', maxWidth: 620, lineHeight: 1.6 } as const;
-
   // BOTH LOADING STATES ARE NOW THE SKELETON. Order 0066 point 3: these two rendered bare text
   // on an empty page for up to fifteen seconds, which the user twice read as a broken app.
   //
@@ -122,19 +121,21 @@ function Notice({ status }: { status: StoreStatus }) {
 
   if (status.state === 'auth-unavailable') {
     return (
-      <div style={base}>
-        <strong style={{ color: 'var(--red)' }}>Sign-in is unavailable.</strong>
-        <div style={{ marginTop: 8 }}>{status.detail}</div>
-        <div style={{ marginTop: 8, opacity: 0.7 }}>({status.code})</div>
+      <div className="notice" data-tone="bad">
+        <strong>Sign-in is unavailable.</strong>
+        <div>{status.detail}</div>
+        <div className="code">({status.code})</div>
       </div>
     );
   }
 
   if (status.state === 'denied') {
+    // Not red, and no longer amber: this is the rules working, not a failure, and amber is
+    // reserved for the anonymous session. The heading is ink, set large.
     return (
-      <div style={base}>
-        <strong style={{ color: 'var(--amber)' }}>Not a member of this project.</strong>
-        <div style={{ marginTop: 8 }}>
+      <div className="notice">
+        <strong>Not a member of this project.</strong>
+        <div>
           Signed in, but the security rules do not grant this browser read access to{' '}
           <code>{status.project_id}</code>. This is the rules working, not an outage.
         </div>
@@ -143,11 +144,11 @@ function Notice({ status }: { status: StoreStatus }) {
           sign-in screen carried three lines about throwaway identities before anyone had chosen
           one. It belongs here, where someone is actually looking at the consequence.
         */}
-        <div style={{ marginTop: 8 }}>
+        <div>
           An identity is a member of nothing until someone admits it — including an anonymous one.
         </div>
-        <div style={{ marginTop: 8 }}>Admit this browser by running:</div>
-        <div style={{ marginTop: 6, color: 'var(--ink)', userSelect: 'all' }}>
+        <div>Admit this browser by running:</div>
+        <div className="cmd">
           <code>node firebase/bridge-run.ts --admit {status.uid}</code>
         </div>
       </div>
@@ -155,9 +156,9 @@ function Notice({ status }: { status: StoreStatus }) {
   }
 
   return (
-    <div style={base}>
-      <strong style={{ color: 'var(--red)' }}>Could not load the board.</strong>
-      <div style={{ marginTop: 8 }}>{status.detail}</div>
+    <div className="notice" data-tone="bad">
+      <strong>Could not load the board.</strong>
+      <div>{status.detail}</div>
     </div>
   );
 }

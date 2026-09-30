@@ -243,7 +243,7 @@ try {
     check(byKeyboard?.outlineStyle === 'solid' && parseFloat(byKeyboard?.outlineWidth ?? '0') >= 2,
       'a VISIBLE ring is drawn on it',
       `${byKeyboard?.outlineStyle} ${byKeyboard?.outlineWidth}`);
-    check(byKeyboard?.outlineColor === 'rgb(15, 118, 110)', 'in --teal', byKeyboard?.outlineColor);
+    check(byKeyboard?.outlineColor === 'rgb(237, 237, 237)', 'in --ink (Graphite; was --teal)', byKeyboard?.outlineColor);
     check(parseFloat(byKeyboard?.outlineOffset ?? '0') > 0,
       'at an offset so it clears the card edge', byKeyboard?.outlineOffset);
     await page.screenshot({ path: path.join(OUT, '0066-focus-ring.png') });

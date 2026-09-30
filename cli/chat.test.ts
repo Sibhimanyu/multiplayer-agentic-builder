@@ -170,8 +170,8 @@ test('the board link is present when configured and absent when not', async () =
 test('the page holds no font-size below the 11px floor, and no half-pixel', async () => {
   const html = chatPage('n');
   // DESIGN.md "Type": integers only, 11px floor. This page is the one surface written entirely
-  // against the scale, so it is the one that can be asserted rather than migrated -- the board
-  // still carries known half-pixel debt.
+  // against the scale, so it is the one that can be asserted outright. (The board has no
+  // half-pixels left either since Graphite, but keeps three measured brand-lockup literals.)
   const sizes = [...html.matchAll(/font-size:\s*([0-9.]+)px/g)].map((m) => Number(m[1]));
   // The control FIRST: a regex that matches nothing would pass every assertion below.
   assert.ok(sizes.length === 0 || sizes.every((s) => Number.isInteger(s) && s >= 11),
@@ -181,6 +181,39 @@ test('the page holds no font-size below the 11px floor, and no half-pixel', asyn
   assert.ok(tokens.every((t) => Number.isInteger(t) && t >= 11), `below the floor: ${tokens}`);
   // And every font-size goes through the scale rather than a literal.
   assert.equal(sizes.length, 0, `literal font-size values remain: ${sizes.join(', ')}`);
+});
+
+test('the board, the chat page and the CLI login page share one Graphite palette, with no accent hue', async () => {
+  // DESIGN.md: "any visual divergence between the surfaces is a bug". The two CLI pages carry the
+  // palette by hand, because they have no build step, so this is the check that they agree with
+  // client/src/tokens.css -- and that the teal the user called "neon" does not come back.
+  const { readFileSync } = await import('node:fs');
+  const tokens = readFileSync(new URL('../client/src/tokens.css', import.meta.url), 'utf8');
+  const { loginPageHtml } = await import('./loginpage.ts');
+  const surfaces: Record<string, string> = {
+    'chat page': chatPage('n'),
+    'CLI login page': loginPageHtml({ api_key: 'k', auth_domain: 'd', project_id: 'p', nonce: 'n', anonymous: false }),
+  };
+  const NAMES = ['paper', 'card', 'raise', 'ink', 'ink2', 'muted', 'line', 'line2', 'line3', 'red'];
+  const decl = (css: string, name: string) =>
+    new RegExp(`--${name}:\\s*(#[0-9A-Fa-f]{6})`).exec(css)?.[1]?.toUpperCase();
+  const board = Object.fromEntries(NAMES.map((n) => [n, decl(tokens, n)]));
+  // The control: the scan must actually find the board's palette, or every comparison below
+  // compares undefined with undefined and passes.
+  assert.equal(Object.values(board).filter(Boolean).length, NAMES.length,
+    `tokens.css palette not found: ${JSON.stringify(board)}`);
+  // Graphite's greys are TRUE neutrals: R = G = B. A blue-tinted ground is how it looked like GitHub.
+  for (const n of NAMES.filter((x) => x !== 'red')) {
+    const h = board[n]!;
+    assert.ok(h.slice(1, 3) === h.slice(3, 5) && h.slice(3, 5) === h.slice(5, 7), `--${n} ${h} is not a neutral grey`);
+  }
+  for (const [label, html] of Object.entries(surfaces)) {
+    for (const n of NAMES) assert.equal(decl(html, n), board[n], `${label} --${n} differs from tokens.css`);
+  }
+  for (const [label, css] of Object.entries({ 'tokens.css': tokens, ...surfaces })) {
+    const code = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.ok(!/#2DD4BF|#5EE3D2|#0F766E|#0D1117|--teal/i.test(code), `${label} still carries the teal world`);
+  }
 });
 
 test('the opening screen is starter prompts, not a welcome paragraph', async () => {

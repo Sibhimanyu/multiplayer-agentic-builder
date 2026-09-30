@@ -1,7 +1,9 @@
 # Dashboard — shared by both builds
 
-Built once in Phase 0 so it is not built twice. Approved design: **Kanban Calm**.
-Tokens and locked patterns: `../docs/designs/dashboard.md`.
+Built once in Phase 0 so it is not built twice. Approved design: **Graphite** — dark, neutral,
+monochrome; emphasis by weight and inversion, colour for state only.
+Tokens, measured contrasts and locked patterns: `../DESIGN.md`. (`../docs/designs/dashboard.md`
+records the superseded Kanban Calm world; its locked patterns still hold.)
 
 ## The seam
 
