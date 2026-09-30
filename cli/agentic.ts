@@ -215,6 +215,7 @@ export function renderProtocolMd(): string {
     '## The events you may append',
     '',
     '  claim_requested      { task_id }                     ask for a task',
+    '  handoff_requested    { task_id, note }               pass your task on, with a note',
     '  task_progress        { task_id, summary, files_changed[] }',
     '  task_blocked         { task_id, reason, blocked_by_task_id }',
     '  task_completed       { task_id }',
@@ -238,6 +239,23 @@ export function renderProtocolMd(): string {
     '',
     'A denial is a normal reply, not an error. Pick a different task or wait for the next one.',
     'Do not re-request the same task in a loop.',
+    '',
+    '## Handing your task on',
+    '',
+    'If you are about to run out of budget or context, do not just stop: append',
+    '`handoff_requested` with your task_id and a note saying what is done, what is next, and',
+    'anything that bit you. The note is required. The CLI pushes your in-scope work to your',
+    'branch, releases the task and its lock, and gives your note to whoever claims it next.',
+    'After appending it, stop working on that task.',
+    '',
+    'If it cannot be done -- you do not hold the task, or the push failed -- you are told:',
+    '',
+    '  handoff_refused    { task_id, reason, detail }   you still hold it',
+    '',
+    'When YOU claim a task someone handed off, the note arrives first, and it is also in',
+    `${LAYOUT.current_task} under "Handed off to you":`,
+    '',
+    '  handoff_received   { task_id, from, note, branch, head_sha }   read it before you start',
     '',
     '## When you are blocked',
     '',
@@ -295,6 +313,31 @@ export function renderCurrentTask(task: TaskView | null): string {
       '',
       `Blocked by ${task.blocked_by}: ${sanitizeText(task.blocked_reason ?? '', { field: 'task.blocked_reason', log: nullLogger })}`,
     );
+  }
+  // A TICKET PICKED UP FROM A TEAMMATE CARRIES THEIR NOTE HERE, in the file the agent is told to
+  // read first. The inbox gets the latest one too, but the inbox is a stream the agent reads from
+  // a cursor; this is the task's own page, so the whole history sits beside the description.
+  // Newest first, because the newest note is the one that describes the branch as it is now.
+  const handoffs = task.handoffs ?? [];
+  if (handoffs.length > 0) {
+    const latest = handoffs[handoffs.length - 1]!;
+    lines.push(
+      '',
+      '## Handed off to you',
+      '',
+      'Someone worked on this before you. Read their note before you start, and continue their',
+      latest.branch
+        ? `work: it is on \`${latest.branch}\`${latest.head_sha ? ` at ${latest.head_sha.slice(0, 12)}` : ''}, and your shipped work goes there too.`
+        : 'work: nothing was pushed before the handoff, so start from the default branch.',
+      '',
+      ...[...handoffs].reverse().flatMap((h, i) => [
+        `### ${i === 0 ? 'Latest' : 'Earlier'}: from ${sanitizeText(h.from.label, { field: 'handoff.from', max: VARCHAR_MAX, log: nullLogger })} at ${h.at}`,
+        '',
+        sanitizeText(h.note, { field: 'handoff.note', log: nullLogger }),
+        '',
+      ]),
+    );
+    lines.pop(); // no trailing blank; writeFile adds the one newline
   }
   return lines.join('\n');
 }

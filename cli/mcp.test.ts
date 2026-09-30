@@ -29,10 +29,10 @@ test('a notification gets no reply at all', async () => {
   assert.equal(await handle({ jsonrpc: '2.0', method: 'notifications/initialized' }, deps()), null);
 });
 
-test('tools/list returns four usable tools', async () => {
+test('tools/list returns five usable tools', async () => {
   const r = await handle({ jsonrpc: '2.0', id: 3, method: 'tools/list' }, deps());
   const tools = (r as never as { result: { tools: typeof TOOLS } }).result.tools;
-  assert.equal(tools.length, 4);
+  assert.equal(tools.length, 5);
   for (const t of tools) {
     assert.ok(t.name && t.description.length > 40, `${t.name} needs a description an agent can act on`);
     assert.equal(t.inputSchema.type, 'object');

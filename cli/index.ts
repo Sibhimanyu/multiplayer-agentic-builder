@@ -43,6 +43,7 @@ import { ensureIgnored } from './gitignore.ts';
 import { positional } from './args.ts';
 import { dropLanded, landedChanges } from './sync.ts';
 import { pickTasks } from './pick.ts';
+import { branchForTask, deliverHandoff, performHandoff, releaseLockFor, type HandoffOutcome } from './handoff.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
 import { LAYER_OF, TASK_KINDS, type Event, type EventKind, type TaskKind } from '../shared/store/types.ts';
 import { ROLE_SLUGS, roleFor } from '../shared/store/directory.ts';
@@ -283,6 +284,11 @@ async function cmdClaim(root: string, task_id: string, args: string[] = []): Pro
     out('scope: (none declared) — nothing is locked, so `flotilla ship` will refuse this task');
     out(`  name the files it touches: flotilla claim ${task_id} --scope 'server/**'`);
   }
+  // A HANDED-OFF TICKET IS PICKED UP WARM. The note is printed for the person, written to the
+  // inbox for the agent, and the checkout moved onto the branch the work is on. The no-id claim
+  // arrives here too, so a ticket handed out by `flotilla claim` is delivered the same way. After
+  // the tree is written, so current-task.md already carries the history when the agent looks.
+  if (task) for (const line of await deliverHandoff(root, task, log)) out(line);
   out(`see ${LAYOUT.current_task}`);
   return 0;
 }
@@ -303,13 +309,45 @@ async function cmdRelease(root: string, task_id: string): Promise<number> {
   const client = new ApiClient({ base_url: cfg.api_base, token: await readToken(root), log });
   const me = await client.whoami();
   const snap = await client.readSnapshot();
-  const held = snap ? scopeForTask(snap.snapshot.locks, me.agent_id, task_id) : [];
   await client.releaseTask(task_id);
-  // Only the lock held FOR THIS TASK. releaseScope drops the agent's one lock, so calling it
-  // unconditionally would free the files of a different task this agent is working on.
-  if (held.length > 0) await client.releaseScope();
+  // Only the lock held FOR THIS TASK -- the one helper `handoff` releases through as well.
+  const held = await releaseLockFor(client, snap?.snapshot.locks ?? [], me.agent_id, task_id);
   out(`released ${task_id}${held.length > 0 ? ` and its lock on ${held.join(', ')}` : ''}`);
   return 0;
+}
+
+/**
+ * `flotilla handoff <task_id> --note "..."` — release WITH context. See cli/handoff.ts.
+ *
+ * Exit 1 on every refusal, unlike a lost claim: a handoff that did not happen means the person
+ * walking away still holds the ticket, and a harness that reads exit 0 would let them leave.
+ */
+async function cmdHandoff(root: string, task_id: string, note: string): Promise<number> {
+  if (!(await isConnected(root))) {
+    log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
+    return 2;
+  }
+  const cfg = await loadConfig(root);
+  const client = new ApiClient({ base_url: cfg.api_base, token: await readToken(root), log });
+  const r = await performHandoff({ root, task_id, note, client, log });
+  for (const line of handoffReport(r)) out(line);
+  return r.ok ? 0 : 1;
+}
+
+/** What a handoff says it did. Shared by the command and the outbox path, so both say the same. */
+export function handoffReport(r: HandoffOutcome): string[] {
+  if (!r.ok) return [`not handed off: ${r.message}`];
+  const lines = [`handed off ${r.task_id}`];
+  if (r.pushed && !r.pushed.unchanged) {
+    lines.push(`  pushed ${r.pushed.files.length} file(s) to ${r.pushed.branch} @ ${r.pushed.commit_sha.slice(0, 12)}`);
+  } else if (r.handoff.branch) {
+    lines.push(`  ${r.handoff.branch} already held your work${r.handoff.head_sha ? ` @ ${r.handoff.head_sha.slice(0, 12)}` : ''}`);
+  } else {
+    lines.push('  nothing was pushed: no in-scope changes and no branch yet');
+  }
+  lines.push(r.released_lock.length > 0 ? `  released the claim and its lock on ${r.released_lock.join(', ')}` : '  released the claim');
+  lines.push('  whoever claims it next gets your note and continues on that branch');
+  return lines;
 }
 
 /**
@@ -471,7 +509,7 @@ async function cmdStart(root: string): Promise<number> {
           try {
             const { me, task, scope } = await shipContext(root, client);
             const res = await shipScope({
-              root, branch: branchFor(me.role_slug, task.task_id), scope,
+              root, branch: branchForTask(me.role_slug, task), scope,
               agent_id: me.agent_id, role_slug: me.role_slug,
               task_id: task.task_id, task_title: task.title,
             }, log);
@@ -593,6 +631,32 @@ function makePublisher(client: ApiClient, root: string, cfg: Config, logger: Log
         pointerBody.supersedes = rec.body.supersedes ?? null;
       }
       return client.appendEvent(kind, pointerBody, rec.idempotency_key);
+    }
+
+    // `handoff_requested` is an agent saying "I am out of budget, pass this on". A REQUEST, like
+    // claim_requested: the ledger records the handoff itself, which only the transaction writes.
+    // This machine pushes the checkpoint and performs it; the agent holds no credential and
+    // never touches the repository history, which is exactly why it asks.
+    if (kind === 'handoff_requested') {
+      const current = await fs.readFile(path.join(root, LAYOUT.current_task), 'utf8').catch(() => '');
+      const task_id = typeof rec.body.task_id === 'string' && rec.body.task_id
+        ? rec.body.task_id
+        : /^task_id:\s*(\S+)/m.exec(current)?.[1] ?? '';
+      // Offline throws, and the drain retries the line later. Every REFUSAL is final: re-sending
+      // an empty note, or a ticket somebody else holds, would only be refused again, forever.
+      const r = await performHandoff({ root, task_id, note: rec.body.note, client, log: logger });
+      for (const line of handoffReport(r)) out(line);
+      if (!r.ok) {
+        logger.warn('cli.handoff_request_refused', 'the agent asked to hand off and it was refused', { task_id, reason: r.reason });
+        // AND THE AGENT IS TOLD, the way claim_denied tells it a claim was lost. Otherwise it
+        // stops believing the ticket is passed on while it is in fact still holding it.
+        await appendInbox(root, {
+          v: '0.2', seq: 0, layer: 'coordination', kind: 'handoff_refused', ts: new Date().toISOString(),
+          body: { task_id, reason: r.reason, detail: r.message },
+        }, logger);
+        return { seq: 0, duplicate: true };
+      }
+      return { seq: 0, duplicate: false };
     }
 
     return client.appendEvent(kind as EventKind, rec.body, rec.idempotency_key);
@@ -732,6 +796,7 @@ async function cmdWork(root: string, rest: string[]): Promise<number> {
     'Before you edit anything, call `my_assignment` to learn your task and which file globs your',
     'role may write, and `fleet_status` to see which files other agents currently hold. Never edit',
     'a glob another agent holds. Use `report` for decisions and blockers a teammate would want.',
+    'If you are about to run out of budget mid-task, call `handoff` with a note instead of stopping.',
     '',
     'Start by telling me my assignment and what the rest of the fleet is doing.',
   ].join('\n');
@@ -1020,7 +1085,8 @@ async function cmdShip(root: string, rest: string[]): Promise<number> {
     throw err;
   }
   const { me, task, scope } = ctx;
-  const branch = branchFor(me.role_slug, task.task_id);
+  // Handoff-aware: a ticket picked up from a teammate continues on THEIR branch.
+  const branch = branchForTask(me.role_slug, task);
 
   // --dry-run BEFORE anything is pushed, because the first question anyone asks of a command
   // that commits on their behalf is "what exactly are you about to commit".
@@ -1112,6 +1178,9 @@ const USAGE = `flotilla — agentic coordination CLI
                                 no id: take the oldest open ticket inside your fence
                                 --scope <glob> names it for a ticket that declared none
   flotilla release <task_id>    give a ticket back, and its file lock with it
+  flotilla handoff <task_id> --note "<done, next, gotchas>"
+                                push a WIP checkpoint, then release it with your note;
+                                whoever claims it next continues on your branch
   flotilla cancel <task_id> --reason "<why>"
                                 take a ticket off the board, freeing its claim and lock
   flotilla sync                 after a merge: drop shipped copies, then fast-forward
@@ -1300,6 +1369,18 @@ export async function main(argv: string[]): Promise<number> {
         return 1;
       }
       return cmdRelease(root, task);
+    }
+    case 'handoff': {
+      const task = rest.find((a, i) => !a.startsWith('--') && rest[i - 1] !== '--note');
+      const ni = rest.indexOf('--note');
+      const note = ni > -1 ? (rest[ni + 1] ?? '') : '';
+      if (!task) {
+        log.warn('cli.usage_flotilla_handoff', 'usage: flotilla handoff <task_id> --note "what is done, what is next, what bit you"');
+        return 1;
+      }
+      // A missing note is refused inside performHandoff, BEFORE any push or network call, with a
+      // message pointing at release -- one refusal, one wording, for the CLI and the outbox alike.
+      return cmdHandoff(root, task, note);
     }
     case 'report': {
       const message = rest.join(' ').trim();
