@@ -46,6 +46,8 @@ import { pickTasks } from './pick.ts';
 import { readFacts, readFactsQuietly, renderFactsReport, staleTouching, type Fact } from './facts.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
 import { LAYER_OF, TASK_KINDS, type Event, type EventKind, type TaskKind } from '../shared/store/types.ts';
+import type { NewTask } from '../shared/store/tasks.ts';
+import { parseAskArgs, runAsk, runScan } from './ask.ts';
 import { ROLE_SLUGS, roleFor } from '../shared/store/directory.ts';
 import type { Logger } from '../shared/log.ts';
 
@@ -243,6 +245,52 @@ async function cmdFacts(root: string, rest: string[]): Promise<number> {
   const { ref, facts } = await readFacts(root);
   out(renderFactsReport(ref, facts));
   return 0;
+}
+
+/**
+ * `flotilla ask <file>:<line> "<request>"` and `flotilla ask --scan`. See cli/ask.ts.
+ *
+ * The fences come from the project, as the member sees them, because the kind is chosen by which
+ * fence covers the file and a repo whose frontend lives in web/ has redrawn them. Failing to read
+ * them falls back to the template, loudly: a wrong kind is recoverable with --kind, a refusal to
+ * file anything because a read failed is not.
+ */
+async function cmdAsk(root: string, rest: string[]): Promise<number> {
+  const args = parseAskArgs(rest);
+  if ('error' in args) {
+    log.warn('cli.usage_flotilla_ask', args.error);
+    log.warn('cli.usage_flotilla_ask', 'usage: flotilla ask <file>:<line>[-<endline>] "<what you want>" [--kind <kind>] [--id <task_id>]  |  flotilla ask --scan [--dry-run] [--kind <kind>]');
+    return 1;
+  }
+  // A dry run needs no backend: it is the question "what would this file", answered locally.
+  const create = projectCommands?.createTask;
+  if (!args.dry_run && !create) {
+    log.warn('cli.no_backend', 'this build has no coordination backend wired in', {});
+    out('This flotilla build cannot reach a backend. Reinstall the published package.');
+    return 1;
+  }
+
+  let scopes: Record<string, string[]> = {};
+  if (projectCommands?.roleScopes) {
+    try {
+      scopes = (await projectCommands.roleScopes(root)) ?? {};
+    } catch (err) {
+      log.warn('cli.ask_fences_unread', "could not read this project's role fences; using the template fences", {
+        error: (err as Error).message,
+      });
+    }
+  }
+  const deps = {
+    root,
+    scopes,
+    create: create ? (t: NewTask & { task_id: string }) => create(root, t) : async () => ({ created: false, task_id: '' }),
+    out,
+  };
+  if (!args.scan) return runAsk(args, deps);
+  const r = await runScan(args, deps);
+  // Skipped markers are the one outcome a person has to act on, so they fail the command; a
+  // re-scan that finds everything already filed is the normal case and does not.
+  return r.skipped.length > 0 ? 1 : 0;
 }
 
 async function pendingLine(root: string): Promise<string> {
@@ -1159,6 +1207,11 @@ const USAGE = `flotilla — agentic coordination CLI
   flotilla status               what the board thinks is happening
   flotilla task <title> --kind <${TASK_KINDS.join('|')}> --scope "<globs>"
                                 create a task on the board; --id overrides the derived id
+  flotilla ask <file>:<line>[-<end>] "<what you want>"
+                                a ticket locked to that file, carrying the lines and the code
+                                kind from whichever role's fence covers it; --kind overrides
+  flotilla ask --scan           one ticket per FLOTILLA marker comment in tracked files
+                                idempotent: a re-scan files nothing twice; --dry-run previews
   flotilla claim [task_id]      atomic claim, then acquire the declared file scope
                                 no id: take the oldest open ticket inside your fence
                                 --scope <glob> names it for a ticket that declared none
@@ -1210,6 +1263,17 @@ export interface ProjectCommands {
    * triage act and triage is a member capability. See docs/decisions/0005-work-appears-by-triage.md.
    */
   task: (root: string, title: string, kind: TaskKind, task_id?: string, file_scope?: string[]) => Promise<number>;
+  /**
+   * The same write `task` makes, returning what happened instead of printing it. `flotilla ask`
+   * files through this so there is still one way work appears, and needs to know "created" from
+   * "already existed" to report a re-scan honestly. Optional: an older backend build lacks it.
+   */
+  createTask?: (root: string, task: NewTask & { task_id: string }) => Promise<{ created: boolean; task_id: string }>;
+  /**
+   * Every role's file fence in this project, read as the signed-in member. Null when the project
+   * has no policy of its own, which means the template applies.
+   */
+  roleScopes?: (root: string) => Promise<Record<string, string[]> | null>;
   /**
    * `flotilla invite`. The one command that turns a one-person project into a team, and the
    * reason membership was unreachable until now: the invite document `connect` consumes was
@@ -1348,6 +1412,8 @@ export async function main(argv: string[]): Promise<number> {
       return cmdSync(root);
     case 'facts':
       return cmdFacts(root, rest);
+    case 'ask':
+      return cmdAsk(root, rest);
     case 'release': {
       const task = rest[0];
       if (!task) {

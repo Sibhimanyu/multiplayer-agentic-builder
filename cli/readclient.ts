@@ -132,6 +132,26 @@ export class ReadClient {
     return out.sort((a, b) => a.project_id.localeCompare(b.project_id));
   }
 
+  /**
+   * Every role's file fence in this project, from `projects/{pid}/roles/{slug}`. The same six
+   * documents whoami reads for an agent, read here as a member so `flotilla ask` can choose a
+   * ticket's kind without an agent token. A role document with no array is left out, so the
+   * caller's template fallback applies to it alone.
+   */
+  async roleScopes(project_id: string): Promise<Record<string, string[]>> {
+    const body = (await this.call(`${this.base()}/projects/${project_id}/roles`)) as {
+      documents?: { name: string; fields?: Record<string, { arrayValue?: { values?: { stringValue?: string }[] } }> }[];
+    };
+    const out: Record<string, string[]> = {};
+    for (const d of body.documents ?? []) {
+      const slug = d.name.split('/').pop() ?? '';
+      const arr = d.fields?.file_scope?.arrayValue;
+      if (!slug || !arr) continue;
+      out[slug] = (arr.values ?? []).map((v) => v.stringValue).filter((s): s is string => typeof s === 'string');
+    }
+    return out;
+  }
+
   async listMembers(project_id: string): Promise<{ uid: string; role: RoleSlug; label: string; revoked: boolean }[]> {
     const body = (await this.call(`${this.base()}/projects/${project_id}/members`)) as {
       documents?: { name: string; fields?: Record<string, Record<string, unknown>> }[];

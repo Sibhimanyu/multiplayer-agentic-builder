@@ -261,6 +261,36 @@ Rules:
 
 CLI: `flotilla task "<title>" --kind <kind> [--id <task_id>]`.
 
+#### Tickets from code: `flotilla ask`
+
+`flotilla ask <file>:<line>[-<endline>] "<what you want>"` files a ticket through this same
+`create_task` write (one write path, see decision 0005), pointed at the code:
+
+| Field | Value |
+|---|---|
+| `title` | the request, trimmed to 120 characters |
+| `file_scope` | `[<file>]`, repo-relative |
+| `kind` | the role whose fence (the project's `roles/{slug}.file_scope`, else the template) **contains** the file. `**` is not a fence. None, or more than one: refused, naming the fix. `--kind` overrides. |
+| `description` | the request, `Where: <file>:<range>`, and the lines, numbered, marked `>`, with 3 lines of context each side. Capped at 40 lines of 160 characters, so it stays well inside the text column and an agent's context. |
+| `task_id` | `task_ask_<slug>_<hash>`: `<hash>` is 8 hex of sha256(file + request). The line is left out, so code inserted above does not re-file it. `--id` overrides. |
+
+The file must exist inside the repository and the range must lie inside the file; both are
+refused otherwise, as is a malformed target. `--dry-run` prints the ticket and files nothing, and
+needs no backend.
+
+`flotilla ask --scan` does the same for every **marker comment** in the files git tracks: the
+word `FLOTILLA`, a colon, then the request, after a comment opener (`//`, `#`, `--`, `/*`, `*`,
+`<!--`, `;`, `%`) that starts the line or follows whitespace. Uppercase only; a request written as
+`<placeholder>` is ignored, and so are binary and untracked files. One ticket per marker, with
+the marker line as its range. Idempotent by construction: the id is derived from file and text,
+so a re-scan reports `exists` for everything already filed and files nothing twice. It prints
+what it created, what already existed, and what it skipped because no fence covers the file, and
+exits 1 only when something was skipped.
+
+A scan is a triage act by the person running it, under their own token -- markers are text anyone
+with write access to the repo can leave, so look at `--dry-run` before filing a batch. Remove a
+marker when its ticket is done; the description says so.
+
 ### Claim Task
 
 ```http
