@@ -57,10 +57,14 @@ export const keyFor = (payload: string, offset: number): string =>
  * This is the gap that stopped the loop (entry 79): an agent had no sanctioned way to claim a
  * task. A real agent found it, correctly refused to invent an event kind, and stopped.
  */
-export const OUTBOX_REQUEST_KINDS = new Set<string>(['claim_requested']);
+//
+// `handoff_requested` is the same shape of thing: an agent that notices it is out of budget asks
+// for its ticket to be passed on, with a note. The CLI pushes the checkpoint and performs the
+// handoff; the ledger records `task_handed_off`, which only the handoff transaction may write.
+export const OUTBOX_REQUEST_KINDS = new Set<string>(['claim_requested', 'handoff_requested']);
 
 /** The outbox-only kinds, as a type. */
-export type OutboxRequestKind = 'claim_requested';
+export type OutboxRequestKind = 'claim_requested' | 'handoff_requested';
 
 /** Read the cursor. A missing or corrupt cursor means "start from zero", loudly. */
 export async function readCursor(root: string, rel: string, log: Logger): Promise<number> {
@@ -324,7 +328,8 @@ export async function drain(
  */
 export async function appendOutbox(
   root: string,
-  event: { kind: EventKind; body: Record<string, unknown> },
+  // Request kinds too: the MCP `handoff` tool queues a handoff_requested exactly as an agent would.
+  event: { kind: EventKind | OutboxRequestKind; body: Record<string, unknown> },
   log: Logger,
 ): Promise<{ target: 'jsonl' | 'spool'; bytes: number; file?: string }> {
   const line = JSON.stringify({

@@ -261,6 +261,36 @@ Rules:
 
 CLI: `flotilla task "<title>" --kind <kind> [--id <task_id>]`.
 
+#### Tickets from code: `flotilla ask`
+
+`flotilla ask <file>:<line>[-<endline>] "<what you want>"` files a ticket through this same
+`create_task` write (one write path, see decision 0005), pointed at the code:
+
+| Field | Value |
+|---|---|
+| `title` | the request, trimmed to 120 characters |
+| `file_scope` | `[<file>]`, repo-relative |
+| `kind` | the role whose fence (the project's `roles/{slug}.file_scope`, else the template) **contains** the file. `**` is not a fence. None, or more than one: refused, naming the fix. `--kind` overrides. |
+| `description` | the request, `Where: <file>:<range>`, and the lines, numbered, marked `>`, with 3 lines of context each side. Capped at 40 lines of 160 characters, so it stays well inside the text column and an agent's context. |
+| `task_id` | `task_ask_<slug>_<hash>`: `<hash>` is 8 hex of sha256(file + request). The line is left out, so code inserted above does not re-file it. `--id` overrides. |
+
+The file must exist inside the repository and the range must lie inside the file; both are
+refused otherwise, as is a malformed target. `--dry-run` prints the ticket and files nothing, and
+needs no backend.
+
+`flotilla ask --scan` does the same for every **marker comment** in the files git tracks: the
+word `FLOTILLA`, a colon, then the request, after a comment opener (`//`, `#`, `--`, `/*`, `*`,
+`<!--`, `;`, `%`) that starts the line or follows whitespace. Uppercase only; a request written as
+`<placeholder>` is ignored, and so are binary and untracked files. One ticket per marker, with
+the marker line as its range. Idempotent by construction: the id is derived from file and text,
+so a re-scan reports `exists` for everything already filed and files nothing twice. It prints
+what it created, what already existed, and what it skipped because no fence covers the file, and
+exits 1 only when something was skipped.
+
+A scan is a triage act by the person running it, under their own token -- markers are text anyone
+with write access to the repo can leave, so look at `--dry-run` before filing a batch. Remove a
+marker when its ticket is done; the description says so.
+
 ### Claim Task
 
 ```http
@@ -282,6 +312,45 @@ Response:
   "claimed_by_agent_id": "agent_01"
 }
 ```
+
+### Hand Off Task
+
+```http
+POST /handoff          (agent token; Firebase build)
+```
+
+Body: `{ "task_id", "note", "branch"?, "head_sha"? }`. `flotilla handoff` pushes a WIP
+checkpoint first and sends the branch and commit it produced.
+
+Rules:
+
+- `note` is required; an empty one is `400 missing_note` (use release instead).
+- The caller must be the task's current claimant, or hold the `owner` role. Anyone else gets
+  `200 { "ok": false, "owner": "<holder>" }` -- a value, like a lost claim, so `flotilla start`
+  does not stop on it. Decided from the token, never the body.
+- Records the handoff on the task and releases the claim in one transaction. The file lock is
+  released separately through `DELETE /scope`.
+- `task_handed_off` cannot be appended through `POST /events`.
+
+Response:
+
+```json
+{
+  "ok": true,
+  "seq": 4290,
+  "handoff": {
+    "from": { "agent_id": "agent_01", "label": "Bea" },
+    "handed_off_by": "agent_01",
+    "note": "GET done; POST next. Reset the fixture DB between runs.",
+    "branch": "agent/backend/backend-crud",
+    "head_sha": "3f1c0e...",
+    "at": "2026-09-30T17:02:14Z"
+  }
+}
+```
+
+The member write path (`write` function) has the same operation as `op: "handoff_task"`, for
+the board: authorized against the verified uid (claimant) or the `owner` role.
 
 ### Append Event
 

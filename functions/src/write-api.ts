@@ -35,7 +35,8 @@ import { assertDeployAllowed, assertScopeAllowed } from '../../shared/store/role
 import { TASK_KINDS, isTaskKind, deriveTaskId } from '../../shared/store/tasks.ts';
 import { REPORT_TYPES, isReportType, type ReportType } from '../../shared/store/types.ts';
 import type { NewTask } from '../../shared/store/tasks.ts';
-import type { CreateTaskResult, TaskActor, TaskKind } from '../../shared/store/types.ts';
+import type { CreateTaskResult, HandoffInput, HandoffResult, TaskActor, TaskKind } from '../../shared/store/types.ts';
+import { cleanHandoffNote, mayHandOff } from '../../shared/store/handoff.ts';
 import type { Logger } from '../../shared/log.ts';
 
 export interface WriteRequest {
@@ -44,7 +45,7 @@ export interface WriteRequest {
     | 'claim' | 'release' | 'acquire_scope' | 'release_scope' | 'append_event' | 'heartbeat'
     | 'deploy' | 'create_project' | 'create_task' | 'create_invite'
     | 'raise_suggestion' | 'accept_suggestion' | 'decline_suggestion'
-    | 'set_role_scope' | 'cancel_task';
+    | 'set_role_scope' | 'cancel_task' | 'handoff_task';
   /** Operation payload. Shape depends on `op`. */
   body: Record<string, unknown>;
 }
@@ -74,6 +75,8 @@ export interface WriteDeps {
     declineSuggestion?(pid: string, suggestion_id: string, by: string, reason: string): Promise<{ ok: true } | { ok: false; resolved_by: string; status: string }>;
     /** System-authority claim release. Optional: without it, cancel refuses a claimed ticket. */
     reapClaim?(pid: string, task_id: string, agent_id: string, reason: string): Promise<{ released: boolean }>;
+    /** Optional on the port: without it, handoff_task answers 501. */
+    handoffTask?(pid: string, task_id: string, input: HandoffInput): Promise<HandoffResult>;
   };
   /** The directory's createProject. Separate port, so the write path does not grow a second one. */
   createProject: (input: {
@@ -110,6 +113,9 @@ const REQUIRES: Partial<Record<WriteRequest["op"], Capability>> = {
   // Cancelling is the other half of creating: the same people who may put work on the board may
   // take it off. No new capability, for the reason create_task gives.
   cancel_task: 'triage',
+  // Handing off is releasing with a note, so it needs what releasing needs. WHICH ticket a caller
+  // may hand off -- their own, or anybody's if they are an owner -- is decided per request below.
+  handoff_task: 'claim',
   claim: 'claim',
   release: 'claim',
   acquire_scope: 'acquire_scope',
@@ -530,6 +536,40 @@ export async function handleWrite(
         }, `cancel:${req.project_id}:${task_id}`);
         deps.log.info('api.task_cancelled', 'task cancelled', { project_id: req.project_id, uid: caller.uid, task_id, released: holder });
         return { status: 200, body: { ok: true, task_id, released_claim: holder, released_locks: locks.size } };
+      }
+      case 'handoff_task': {
+        if (!deps.store.handoffTask) return { status: 501, body: { error: 'this backend does not support handoffs' } };
+        const task_id = typeof req.body.task_id === 'string' ? req.body.task_id : '';
+        if (!task_id) return { status: 400, body: { error: 'handoff needs a task_id' } };
+        const note = cleanHandoffNote(req.body.note);
+        if (!note.ok) return { status: 400, body: { error: note.error } };
+        const proj = deps.db.collection('projects').doc(req.project_id);
+        const claim = await proj.collection('claims').doc(task_id).get();
+        const holder = claim.exists ? (claim.get('agent_id') as string) : null;
+        // Against the VERIFIED uid, never the body's agent_id: this is the one op where the
+        // body naming "which of my agents" would let a caller name somebody else's.
+        const may = mayHandOff(holder, caller.uid, grant.role === 'owner');
+        if (!may.ok) {
+          deps.log.warn('api.handoff_refused', 'handoff refused: caller is neither the claimant nor an owner', {
+            project_id: req.project_id, uid: caller.uid, role: grant.role, task_id, holder,
+          });
+          return { status: holder === null ? 409 : 403, body: { ok: false, owner: may.owner, error: may.reason } };
+        }
+        const agent = await proj.collection('agents').doc(holder!).get();
+        const task = await proj.collection('tasks').doc(task_id).get();
+        const r = await deps.store.handoffTask(req.project_id, task_id, {
+          holder: holder!,
+          from_label: holder === caller.uid ? (grant.label || caller.uid) : ((agent.get('member_label') as string | undefined) ?? holder!),
+          by: { actor_type: grant.role === 'owner' ? 'owner' : 'member', actor_id: caller.uid },
+          note: note.note,
+          // The board has no checkout, so it can only point at the branch the card already names.
+          branch: task.exists ? ((task.get('branch') as string | null) ?? null) : null,
+          head_sha: null,
+        });
+        deps.log.info('api.task_handed_off', 'task handed off through the write path', {
+          project_id: req.project_id, uid: caller.uid, role: grant.role, task_id, holder, ok: r.ok,
+        });
+        return { status: 200, body: { ...r } as Record<string, unknown> };
       }
       case 'claim': {
         const r = await deps.store.claimTask(req.project_id, String(req.body.task_id ?? ''), agent_id);

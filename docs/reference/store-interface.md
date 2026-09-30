@@ -157,6 +157,18 @@ interface CoordinationStore {
   /** Idempotent. Releasing a task you do not own is a no-op, not an error. */
   releaseTask(project_id: ProjectId, task_id: TaskId, agent_id: AgentId): Promise<void>;
 
+  /**
+   * OPTIONAL. A release that carries context: records { from, note, branch, head_sha, at }
+   * onto TaskView.handoffs (newest last, capped at 10) AND deletes the claim, atomically,
+   * appending exactly one coordination-layer `task_handed_off`. Refuses (as a value,
+   * { ok: false, owner }) when input.holder no longer holds the claim; throws on an empty
+   * note. Does NOT release the file lock -- callers use releaseScope, as release does.
+   * WHO may call it (the claimant, or an owner) is enforced by the API, not the store.
+   * Conformance AH1-AH5.
+   */
+  handoffTask?(project_id: ProjectId, task_id: TaskId, input: HandoffInput)
+    : Promise<{ ok: true; seq: Seq; handoff: Handoff } | { ok: false; owner: AgentId | null }>;
+
   // ---- file scope locks ------------------------------------------------
   /**
    * Server-enforced, NOT advisory. Reject on glob intersection with a live lock

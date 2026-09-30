@@ -237,6 +237,8 @@ export const AGENT_APPENDABLE: Record<string, keyof Permissions | 'always'> = {
   // NOT appendable by an agent, deliberately:
   //   merged, pr_opened, ci_passed, ci_failed, branch_pushed -> webhook only, actor github
   //   task_claimed -> written by the claim transaction, not by a free-form append
+  //   task_handed_off -> written by the handoff transaction (POST /handoff), which also releases
+  //     the claim; appended free-form it would put a note on a card nobody released
   //   task_unblocked -> written by the reaper or a release, not asserted by an agent
 };
 

@@ -18,8 +18,10 @@ import fs from 'node:fs/promises';
 import type { ApiClient } from './client.ts';
 import { appendOutbox } from './outbox.ts';
 import { LAYOUT } from './agentic.ts';
+import { readFactsQuietly, renderStaleForAgent, staleTouching, type Fact } from './facts.ts';
 import type { Logger } from '../shared/log.ts';
 import type { Snapshot, TaskView } from '../shared/store/types.ts';
+import { cleanHandoffNote, latestHandoff } from '../shared/store/handoff.ts';
 
 /** Every version of the MCP handshake this server has been tested against. */
 const KNOWN_PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
@@ -64,6 +66,32 @@ export const TOOLS: ToolDef[] = [
       type: 'object',
       properties: { message: { type: 'string', description: 'One sentence, plain language.' } },
       required: ['message'],
+    },
+  },
+  {
+    name: 'blackboard_facts',
+    description:
+      'The durable facts on the git blackboard (API contracts, schemas, decisions) and whether each '
+      + 'is still current: a fact is STALE when code it pins has changed since the fact was last '
+      + 'committed. Call this before relying on a contract or decision, and re-verify a stale one '
+      + 'against the code instead of trusting it.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'handoff',
+    description:
+      'Pass your current task to whoever claims it next, with a note. Use it when you are about '
+      + 'to run out of budget or context mid-task: your in-scope work is pushed to the task branch, '
+      + 'the task and its lock are released, and the next claimant reads your note first. The note '
+      + 'is required: say what is done, what is next, and anything that bit you. Stop working on '
+      + 'the task after calling this.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        note: { type: 'string', description: 'What is done, what is next, and the gotchas. Plain language.' },
+        task_id: { type: 'string', description: 'Optional. Defaults to the task in current-task.md.' },
+      },
+      required: ['note'],
     },
   },
   {
@@ -175,6 +203,7 @@ export function renderAssignment(
       'Ask the user which task to take, then call claim_task with its id.',
     ].join('\n');
   }
+  const handed = latestHandoff(task);
   return [
     ...head,
     `Current task ${task.task_id} (${task.status}): ${task.title}`,
@@ -184,6 +213,9 @@ export function renderAssignment(
       ? `This task locks: ${task.file_scope.join(', ')}`
       : 'This task declares no file scope. Ask before editing outside your role scope.',
     task.blocked_by ? `\nBLOCKED by ${task.blocked_by}: ${task.blocked_reason ?? ''}` : '',
+    // The note a teammate left when they handed this on. Here as well as in current-task.md,
+    // because this is the call the agent is told to make first.
+    handed ? `\nHANDED OFF by ${handed.from.label} (${handed.at}):\n${handed.note}${handed.branch ? `\nContinue on ${handed.branch}.` : ''}` : '',
   ].join('\n');
 }
 
@@ -194,9 +226,30 @@ export interface McpDeps {
   log: Logger;
   /** Globs this member's role may write, from the API's own answer. */
   allowedScope: () => Promise<string[]>;
+  /** The blackboard's facts. Injectable for tests; defaults to reading local git under `root`. */
+  facts?: () => Promise<Fact[]>;
+}
+
+/**
+ * The blackboard, for an agent: stale first, because a stale fact is the one that changes what
+ * the agent should do next. Fresh and unpinned are listed so "not flagged" can be told apart from
+ * "not looked at".
+ */
+export function renderFacts(facts: readonly Fact[]): string {
+  const live = facts.filter((f) => f.status !== 'superseded');
+  if (live.length === 0) return 'The blackboard holds no facts in this checkout yet.';
+  const stale = live.filter((f) => f.status === 'stale');
+  const rest = live.filter((f) => f.status !== 'stale');
+  return [
+    stale.length > 0 ? `STALE (${stale.length}):\n${renderStaleForAgent(stale).join('\n')}` : 'No fact is stale.',
+    '',
+    ...rest.map((f) => `- ${f.path}: ${f.status}${f.pins.length ? ` (pins ${f.pins.join(', ')})` : ''}`),
+  ].join('\n');
 }
 
 const text = (s: string) => ({ content: [{ type: 'text', text: s }] });
+
+const readFactsFor = (deps: McpDeps): Promise<Fact[]> => (deps.facts ? deps.facts() : readFactsQuietly(deps.root));
 
 async function callTool(name: string, args: Record<string, unknown>, deps: McpDeps) {
   switch (name) {
@@ -217,8 +270,15 @@ async function callTool(name: string, args: Record<string, unknown>, deps: McpDe
           .filter((l) => l.agent_id === me.agent_id)
           .flatMap((l) => l.globs),
       )];
-      return text(renderAssignment(me, await deps.allowedScope(), task, held));
+      // `flotilla work` and `chat` agents never read current-task.md; this call is their
+      // session-start context, so the same stale flags go here, scoped to what they hold.
+      const stale = staleTouching(await readFactsFor(deps), held.length > 0 ? held : task?.file_scope ?? []);
+      const flags = renderStaleForAgent(stale);
+      const assignment = renderAssignment(me, await deps.allowedScope(), task, held);
+      return text(flags.length > 0 ? `${assignment}\n\nFacts to re-verify:\n${flags.join('\n')}` : assignment);
     }
+    case 'blackboard_facts':
+      return text(renderFacts(await readFactsFor(deps)));
     case 'report': {
       const message = String(args.message ?? '').trim();
       if (!message) return text('report needs a message.');
@@ -229,6 +289,23 @@ async function callTool(name: string, args: Record<string, unknown>, deps: McpDe
       const task_id = /^task_id:\s*(\S+)/m.exec(current)?.[1] ?? null;
       await appendOutbox(deps.root, { kind: 'task_progress', body: { task_id, summary: message } }, deps.log);
       return text('Queued. It reaches the board on the next publish by `flotilla start`.');
+    }
+    case 'handoff': {
+      // Refused HERE, before anything is queued, so the agent learns in the same turn. A queued
+      // line with no note would only be refused later on the inbox, after the agent had stopped.
+      const note = cleanHandoffNote(args.note);
+      if (!note.ok) return text(`Not queued: ${note.error}.`);
+      const current = await fs.readFile(path.join(deps.root, LAYOUT.current_task), 'utf8').catch(() => '');
+      const task_id = String(args.task_id ?? '').trim() || (/^task_id:\s*(\S+)/m.exec(current)?.[1] ?? '');
+      if (!task_id) return text('No task is claimed on this machine, so there is nothing to hand off.');
+      // THE OUTBOX, like `report`, not the API: the push and the release are `flotilla start`'s
+      // job, and a direct call would be a second handoff path that silently fails offline.
+      await appendOutbox(deps.root, { kind: 'handoff_requested', body: { task_id, note: note.note } }, deps.log);
+      return text(
+        `Queued a handoff of ${task_id}. \`flotilla start\` pushes your in-scope work, releases the task `
+        + 'and passes your note on. Stop working on this task now; if it cannot be done, a '
+        + 'handoff_refused line arrives on your inbox and you still hold it.',
+      );
     }
     case 'claim_task': {
       const task_id = String(args.task_id ?? '').trim();

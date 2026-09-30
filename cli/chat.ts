@@ -7,7 +7,7 @@
 //
 // SAME ENGINE, DELIBERATELY. The agent is spawned on this machine, under this user's own
 // subscription, with the same MCP server `work` wires up -- so it has `my_assignment`,
-// `fleet_status`, `report` and `claim_task`. Flotilla still holds no model key. The browser is a
+// `fleet_status`, `blackboard_facts`, `report` and `claim_task`. Flotilla still holds no model key. The browser is a
 // transport, not a second implementation.
 //
 // One turn = one `claude -p --output-format json` run, pinned to a session id so the conversation

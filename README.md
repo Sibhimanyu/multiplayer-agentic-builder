@@ -6,6 +6,11 @@ Each person on the team runs their own agent — Claude Code, Codex, whatever th
 use, on their own subscription. Flotilla is the coordination layer above them: it hands out
 tasks, enforces who may touch which files, and shows everyone one live board.
 
+**The fences are enforced, not advisory.** Tools that coordinate agents usually warn when two of
+them head for the same file and let both proceed, and go quiet when their server is unreachable.
+Flotilla refuses: a claim is atomic, and a role's file scope is checked server-side, in a Cloud
+Function the agent cannot reach. A backend agent cannot lock `client/**`, whatever it is told.
+
 There is no hosted agent sandbox. Nothing runs your code but your own machine.
 
 **[sibhimanyu.github.io/flotilla](https://sibhimanyu.github.io/flotilla/)** — what it is, the board, roles, and what it costs.
@@ -63,7 +68,12 @@ flotilla ls                    projects you are a member of
 flotilla members <project_id>  the roster
 flotilla connect <invite>      write AGENTS.md + .agentic/, store the agent token
 flotilla claim <task_id>       atomic claim, then acquire the declared file scope
+flotilla handoff <task_id> --note "..."
+                               push a WIP checkpoint, release with a note for the next claimant
 flotilla start                 drain the outbox, deliver the inbox, heartbeat
+flotilla ask <file>:<line> "…"  a ticket pointed at that code: file, lines, snippet, request
+flotilla ask --scan            one ticket per FLOTILLA marker comment, idempotently
+flotilla facts                 blackboard facts, flagged stale when the code they pin has moved
 ```
 
 ## Status

@@ -443,3 +443,75 @@ test('whoami carries the project policy file_scope, not the template', async () 
   assert.deepEqual(res.body.file_scope, ['server/**', 'test/**']);
   assert.deepEqual((res.body.role_scopes as Record<string, string[]>).backend, ['server/**', 'test/**']);
 });
+
+// ---- POST /handoff: only the claimant, or an owner ---------------------------------------
+
+/** An owner agent, provisioned like the other two. Only these tests need one. */
+async function ownerToken(): Promise<string> {
+  const token = mintToken();
+  await db.collection('projects').doc(PID).collection('agents').doc('agent_ow000003').set({
+    agent_id: 'agent_ow000003', role_slug: 'owner', member_label: 'olu', initials: 'OW',
+    harness: 'claude-code', status: 'connected', current_task: null, branch: null,
+    last_heartbeat_ms: Date.now(), revoked: false, grant_merge: false, token_sha256: hashToken(token),
+  });
+  return token;
+}
+
+const cardOf = async (task_id: string) =>
+  ((await store.readSnapshot(PID))!.snapshot.tasks.find((t) => t.task_id === task_id))!;
+
+test('handoff: a note is required, and the refusal names release', async () => {
+  await store.seedTasks(PID, [makeTask('task_ho_note')]);
+  assert.equal((await call('POST', '/claim', { task_id: 'task_ho_note' })).body.ok, true);
+  const res = await call('POST', '/handoff', { task_id: 'task_ho_note', note: '   ' });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error, 'missing_note');
+  assert.match(String(res.body.detail), /flotilla release/);
+  // And nothing was released by the refusal.
+  assert.equal((await call('POST', '/claim', { task_id: 'task_ho_note' }, frontendToken)).body.ok, false);
+});
+
+test('handoff: a non-claimant is refused as a 200 value and the claim stays', async () => {
+  await store.seedTasks(PID, [makeTask('task_ho_other')]);
+  await call('POST', '/claim', { task_id: 'task_ho_other' });
+  const res = await call('POST', '/handoff', { task_id: 'task_ho_other', note: 'not mine' }, frontendToken);
+  assert.equal(res.status, 200, 'a 403 would stop `flotilla start` on a StoreAuthError');
+  assert.equal(res.body.ok, false);
+  assert.equal(res.body.owner, backendAgentId);
+  assert.equal((await cardOf('task_ho_other')).claimed_by, backendAgentId);
+});
+
+test('handoff: the claimant hands off, the note lands, and the next claimer wins', async () => {
+  await store.seedTasks(PID, [makeTask('task_ho_mine')]);
+  await call('POST', '/claim', { task_id: 'task_ho_mine' });
+  const res = await call('POST', '/handoff', {
+    task_id: 'task_ho_mine', note: 'GET done; POST next', branch: 'agent/backend/ho-mine', head_sha: 'd'.repeat(40),
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.ok, true);
+  const card = await cardOf('task_ho_mine');
+  assert.equal(card.claimed_by, null);
+  assert.equal(card.handoffs?.at(-1)?.note, 'GET done; POST next');
+  assert.deepEqual(card.handoffs?.at(-1)?.from, { agent_id: backendAgentId, label: 'sibhi' });
+  assert.equal(card.handoffs?.at(-1)?.branch, 'agent/backend/ho-mine');
+  assert.equal((await call('POST', '/claim', { task_id: 'task_ho_mine' }, frontendToken)).body.ok, true);
+});
+
+test('handoff: an owner may hand off a teammate\'s ticket, under the teammate\'s name', async () => {
+  const owner = await ownerToken();
+  await store.seedTasks(PID, [makeTask('task_ho_rescue')]);
+  await call('POST', '/claim', { task_id: 'task_ho_rescue' });
+  const res = await call('POST', '/handoff', { task_id: 'task_ho_rescue', note: 'Bea went home; see the branch' }, owner);
+  assert.equal(res.body.ok, true);
+  const last = (await cardOf('task_ho_rescue')).handoffs!.at(-1)!;
+  assert.equal(last.from.label, 'sibhi', 'the work is credited to its holder, not to the owner');
+  assert.equal(last.handed_off_by, 'agent_ow000003');
+});
+
+test('handoff: task_handed_off cannot be appended free-form', async () => {
+  const res = await call('POST', '/events', {
+    kind: 'task_handed_off', idempotency_key: randomUUID(),
+    body: { task_id: 'task_items_crud', from_agent_id: backendAgentId, note: 'forged release' },
+  });
+  assert.equal(res.status, 403);
+});

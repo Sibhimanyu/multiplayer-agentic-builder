@@ -38,6 +38,18 @@ export interface TaskView {
   blocked_since?: string | null;
   file_scope: string[];
   updated_at: string;
+  /** Oldest first, newest last, capped at 10 by the fold. Absent on tasks never handed off. */
+  handoffs?: Handoff[];
+}
+
+/** Mirrors shared/store/types.ts Handoff: what a claimant left for whoever picks the task up next. */
+export interface Handoff {
+  from: { agent_id: AgentId; label: string };
+  handed_off_by: string;
+  note: string;
+  branch: string | null;
+  head_sha: string | null;
+  at: string;
 }
 
 /**

@@ -21,6 +21,7 @@ import { sanitizeText, VARCHAR_MAX } from '../shared/sanitize.ts';
 import { nullLogger } from '../shared/log.ts';
 import { PROTOCOL_VERSION, type TaskView } from '../shared/store/types.ts';
 import type { Logger } from '../shared/log.ts';
+import { renderStaleForAgent, type Fact } from './facts.ts';
 
 export interface RolePack {
   role_slug: string;
@@ -215,6 +216,7 @@ export function renderProtocolMd(): string {
     '## The events you may append',
     '',
     '  claim_requested      { task_id }                     ask for a task',
+    '  handoff_requested    { task_id, note }               pass your task on, with a note',
     '  task_progress        { task_id, summary, files_changed[] }',
     '  task_blocked         { task_id, reason, blocked_by_task_id }',
     '  task_completed       { task_id }',
@@ -239,6 +241,23 @@ export function renderProtocolMd(): string {
     'A denial is a normal reply, not an error. Pick a different task or wait for the next one.',
     'Do not re-request the same task in a loop.',
     '',
+    '## Handing your task on',
+    '',
+    'If you are about to run out of budget or context, do not just stop: append',
+    '`handoff_requested` with your task_id and a note saying what is done, what is next, and',
+    'anything that bit you. The note is required. The CLI pushes your in-scope work to your',
+    'branch, releases the task and its lock, and gives your note to whoever claims it next.',
+    'After appending it, stop working on that task.',
+    '',
+    'If it cannot be done -- you do not hold the task, or the push failed -- you are told:',
+    '',
+    '  handoff_refused    { task_id, reason, detail }   you still hold it',
+    '',
+    'When YOU claim a task someone handed off, the note arrives first, and it is also in',
+    `${LAYOUT.current_task} under "Handed off to you":`,
+    '',
+    '  handoff_received   { task_id, from, note, branch, head_sha }   read it before you start',
+    '',
     '## When you are blocked',
     '',
     'Append task_blocked with a reason and stop. Do not poll. Do not ask another agent.',
@@ -251,8 +270,15 @@ export function renderProtocolMd(): string {
   ].join('\n');
 }
 
-/** The claimed task, as the agent sees it. */
-export function renderCurrentTask(task: TaskView | null): string {
+/**
+ * The claimed task, as the agent sees it.
+ *
+ * `stale` is the blackboard facts whose pinned code moved after they were written AND that
+ * overlap this task's scope. They go HERE, not in AGENTS.md, because this is the file the agent
+ * reads for this task, and staleness is only worth an agent's attention for the files it is about
+ * to touch: a stale fact about somebody else's directory is noise in this context.
+ */
+export function renderCurrentTask(task: TaskView | null, stale: readonly Fact[] = []): string {
   if (!task) {
     return [
       '# No task claimed',
@@ -288,6 +314,8 @@ export function renderCurrentTask(task: TaskView | null): string {
   if (task.depends_on.length > 0) {
     lines.push('', '## Depends on', '', ...task.depends_on.map((d) => `- ${d}`));
   }
+  const flags = renderStaleForAgent(stale);
+  if (flags.length > 0) lines.push('', '## Facts to re-verify', '', ...flags);
   if (task.blocked_by) {
     lines.push(
       '',
@@ -295,6 +323,31 @@ export function renderCurrentTask(task: TaskView | null): string {
       '',
       `Blocked by ${task.blocked_by}: ${sanitizeText(task.blocked_reason ?? '', { field: 'task.blocked_reason', log: nullLogger })}`,
     );
+  }
+  // A TICKET PICKED UP FROM A TEAMMATE CARRIES THEIR NOTE HERE, in the file the agent is told to
+  // read first. The inbox gets the latest one too, but the inbox is a stream the agent reads from
+  // a cursor; this is the task's own page, so the whole history sits beside the description.
+  // Newest first, because the newest note is the one that describes the branch as it is now.
+  const handoffs = task.handoffs ?? [];
+  if (handoffs.length > 0) {
+    const latest = handoffs[handoffs.length - 1]!;
+    lines.push(
+      '',
+      '## Handed off to you',
+      '',
+      'Someone worked on this before you. Read their note before you start, and continue their',
+      latest.branch
+        ? `work: it is on \`${latest.branch}\`${latest.head_sha ? ` at ${latest.head_sha.slice(0, 12)}` : ''}, and your shipped work goes there too.`
+        : 'work: nothing was pushed before the handoff, so start from the default branch.',
+      '',
+      ...[...handoffs].reverse().flatMap((h, i) => [
+        `### ${i === 0 ? 'Latest' : 'Earlier'}: from ${sanitizeText(h.from.label, { field: 'handoff.from', max: VARCHAR_MAX, log: nullLogger })} at ${h.at}`,
+        '',
+        sanitizeText(h.note, { field: 'handoff.note', log: nullLogger }),
+        '',
+      ]),
+    );
+    lines.pop(); // no trailing blank; writeFile adds the one newline
   }
   return lines.join('\n');
 }
@@ -307,7 +360,11 @@ export function renderCurrentTask(task: TaskView | null): string {
  */
 export async function writeAgenticTree(
   root: string,
-  opts: { role: RolePack; project: ProjectFile; task: TaskView | null; state: CliState },
+  opts: {
+    role: RolePack; project: ProjectFile; task: TaskView | null; state: CliState;
+    /** Stale blackboard facts touching the task's scope. See renderCurrentTask. */
+    stale_facts?: readonly Fact[];
+  },
   log: Logger,
 ): Promise<string[]> {
   const written: string[] = [];
@@ -335,7 +392,7 @@ export async function writeAgenticTree(
   );
   await put(LAYOUT.role, renderRoleMd(opts.role));
   await put(LAYOUT.protocol, renderProtocolMd());
-  await put(LAYOUT.current_task, renderCurrentTask(opts.task));
+  await put(LAYOUT.current_task, renderCurrentTask(opts.task, opts.stale_facts ?? []));
 
   await ensureDir(root, LAYOUT.contracts_dir);
   await ensureDir(root, LAYOUT.decisions_dir);

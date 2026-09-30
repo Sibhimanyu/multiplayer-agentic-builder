@@ -87,31 +87,50 @@ export function loginPageHtml(opts: LoginPageOptions): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sign in to Flotilla</title>
 <style>
-  :root{--paper:#FAF9F7;--card:#FFF;--ink:#1A1917;--ink2:#4A4741;--muted:#8A857C;
-        --line:#E8E4DD;--line2:#D9D4CA;--teal:#0F766E;--red:#B91C1C;
-        --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-        --mono:ui-monospace,SFMono-Regular,Menlo,monospace;}
+  /* DESIGN.md "Graphite", the same values as client/src/tokens.css. This page used to be the last
+     surface still in the retired cream-and-teal light theme -- a third look, one click from a
+     dark board and a dark chat page, which DESIGN.md counts as a bug.
+     THE ONE KNOWN DIVERGENCE: the loopback server that serves this page serves nothing else, so
+     Plex is named but not shipped here and the page falls back to the system sans unless Plex is
+     installed. Serving the two font files is a change to the server, not to this page. */
+  :root{--paper:#121212;--card:#1A1A1A;--raise:#232323;
+        --ink:#EDEDED;--ink2:#B8B8B8;--muted:#8C8C8C;
+        --line:#262626;--line2:#363636;--line3:#4A4A4A;
+        --inverse:#EDEDED;--on-inverse:#121212;--inverse-hover:#FFFFFF;--red:#E5877E;
+        --sans:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+        --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+        --t-0:11px;--t-1:12px;--t-2:14px;--t-4:18px;--t-5:21px;
+        --sp-1:2px;--sp-2:4px;--sp-3:6px;--sp-4:8px;--sp-5:12px;--sp-6:16px;--sp-7:24px;--sp-9:48px;
+        --r-ctl:8px;--r-tag:5px;color-scheme:dark}
   *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--paper);color:var(--ink);font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
-  .nav{background:var(--card);border-bottom:1px solid var(--line);padding:0 28px;height:60px;
-       display:flex;align-items:center;gap:18px}
-  .mark{width:26px;height:26px;border-radius:7px;background:var(--teal);color:#fff;
-        display:grid;place-items:center;font-family:var(--mono);font-size:11px}
-  .brand{font-size:16px;font-weight:600;letter-spacing:-.01em}
-  .login{max-width:520px;padding:40px 28px;display:grid;gap:12px;justify-items:start}
-  h2{font-size:20px;font-weight:600;letter-spacing:-.015em}
+  body{background:var(--paper);color:var(--ink);font:var(--t-2)/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+  ::selection{background:rgba(237,237,237,.22);color:var(--ink)}
+  :where(a,button):focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+  .nav{background:var(--card);border-bottom:1px solid var(--line);padding:0 var(--sp-7);height:60px;
+       display:flex;align-items:center;gap:var(--sp-4)}
+  /* The real mark, in ink, with its viewBox padding cancelled (DESIGN.md "Logo spacing"). It was a
+     teal rounded square with "FL" in it -- a logo that exists nowhere else. */
+  .mark{--mark-w:36px;width:var(--mark-w);height:29px;flex:none;color:var(--ink);
+        margin-left:calc(var(--mark-w) * -.091);margin-right:calc(var(--mark-w) * -.18)}
+  .brand{font-size:var(--t-4);font-weight:600;letter-spacing:-.015em;line-height:1}
+  .login{max-width:560px;padding:var(--sp-9) var(--sp-7);display:grid;gap:var(--sp-5);justify-items:start}
+  h2{font-size:var(--t-5);font-weight:600;letter-spacing:-.015em;line-height:1.2}
   h2.bad{color:var(--red)}
   p{color:var(--ink2);line-height:1.6}
-  p.note{font-size:12.5px;color:var(--muted)}
-  p.uid{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
-  code{font-family:var(--mono);font-size:12px;background:var(--paper);border:1px solid var(--line);
-       border-radius:5px;padding:1px 5px}
-  button{background:var(--teal);color:#fff;border:0;border-radius:8px;padding:9px 16px;
-         font:500 13px var(--sans);cursor:pointer;margin-top:6px}
+  p strong{color:var(--ink);font-weight:600}
+  p.note{font-size:var(--t-1);color:var(--muted)}
+  p.uid{font-family:var(--mono);font-size:var(--t-0);color:var(--muted)}
+  code{font-family:var(--mono);font-size:var(--t-1);color:var(--ink);background:var(--raise);
+       border:1px solid var(--line2);border-radius:var(--r-tag);padding:var(--sp-1) var(--sp-2)}
+  /* The primary is the inversion: near-white, ground-coloured label, 16.00:1. */
+  button{background:var(--inverse);color:var(--on-inverse);border:0;border-radius:var(--r-ctl);
+         padding:var(--sp-4) var(--sp-6);font:600 var(--t-2) var(--sans);cursor:pointer;
+         margin-top:var(--sp-3);transition:background 160ms cubic-bezier(.2,0,.2,1)}
+  button:hover{background:var(--inverse-hover)}
 </style>
 </head>
 <body>
-<nav class="nav"><div class="mark">FL</div><div class="brand">Flotilla</div></nav>
+<nav class="nav"><svg class="mark" viewBox="0 0 520 420" aria-hidden="true"><g fill="currentColor" transform="rotate(-7 260 210)"><path transform="translate(0 -12)" d="M184 39C245 46 346 75 429 112C442 118 444 128 430 135C376 164 311 185 249 199C235 202 231 193 239 181C259 151 266 121 256 94C246 68 220 50 184 39Z"/><path transform="translate(-4 6)" d="M86 143C132 151 198 173 239 193C250 198 250 207 239 213C192 238 139 261 54 281C41 284 37 275 46 264C75 235 98 211 101 188C103 170 98 155 86 143Z"/><path transform="translate(0 12)" d="M190 245C233 253 290 274 326 293C337 299 337 307 326 313C287 336 243 353 176 369C163 372 159 363 168 352C192 326 210 304 212 284C213 268 207 254 190 245Z"/></g></svg><div class="brand">Flotilla</div></nav>
 <div class="login" id="root" data-login-step="loading">
   <h2>Starting sign-in…</h2>
 </div>

@@ -25,7 +25,9 @@ AGENTS.md                        generated role prompt, agent reads at session s
   role.md                        role pack prompt: responsibilities, file scope, branch prefix
   protocol.md                    the subset of the protocol the agent needs
   tasks/
-    current-task.md              the claimed task: title, description, acceptance
+    current-task.md              the claimed task: title, description, acceptance, and
+                                 "Facts to re-verify": stale blackboard facts that pin
+                                 files in its scope (see blackboard.md, Pins)
   contracts/                     materialised from the git blackboard, read-only to the agent
     items-api.v2.yaml
     schema/items.sql
@@ -90,6 +92,45 @@ rename  .agentic/outbox.d/<uuid>.json      # rename() on one filesystem is atomi
 
 A reader never observes a partial file. The CLI drains `outbox.jsonl` and `outbox.d/` together,
 ordered by mtime.
+
+### Requests: `claim_requested` and `handoff_requested`
+
+Two outbox kinds are **requests**, not ledger facts. The CLI performs them and the ledger records
+what actually happened (`task_claimed`, `task_handed_off`), so the agent still never touches the
+network or git.
+
+```jsonl
+{"v":"0.2","kind":"handoff_requested","ts":"2026-09-30T17:02:11Z","body":{"task_id":"task_items_crud","note":"GET and list are done and tested. POST next: validator is in functions/items/validate.js. The fixture DB must be reset between runs or ids collide."}}
+```
+
+`handoff_requested` is for an agent that is about to run out of budget or context mid-task. The
+note is **required** (a handoff with nothing to say is a release). On `flotilla start` the CLI:
+
+1. pushes a WIP checkpoint of the in-scope changes to the task branch, exactly as
+   `flotilla ship --wip` does;
+2. records `{ from, note, branch, head_sha, at }` on the task and releases the claim, in one
+   server-side step, so nobody can claim it without the note already on the card;
+3. releases the file-scope lock through the same path as `flotilla release`.
+
+If any of that is refused (not the claimant, push failed, no note) the agent is told on its
+inbox with `handoff_refused` and still holds the task. The MCP server exposes the same request as
+its `handoff` tool, and a person runs it directly as `flotilla handoff <task_id> --note "..."`.
+
+### Handoff delivery
+
+When anyone next claims a handed-off task (`flotilla claim <id>`, or the no-id claim), the CLI
+prints the note, checks the working tree out onto the handed-off branch if the tree is clean
+(a dirty tree is left alone and told the two commands), and appends one inbox line **before** the
+agent starts:
+
+```jsonl
+{"v":"0.2","seq":0,"layer":"coordination","kind":"handoff_received","ts":"2026-09-30T17:20:40Z","body":{"task_id":"task_items_crud","from":{"agent_id":"agent_be01","label":"Bea"},"note":"GET and list are done ...","branch":"agent/backend/items-crud","head_sha":"3f1c...","handed_off_at":"2026-09-30T17:02:14Z","checked_out":true,"earlier_handoffs":0}}
+```
+
+`seq` is 0 because it is a delivery to one agent, not a ledger event (the same convention as
+`claim_denied`). The full history, newest first, is written to `tasks/current-task.md` under
+"Handed off to you", and `ship` keeps pushing to the handed-off branch rather than starting a
+fresh one. A task keeps its last ten handoffs.
 
 ### Cursors
 

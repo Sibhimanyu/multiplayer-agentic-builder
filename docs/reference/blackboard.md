@@ -113,6 +113,76 @@ ordered query. Catalyst has no unsigned type, so the handler rejects negatives.
 items-api v2 is a breaking change rather than additive. Do not re-litigate.
 ```
 
+## Pins and stale facts
+
+A fact is written about some code, and the code keeps moving while the fact does not. A fact
+may therefore **pin** the paths it describes, and is **stale** when a commit touching any pinned
+path is newer than the fact's own last commit on `agentic/blackboard`.
+
+### Syntax
+
+One key, `pins:`, holding a list of repo-relative git-style globs (`*` within a segment, `**`
+across segments, a trailing `/` meaning the whole directory). Block or flow form. Where it goes
+depends only on the file type:
+
+| Fact | Carrier | Example |
+|---|---|---|
+| `contracts/*.yaml` | a top-level key | `pins: [server/items/**]` |
+| `decisions/*.md` | YAML frontmatter, `---` on line one | see below |
+| `schema/*.sql` | the leading `--` comment block | `-- pins: [server/items/**]` |
+
+```markdown
+---
+pins:
+  - server/items/validate.ts
+  - schema/items.sql
+---
+# 0007 — qty is an integer, not a string
+```
+
+Parsed forgivingly: an item that is absolute, climbs out with `..`, or starts with `:` or `!`
+(git pathspec magic) is dropped and named, and the rest of the list still counts. `pins: []`
+means "no pins, on purpose". A pin that matches no tracked file is reported, because it can never
+go stale and is nearly always a typo.
+
+### Freshness
+
+| Status | Means |
+|---|---|
+| `fresh` | pinned, and nothing it pins has a commit newer than the fact |
+| `stale` | some pinned path has a newer commit; the commits are listed |
+| `unpinned` | declares no pins, so freshness is not known |
+| `superseded` | a contract version older than the newest `v<n>` of the same name. Never flagged. |
+
+"Newer" is **committer time across two histories**: the blackboard is an orphan branch, so a
+fact and its code share no ancestry and the comparison cannot be a graph question. Committer
+rather than author time, because a rebase that lands old work today is the code moving today.
+Clock skew between machines shifts a flag by the skew, which is acceptable for a flag whose whole
+job is "go and look". The code side is `HEAD` of the checkout asking; the blackboard side is the
+local `origin/agentic/blackboard` (else a local `agentic/blackboard`). Only local refs are read,
+except by `flotilla facts`, which fetches first because a human asked.
+
+### Where it shows
+
+- `flotilla facts` — every fact, its status, and for a stale one the newest commits that moved
+  its code (sha, date, subject).
+- `flotilla status`, and `flotilla sync` after a merge — one line counting stale facts, only
+  when there are any.
+- `flotilla claim` — stale facts whose pins overlap the claimed scope go into
+  `.agentic/tasks/current-task.md` under **Facts to re-verify**.
+- MCP — `blackboard_facts`, and `my_assignment` appends the same flags for the globs the agent
+  holds, so `flotilla work` and `flotilla chat` agents get them at session start.
+
+### Clearing a flag
+
+**A fact is never edited by the tooling.** Stale is a flag for a human or an agent to review,
+and there is no stored "verified" bit: freshness is recomputed from git every time. To clear it,
+re-verify the fact against the code and **re-commit the fact** on `agentic/blackboard`, so its
+last commit is newer than the code again. For a contract that commit is the next version —
+versions are new files, and the old one becomes `superseded`. For a decision or schema it is an
+ordinary commit to that file on the blackboard branch (the CLI's publish path refuses to
+overwrite a published fact, so this is a deliberate human act, reviewed like any other).
+
 ## Write path — the CLI, never the agent
 
 The agent writes a file into the working tree and appends `contract_published` naming it.

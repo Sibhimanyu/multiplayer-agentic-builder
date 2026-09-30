@@ -2,6 +2,7 @@
 // If a backend SDK appears in this file, the store seam has leaked.
 
 import { useEffect, useState } from 'react';
+import { formatAge } from './format';
 // COLUMNS, not a local list: the index must not invent a second definition of the board's
 // columns. If the board gains a column, this gains it too, or the two screens disagree.
 import { COLUMNS } from './store/types';
@@ -19,13 +20,14 @@ export function truncPath(p: string, max = 34): string {
 }
 
 const RING: Record<string, string> = { blocked: 'blocked', offline: 'offline', revoked: 'offline' };
-// Tuned for the dark ground (order 0077). The previous set was mixed for a white page.
+// GREYS, NOT HUES (Graphite, 2026-09-30). Six saturated fills -- purple, teal, rust, blue -- made
+// the avatar stack the most colourful thing on the board, and none of the hues MEANT anything:
+// colour is reserved for state, and the state here is the ring. Adjacent avatars stay
+// distinguishable by lightness step and by their initials.
 //
-// SOLVED, NOT PICKED. Each hue was darkened until white initials clear 4.5:1 on it -- the first
-// attempt at this list looked right and failed on four of six, which is exactly the kind of thing
-// that ships when a palette is chosen by eye. Measured: white contrast 5.69, 4.69, 4.66, 4.68,
-// 4.71, 4.65; and every one clears 3:1 against --card so the chip reads as an object.
-const AV_BG = ['#6E5AA8', '#2A8171', '#A36635', '#6C757F', '#4575B4', '#9D684C'];
+// SOLVED, NOT PICKED. --ink initials on each fill, measured: 7.94, 10.48, 6.27, 9.72, 5.37, 8.86
+// -- every one clears 4.5:1 with room.
+const AV_BG = ['#474747', '#353535', '#565656', '#3A3A3A', '#606060', '#404040'];
 
 export function Avatar({ agent, small, idx }: { agent: AgentPresence; small?: boolean; idx: number }) {
   return (
@@ -120,8 +122,8 @@ export function TaskCard({
   task: TaskView; agent?: AgentPresence; selected: boolean;
   onSelect: () => void; contractVersion?: number;
 }) {
-  const blockedMins = task.blocked_since
-    ? Math.round((Date.now() - new Date(task.blocked_since).getTime()) / 60000)
+  const blockedFor = task.blocked_since
+    ? formatAge(Date.now() - new Date(task.blocked_since).getTime())
     : null;
 
   return (
@@ -135,10 +137,13 @@ export function TaskCard({
         {contractVersion != null && <span className="verpill">v{contractVersion}</span>}
         {task.blocked_by && (
           <span className="badge" data-t="blocked">
-            Blocked{blockedMins != null ? ` ${blockedMins}m` : ''}
+            Blocked{blockedFor != null ? ` ${blockedFor}` : ''}
           </span>
         )}
         {task.ci === 'failed' && <span className="badge" data-t="ci-failed">CI failed</span>}
+        {task.status === 'open' && (task.handoffs?.length ?? 0) > 0 && (
+          <span className="badge" data-t="handoff">Handed off</span>
+        )}
         {task.status === 'needs_review' && !task.blocked_by && (
           <span className="badge" data-t="review">Owner review</span>
         )}
@@ -220,7 +225,7 @@ export function ProjectsSkeleton() {
         <span className="sk sk-line" />
       </nav>
       <div className="stage">
-        <div className="board sk-board" aria-busy="true" aria-label="Loading your projects">
+        <div className="board sk-board" data-index="true" aria-busy="true" aria-label="Loading your projects">
           <section className="col">
             <div className="col-head">
               <h3>Projects</h3><span className="sk sk-count" />
@@ -575,7 +580,7 @@ export function TriagePanel({
                 <div className="row">
                   <span className="kind" data-k="docs">{s.from}</span>
                   {canTriage && (
-                    <span className="who" style={{ display: 'flex', gap: 6 }}>
+                    <span className="who acts">
                       <button className="cta" onClick={() => onAccept(s.seq)}>Make a task</button>
                       <button className="x" onClick={() => onDecline(s.seq)} aria-label="Decline">&times;</button>
                     </span>
@@ -632,8 +637,8 @@ export function DetailPanel({
         {agent && (
           <div className="row">
             <Avatar agent={agent} idx={0} small />
-            <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-              {agent.role_slug} · {agent.harness}{agent.stale ? ' · stale' : ''}
+            <span>
+              {agent.member_label} · {agent.role_slug} · {agent.harness}{agent.stale ? ' · stale' : ''}
             </span>
           </div>
         )}
@@ -650,6 +655,23 @@ export function DetailPanel({
             {task.file_scope.map((g) => (
               <div className="dep" key={g} title={g}>
                 <span className="d" /><span className="nm">{truncPath(g, 30)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {(task.handoffs?.length ?? 0) > 0 && (
+          <div className="sect">
+            <div className="lbl">Handoffs · newest first</div>
+            {[...task.handoffs!].reverse().map((h) => (
+              <div className="handoff" key={h.at + h.from.agent_id}>
+                <div className="h-meta">
+                  <b>{h.from.label}</b> · {formatAge(Date.now() - new Date(h.at).getTime())} ago
+                </div>
+                <p>{h.note}</p>
+                {h.branch && (
+                  <p className="ref">{h.branch}{h.head_sha ? ` @ ${h.head_sha.slice(0, 7)}` : ''}</p>
+                )}
               </div>
             ))}
           </div>
@@ -674,14 +696,12 @@ export function DetailPanel({
             <div className="lbl">
               Contract <span className="verpill">v{contract.version}</span>
               {contract.supersedes != null && (
-                <span style={{ color: 'var(--muted)', fontWeight: 400, marginLeft: 6 }}>
-                  supersedes v{contract.supersedes}
-                </span>
+                <span className="supersedes">supersedes v{contract.supersedes}</span>
               )}
             </div>
             {contract.preview
               ? <pre>{contract.preview}</pre>
-              : <p style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>
+              : <p className="ref">
                   {contract.path} @ {contract.commit_sha.slice(0, 7)}
                 </p>}
           </div>

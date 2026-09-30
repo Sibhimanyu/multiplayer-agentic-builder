@@ -56,6 +56,9 @@ import { assertScopeAllowed } from '../shared/store/roles.ts';
 import { applyEvent, emptyProjection, toSnapshot, type FoldOutcome, type Projection } from './fold.ts';
 import { isEmptyDelta, rollupDelta } from '../shared/store/rollup.ts';
 import { deriveTaskId, taskCreatedBody, type NewTask } from '../shared/store/tasks.ts';
+import {
+  HANDOFF_NOTE_MAX, cleanBranch, cleanHandoffNote, cleanSha, handoffEventBody, handoffFromEvent, handoffKey,
+} from '../shared/store/handoff.ts';
 import { StoreAuthError, StoreBusyError, StoreError, StoreOfflineError } from '../shared/store/errors.ts';
 import { sanitizeBody, sanitizeText, TEXT_MAX, VARCHAR_MAX } from '../shared/sanitize.ts';
 import { consoleLogger, type Logger } from '../shared/log.ts';
@@ -74,6 +77,8 @@ import {
   type Event,
   type EventInput,
   type Freshness,
+  type HandoffInput,
+  type HandoffResult,
   type ProjectId,
   type ScopeLock,
   type Seq,
@@ -1075,6 +1080,67 @@ export class FirestoreStore implements CoordinationStore {
         tx.delete(claimRef);
         this.commitAppend(tx, pid, plan);
         return { released: true };
+      });
+    });
+  }
+
+  /**
+   * Record a handoff and delete the claim, in ONE transaction. See CoordinationStore.handoffTask.
+   *
+   * Same shape as releaseTask -- read the claim, plan the append, delete, commit -- because it IS
+   * a release, one that carries a note. The event it appends is `task_handed_off` instead of
+   * `task_unblocked`, and the fold turns that into both the release and the history entry. Two
+   * events (a release, then a note) would need two appends in one transaction, which the
+   * single-counter ledger cannot express; and two transactions would reopen the gap in which a
+   * fast claimer takes the ticket before the note lands.
+   *
+   * The revocation check follows the ACTOR: an agent handing off its own ticket must hold a live
+   * token, while an owner handing off a revoked teammate's ticket must still be able to -- a
+   * revoked agent's claim is exactly the one that most needs a note and a new home.
+   *
+   * Cost: 4 reads (claim, dedupe, counter, task) and 5 writes (claim delete, event, counter, task,
+   * project rollup). Independent of history length, which is capped on the card.
+   */
+  async handoffTask(pid: ProjectId, task_id: TaskId, input: HandoffInput): Promise<HandoffResult> {
+    await this.assertNotRevoked(pid, input.by.actor_type === 'agent' ? input.by.actor_id : undefined);
+    // Outside the transaction: an empty note is a caller error, and raising it inside would burn
+    // an attempt and read as contention.
+    const note = cleanHandoffNote(input.note);
+    if (!note.ok) throw new StoreError(note.error);
+    const body = handoffEventBody(task_id, {
+      from: { agent_id: input.holder, label: input.from_label },
+      handed_off_by: input.by.actor_id,
+      note: sanitizeText(note.note, { field: 'handoff.note', max: HANDOFF_NOTE_MAX, log: this.log }),
+      branch: cleanBranch(input.branch),
+      head_sha: cleanSha(input.head_sha),
+    });
+
+    return guard('handoffTask', async () => {
+      const claimRef = this.claimsRef(pid).doc(task_id);
+      return this.tx('handoffTask', async (tx): Promise<HandoffResult> => {
+        const held = await tx.get(claimRef);
+        const owner = held.exists ? (held.get('agent_id') as AgentId) : null;
+        if (owner !== input.holder) {
+          this.log.info('store.handoff.not_holder', 'handoff refused, the named agent does not hold the task', {
+            project_id: pid, task_id, holder: input.holder, owner,
+          });
+          return { ok: false, owner };
+        }
+        const plan = await this.planAppend(
+          tx,
+          pid,
+          { layer: 'coordination', kind: 'task_handed_off', actor_type: input.by.actor_type, actor_id: input.by.actor_id, body },
+          // The claim AND the note. claimed_at alone is not unique: under an injected clock (the
+          // conformance harness) every re-claim shares one instant, and AH4 found ten distinct
+          // handoffs collapsing into two. A true replay -- same claim, same note -- still dedupes.
+          handoffKey(pid, task_id, input.holder, String(held.get('claimed_at')), body.note as string),
+        );
+        tx.delete(claimRef);
+        this.commitAppend(tx, pid, plan);
+        const at = plan.duplicate ? this.iso() : plan.event.created_at;
+        const parsed = handoffFromEvent(body, at);
+        if (!parsed.ok) throw new StoreError(parsed.reason); // unreachable: the body was built above
+        return { ok: true, seq: plan.seq, handoff: parsed.handoff };
       });
     });
   }

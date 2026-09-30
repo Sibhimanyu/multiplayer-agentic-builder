@@ -1,67 +1,121 @@
 # Flotilla — Design System
 
-**Direction: Instrument panel.** Chosen 2026-09-17, replacing Kanban Calm.
+**Direction: Graphite.** Chosen 2026-09-30, replacing Instrument panel, which replaced Kanban
+Calm.
 
-Kanban Calm was cream ground, Fraunces display, one desaturated accent. That is not a neutral
-description: it is *precisely* the first of the three looks AI-built interfaces land in, and both
-of its typefaces are on the overused list the design detector flags by name. The user's read —
-"it looks too AI generated" — was correct and specific. The old direction is recorded in
-`docs/designs/dashboard.md`, which now describes a **superseded** world; its *locked patterns*
-survive unchanged and are restated below.
+Dark, neutral and essentially monochrome. Emphasis comes from weight, size, contrast and
+**inversion** — a primary control is near-white with dark text — and never from a hue. Colour is
+kept for state only, desaturated and quiet: red for broken, blocked and failing; green for live,
+connected and passing; amber for the anonymous session and nothing else.
 
-**Dark is chosen from the use scene, not the category.** This sits beside a terminal while agents
-run. Cream paper is a document aesthetic on an operations product.
+**Why the teal went.** Instrument panel was GitHub's blue-black (`#0D1117`) with a bright teal
+accent (`#2DD4BF`) on the primary button, the current nav item, the focus ring, the live dot,
+every "backend" chip, the version pill, the chat keyword column and the selected card's 3px halo.
+The user's verdict was "don't make it have the neon type" — and it was neon: one saturated light
+on a tinted near-black is the second of the three looks AI-built interfaces land in. Measuring
+it did not save it; 10.17:1 is legible and still reads as a glow. The replacement keeps
+everything the user did not object to — dark, Plex, lists not cards, the scales, every locked
+pattern — and removes the hue rather than swapping it for another one.
 
-Three rules carried over from the replacement, because they are what stopped the new world
-becoming the second and third AI looks:
+**Why not back to light.** Kanban Calm (cream ground, Fraunces display, one desaturated accent)
+was rejected as "too AI generated", correctly: it is look number one exactly. It is recorded in
+`docs/designs/dashboard.md`, which describes a **superseded** world; its *locked patterns*
+survive unchanged and are restated below. Dark is still chosen from the use scene, not the
+category: this sits beside a terminal while agents run.
+
+**Where the monochrome comes from.** The generated `docs/board.html` is plain monochrome and
+bold, and the user likes it; a filled chip there means "can change production". Graphite is the
+same idea on a dark ground: the one filled near-white chip on the board is **Owner review** — the
+card that is waiting on a human. That page is its own world and is not restyled by this one.
+
+Three rules carried over, because they are what stop any world becoming a generated one:
 
 - **Cards are not the default container.** A bordered, rounded, filled box wrapping a list is the
-  habit; rows on the ground separated by a rule are layout. The queue and the rail are lists.
-- **The mono is content, not costume.** Globs, branches and ids *are* the material, and the
-  section legends are set in it because an instrument labels rather than headlines.
-- **Every colour value here was measured, not picked.** The numbers are in the table.
+  habit; rows on the ground separated by a rule are layout. The queue, the rail, the projects
+  index, the detail panel's glob list and the chat page's starter prompts are lists.
+- **The mono is content, not costume.** Globs, branches and ids *are* the material, and the small
+  legends (sidebar sections, rail, panel labels) are set in it because a panel labels rather than
+  headlines. Group headings that a person navigates by are sans, bold, in ink.
+- **Every colour value here was measured, not picked.** The numbers are in the tables.
 
 ---
 
 ## Tokens
 
 All of these live in `client/src/tokens.css` and nowhere else. No inline styles, no second
-spacing scale, no second elevation scale.
+spacing scale, no second elevation scale. `cli/chatpage.ts` and `cli/loginpage.ts` carry the same
+values by hand because they have no build step; **a value changed here is changed there too.**
 
 ### Surface and ink
 
-| Token | Value | Use | on `--paper` | on `--card` |
-|---|---|---|---|---|
-| `--paper` | `#0D1117` | page ground | — | — |
-| `--card` | `#161B22` | raised surface | — | — |
-| `--ink` | `#E6EDF3` | primary text | 16.02 | 14.64 |
-| `--ink2` | `#ADBAC7` | secondary text | 9.58 | 8.75 |
-| `--muted` | `#7C8894` | tertiary, labels | 5.23 | 4.78 |
-| `--line` | `#21262D` | hairline | — | — |
-| `--line2` | `#30363D` | stronger hairline, control borders | — | — |
+True greys: R = G = B, no blue in them. Three grounds, three hairlines, three text levels.
 
-Dark only. `color-scheme: dark` is set, so the browser's own scrollbars, caret and form controls
-theme with the page instead of staying light.
+| Token | Value | Use | on `--paper` | on `--card` | on `--raise` |
+|---|---|---|---|---|---|
+| `--paper` | `#121212` | page ground | — | — | — |
+| `--card` | `#1A1A1A` | raised surface: nav, sidebar, cards, panel, chat rail | — | — | — |
+| `--raise` | `#232323` | one step up: hover, selected card, count pills, code, current nav item | — | — | — |
+| `--ink` | `#EDEDED` | primary text, focus ring, the inversion surface | **16.00** | **14.87** | **13.42** |
+| `--ink2` | `#B8B8B8` | secondary text, tag labels | **9.44** | **8.77** | **7.92** |
+| `--muted` | `#8C8C8C` | tertiary, legends, meta | **5.57** | **5.18** | **4.67** |
+| `--line` | `#262626` | hairline between rows | 1.24 | 1.15 | — |
+| `--line2` | `#363636` | tag and control borders | 1.55 | 1.44 | — |
+| `--line3` | `#4A4A4A` | outlined buttons, the hover edge | 2.11 | 1.96 | — |
 
-**`--muted` is `#7C8894` and not `#768390` because the latter measures 4.46 on `--card`.** A
-near-miss is a miss; it was rejected for 0.04.
+Dark only. `color-scheme: dark` is set, with `accent-color` and `caret-color` in ink, so the
+browser's own scrollbars, caret, radios and form controls theme with the page.
 
-Measured again in the rendered page with alpha composited down to the root, because a first pass
-that read `rgba(...,.13)` as a solid colour reported two failures that did not exist.
+**`--muted` is the tightest pair and was chosen for it.** `#8C8C8C` clears 4.5 on all three
+grounds, including `--raise` at 4.67 — which matters, because a disabled button is muted text on
+a raised surface. Anything darker fails there first.
 
-### Accent and semantics
+Hairlines are not text and are not held to 4.5; they are separators. `--line3` is the one that
+must be *seen* as an edge (an outlined Claim button), and it is the only one above 2:1.
 
-One accent. `--teal` `#2DD4BF` (10.17 / 9.29) with `--teal-soft` `rgba(45,212,191,.13)`.
-Semantic only beyond that: `--red` `#FF7B72` (7.51 / 6.86), `--amber` `#E3B341` (9.72 / 8.89),
-each with a `.13` alpha soft variant rather than a second opaque tint.
+### The inversion, and state
 
-**On a dark ground the accent is the light, so text ON it is the dark.** `.cta` carries
-`color: var(--paper)`: white on `#2DD4BF` measures **1.86:1** and would have shipped an unreadable
-primary button. Hover *brightens* to `#5EE3D2`; on dark, nearer means lighter.
+| Token | Value | Pair | Measured |
+|---|---|---|---|
+| `--inverse` / `--on-inverse` | `#EDEDED` / `#121212` | primary button, Owner review badge | **16.00** |
+| `--inverse-hover` | `#FFFFFF` | primary hover — on dark, nearer means lighter | **18.73** |
+| `--red` | `#E5877E` | broken, blocked, CI failed, a failure heading | **7.22** paper · **6.71** card |
+| `--red-soft` | `rgba(229,135,126,.12)` | red badge ground | red on it: **5.57** over card · **6.09** over paper |
+| `--green` | `#86B98F` | live dot, connected ring | **8.34** paper · **7.75** card |
+| `--amber` | `#D9B260` | the anonymous session | **9.36** paper · **8.69** card |
+| `--amber-soft` | `rgba(217,178,96,.12)` | anonymous avatar ground | amber on it: **6.93** over card · **7.61** over paper |
+| `::selection` | `rgba(237,237,237,.22)` | text selection, ink on it | **8.58** (composited to `#424242`) |
+| disabled | `--muted` on `--raise` | a button that cannot act | **4.67** |
 
-Amber is not decorative — it is reserved for **an anonymous session**, the state that silently
-produced an empty board. Do not spend it on anything else.
+Soft variants are alpha, so they are measured **composited** onto the ground they sit on — a first
+pass on the old palette that read `rgba(...,.13)` as a solid colour reported two failures that did
+not exist.
 
+**The primary is an inversion, not a hue.** `.cta` is `--inverse` with `--on-inverse` text.
+Nothing else on a graphite page is that bright, so it leads without colour. There is exactly
+**one** filled primary in view at a time: row actions (Claim, Make a ticket) are outlined in
+`--line3` and **fill on hover**, so the action under the pointer becomes the primary exactly when
+it is being chosen. Five filled buttons down one list is a wall — it was a wall of teal.
+
+**Kinds are labels, not colours.** Backend, frontend, qa, docs and devops had five tints, three
+of them light-page values that survived the move to dark (`#EEEDEA` behind `#ADBAC7` measured
+**1.69:1**). A kind is not a state, so it is an outlined tag with the word in `--ink2`.
+
+**Amber is reserved for an anonymous session**, the state that silently produced an empty board.
+Graphite enforces the rule the old world only stated: "confusing" suggestions, the "Waiting" and
+"Scope held" labels, the blocked-row wash, "Not a member of this project", the hosted-login
+fallback banner, and the chat page's task state and "offline" marker all used amber, and none of
+them is an anonymous session. They are now weight, ink or muted.
+
+**Avatars are greys.** Six saturated fills made the presence stack the most colourful object on
+the board and meant nothing; the state is the ring. Fills `#474747 #353535 #565656 #3A3A3A
+#606060 #404040`, ink initials at 7.94 / 10.48 / 6.27 / 9.72 / 5.37 / 8.86.
+
+**The mark is ink on the board.** `flotilla-mark.svg` is teal and is a published asset (favicons,
+the OG master, the marketing site), so it is not recoloured at the source. `BrandLockup` draws it
+through `filter: grayscale(1) brightness(1.35)`, which lands on `#ECECEC` — `--ink` within one
+step. The chat and CLI login pages inline the real mark paths in `currentColor`; the chat header
+used to draw a three-triangle stand-in and the login page a teal "FL" square, two logos that
+existed nowhere else.
 ### Type
 
 | Token | Family | Scope |
@@ -109,15 +163,20 @@ The ~1.15 step is deliberately small for the bottom half (11 → 12 → 14) beca
 legend/meta/body to be *distinguishable*, not dramatic, and widens at the top (18 → 21 → 28)
 where the jumps do the work headings are for.
 
-**34px h1 at `-0.033em`** and section heads as uppercase mono at `+0.08em`. The old marketing
-scale was 25 / 15.5 / 14 — three sizes that barely differed, which is why the page had no voice.
-The 34px h1 is the one value above `--t-7` and it is marketing-only; migrate it to `--t-7` when
-that page is next touched.
+**The board's hierarchy, top to bottom:** page heading `--t-7` 600 at `-0.025em` (My queue,
+Projects, an unbuilt section, the chat opening line) → group heading `--t-3` 600 in ink (Ready
+for you, Suggestions) → row and card title `--t-2` (600 in the queue, 500 on a board card) →
+meta `--t-1` → mono legends and tags `--t-0`. The queue h1 was 34px, the one value above
+`--t-7`; it is now `--t-7`. The group headings were `11.5px` tracked mono in `--muted`, which
+made "Ready for you" — the point of the screen — quieter than the row ids under it; they are
+sans, bold, in ink now. Mono legends stay for the labels a reader does not navigate by: sidebar
+sections, the rail, the detail panel's section labels.
 
-**Migrate on touch.** The remaining half-pixels are a known debt, listed in "Measured call
-sites". Do not open a sweep commit that rewrites every rule at once: a type sweep is
-indistinguishable from a type regression in review, which is exactly how the spacing scale is
-being migrated.
+**The board now has no half-pixel font size.** Counted with comments stripped, `tokens.css` went
+from 16 distinct literal font sizes to 3 — `18px`, `22px` and `26px`, all inside `BrandLockup`,
+whose gaps are measured against its rendered size in "Logo spacing" and must not move without
+re-measuring. The marketing site's half-pixels are still debt: migrate on touch, and do not open
+a sweep commit — a type sweep is indistinguishable from a type regression in review.
 
 **Self-hosted, latin subset, same-origin** (`/brand/fonts/*.woff2`, order 0067). There is no
 `fonts.googleapis.com` request: as a render-blocking third-party stylesheet it cost 3031 ms on a
@@ -131,6 +190,13 @@ at `dist/brand/fonts/` and the loopback server serves them from disk, so the cha
 Plex with no network. A local tool that reaches the internet to draw its own text is broken on a
 plane.
 
+**Known divergence: the CLI's login page.** `cli/loginpage.ts` is served by the one-shot loopback
+server `flotilla login` starts, which serves the page and the credential callback and nothing
+else. It now carries Graphite's colours, scale and the real mark, but names `IBM Plex Sans` without
+shipping it, so on a machine without Plex installed it renders in the system sans. Closing that
+means serving `/brand/fonts/` from that server, the way `serveChat` does — a server change, not a
+page change. Until then this is the one sanctioned exception to the no-fallback rule.
+
 ### Shape and motion
 
 `--r-card:12px` `--r-ctl:8px` `--r-tag:5px`. Radii vary by nesting; they are not one value.
@@ -138,7 +204,12 @@ plane.
 **Depth is light, not shadow.** On a dark ground a drop shadow is invisible: there is nothing
 darker to cast onto. `--shadow` is `inset 0 1px 0 rgba(255,255,255,.04)` — a highlight along the
 top edge, the way a real panel catches light. `--shadow-lift` strengthens that highlight and adds
-an accent hairline. One elevation idea, expressed in the terms this ground can actually show.
+a `--line3` hairline — it added a teal one until Graphite. One elevation idea, expressed in the
+terms this ground can actually show. The one real drop shadow is the detail panel's, cast leftward
+over the board it overlays, where there *is* something to cast onto.
+
+**Selected is an edge, not a glow.** A selected card is `--raise` with a 1px `--ink2` ring. It was
+a 3px teal halo — the brightest object on the board, for a state that only needs "this one".
 
 `--motion-fast:160ms` with `--ease:cubic-bezier(.2,0,.2,1)`. One duration, so two interactive
 states cannot drift apart. Animate `transform` and `opacity` only — never `width`, `height`,
@@ -161,11 +232,16 @@ One scale. Every new margin, padding and gap comes from it.
 | `--sp-9` | `48px` | page section padding |
 | `--sp-10` | `64px` | major page breaks |
 
-**This scale is new and the shipped CSS does not yet conform.** `client/src/tokens.css` currently
-carries 28 distinct pixel spacing values and the marketing site carries 38 more, including 9, 11,
-13, 15, 17, 19, 34, 58, 74 and 86 — improvised one at a time. Migrate on touch; do not open a
-sweep commit that rewrites every rule at once, because a spacing sweep is indistinguishable from
-a spacing regression in review.
+**The board now conforms; the marketing site does not.** The Graphite change rewrote nearly every
+rule in `client/src/tokens.css` for colour, and each rule it rewrote landed on this scale — which
+is "migrate on touch", applied to a change that touched almost everything, not a sweep commit.
+Counted with comments stripped, the board went from **30 distinct pixel spacing values to 3**:
+`-8px` and `-6px` (the avatar-stack overlap, a geometric value rather than a gap) and the
+`400px` panel clearance that locked pattern 3 requires. `cli/chatpage.ts` and
+`cli/loginpage.ts` use the scale throughout. The marketing site still carries 38 improvised
+values, including 9, 11, 13, 15, 17, 19, 34, 58, 74 and 86; migrate those on touch, and do not
+open a sweep commit that rewrites every rule at once, because a spacing sweep is
+indistinguishable from a spacing regression in review.
 
 ---
 
@@ -265,12 +341,17 @@ already happened once.
    Ring: green connected, red blocked, grey offline.
 3. **The detail panel overlays, never displaces.** `position:absolute; right:0; z-index:20`, and
    the board carries `padding-right:400px`. Displacing columns hid "PR open" and "Merged"
-   entirely. That was a real bug. Do not reintroduce it.
+   entirely. That was a real bug. Do not reintroduce it. **And it is full height:** inside the
+   shell, `.main` was a block scroller, so the `.stage` the panel is `bottom:0` against was only as
+   tall as the tallest column — at 1440×900 the panel ended at y=423. The wide main is a one-row
+   grid now, and the panel runs 60 → 900. Found in a screenshot, not in the CSS.
 4. **Freshness comes from `store.freshness`, never hardcoded.** `poll` → `updated {n}s ago` with
    a pulsing dot; `live` → a steady dot, no counter. Never fake liveness.
 5. **Empty columns get a dashed empty state, never a blank.**
 6. **Presence collapses past four**, so ten agents do not push the nav around.
-7. **A refresh must not shift layout.** This is why the skeleton renders the real chrome.
+7. **A refresh must not shift layout.** This is why the skeleton renders the real chrome. The
+   projects index carries `data-index="true"` on its `.board`, and so does `ProjectsSkeleton`,
+   so the list-at-reading-width layout applies to both and the swap stays a content change.
 
 ---
 
@@ -280,20 +361,31 @@ Order 0066. None of these are visible to a server render, which is why the edge 
 177/177 on a page that had none of them.
 
 - **Focus.** One `:where(a,button,input,select,textarea,summary,[tabindex],.col-body,.board,.p-body):focus-visible`
-  rule at `--focus-ring`. `:where()` contributes zero specificity, so a component needing a
+  rule at `--focus-ring` — 2px `--ink`, measured in Chromium as `rgb(237, 237, 237)` on a tabbed
+  card. `:where()` contributes zero specificity, so a component needing a
   different ring overrides with a plain class and nothing is repeated when a control is added.
   **`:focus-visible`, not `:focus`** — a mouse click on a card must not leave a ring behind.
   Scrollers get an inset offset because an outset ring is clipped by their own overflow.
+  **Text fields are the exception**: the new-task and raise forms autofocus their first field, so
+  the ring fired on arrival. Their focus is the border stepping up to `--ink2`, the same fix the
+  chat composer already had.
 - **Cards lift and press.** `translateY(--lift)` with `--shadow-lift` on hover, `scale(--press)`
-  on active. A task card is the most clickable thing in the product.
+  on active. A task card is the most clickable thing in the product. Rows on the projects index
+  are rows, not cards, and take a surface on hover instead of a lift.
 - **Buttons respond.** `.cta` is the primary; `.ghost` is the secondary and is what sign-out uses.
-  Sign-out is the one destructive control in the nav and must never be `.linkish` again — teal,
-  underlined and borderless made it the lightest thing on the page.
+  Both share one box (`--r-ctl`, `--sp-3`/`--sp-5`, `--t-2`), so a pair reads as a pair. Inside
+  the account pill the ghost is a pill a size down. Sign-out must never be `.linkish` again —
+  teal, underlined and borderless made it the lightest thing on the page. Row actions are
+  outlined `.cta`s that fill on hover (see "The inversion, and state").
+- **Disabled is flat, not faded.** `--muted` on `--raise`, 4.67:1. Opacity on the whole control
+  would take the label below contrast.
 - **Numbers are tabular.** `font-variant-numeric: tabular-nums` on counts, freshness, seq numbers
   and durations. Verified by measurement: `11`, `18`, `90`, `99` all render at 31.20 px.
 - **Titles use `text-wrap: balance`**, detail-panel body uses `pretty`.
 - **`prefers-reduced-motion` suppresses the lift, the press and the skeleton sheen.** The shadow
   change stays: reduced motion is a request about movement, not a request to remove feedback.
+- **Narrow (≤860px).** The queue row drops to one column — id, title, meta, then Claim with its
+  reason beside it. At 390px the three desktop columns gave a title 150px and five words a line.
 
 ## Loading
 

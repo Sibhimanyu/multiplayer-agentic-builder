@@ -217,6 +217,46 @@ registerAuthCommands({
   },
 });
 
+/** The project id from .agentic/project.json, or '' when this is not a project checkout. */
+async function projectIdHere(root: string): Promise<string> {
+  const raw = await readFile(join(root, '.agentic/project.json'), 'utf8').catch(() => '');
+  return raw ? ((JSON.parse(raw) as { project_id?: string }).project_id ?? '') : '';
+}
+
+/**
+ * The ONE create_task write, for `flotilla task` and `flotilla ask` alike. Two commands, one
+ * call: a second copy of this is how the two would come to disagree about what a ticket carries.
+ */
+async function writeTask(
+  root: string,
+  t: { title: string; kind: string; task_id?: string; file_scope?: string[]; description?: string },
+): Promise<
+  | { ok: false; error: string }
+  | { ok: true; created: boolean; task_id: string; existing: { status?: string; title?: string } }
+> {
+  const raw = await readFile(join(root, '.agentic/project.json'), 'utf8').catch(() => '');
+  if (!raw) return { ok: false, error: 'no .agentic/project.json here. Run `flotilla new <name>` in your repo first.' };
+  const project_id = (JSON.parse(raw) as { project_id?: string }).project_id ?? '';
+  if (!project_id) return { ok: false, error: '.agentic/project.json names no project_id.' };
+
+  const cfg = await loadConfig();
+  const client = new WriteClient({
+    api_url: writeUrl(cfg), api_key: cfg.api_key, log: consoleLogger,
+  });
+  const res = await client.write(project_id, 'create_task', {
+    title: t.title, kind: t.kind, ...(t.task_id ? { task_id: t.task_id } : {}),
+    ...(t.file_scope && t.file_scope.length > 0 ? { file_scope: t.file_scope } : {}),
+    ...(t.description ? { description: t.description } : {}),
+  });
+  if (!res.ok) return { ok: false, error: String(res.body.error ?? `write refused (HTTP ${res.status})`) };
+  return {
+    ok: true,
+    created: res.body.ok === true,
+    task_id: String(res.body.task_id ?? ''),
+    existing: (res.body.existing ?? {}) as { status?: string; title?: string },
+  };
+}
+
 registerProjectCommands({
   async new(root, name, repo) {
     // THROUGH THE WRITE FUNCTION, with the user's own token. Not the Admin SDK: a stranger has a
@@ -375,36 +415,20 @@ registerProjectCommands({
   },
 
   async task(root, title, kind, task_id, file_scope) {
-    const cfg = await loadConfig();
-    const raw = await readFile(join(root, '.agentic/project.json'), 'utf8').catch(() => '');
-    if (!raw) {
-      console.error('\nno .agentic/project.json here. Run `flotilla new <name>` in your repo first.');
-      return 1;
-    }
-    const project_id = (JSON.parse(raw) as { project_id?: string }).project_id ?? '';
-    if (!project_id) {
-      console.error('\n.agentic/project.json names no project_id.');
-      return 1;
-    }
-
-    const client = new WriteClient({
-      api_url: writeUrl(cfg), api_key: cfg.api_key, log: consoleLogger,
-    });
-    const res = await client.write(project_id, 'create_task', {
-      title, kind, ...(task_id ? { task_id } : {}),
-      ...(file_scope && file_scope.length > 0 ? { file_scope } : {}),
+    const res = await writeTask(root, {
+      title, kind, ...(task_id ? { task_id } : {}), ...(file_scope ? { file_scope } : {}),
     });
     if (!res.ok) {
-      console.error(`\n${String(res.body.error ?? `write refused (HTTP ${res.status})`)}`);
+      console.error(`\n${res.error}`);
       return 1;
     }
 
-    const created = res.body.ok === true;
-    const id = String(res.body.task_id ?? '');
+    const created = res.created;
+    const id = res.task_id;
     if (!created) {
       // Not an error and not exit 1. A repeat is the normal outcome of a retry, and the useful
       // thing to print is the task that is actually there -- the same call the user wanted.
-      const existing = (res.body.existing ?? {}) as { status?: string; title?: string };
+      const existing = res.existing;
       console.log(`${id} already exists — ${existing.title ?? title} (${existing.status ?? 'unknown'})`);
       console.log('Pass --id to create a second task with the same title.');
       return 0;
@@ -416,6 +440,25 @@ registerProjectCommands({
     console.log(`  locks  ${file_scope && file_scope.length > 0 ? file_scope.join(', ') : '(nothing — no --scope given)'}`);
     console.log(`\nAn agent can take it now:  flotilla claim ${id}`);
     return 0;
+  },
+
+  /** `flotilla ask`: the same write as `task`, answered rather than printed. Throws on refusal. */
+  async createTask(root, task) {
+    const res = await writeTask(root, task);
+    if (!res.ok) throw new Error(res.error);
+    return { created: res.created, task_id: res.task_id };
+  },
+
+  /**
+   * The project's fences, as the member sees them through firestore.rules. Null when the project
+   * has no role documents, so `ask` falls back to the template exactly as whoami's callers do.
+   */
+  async roleScopes(root) {
+    const project_id = await projectIdHere(root);
+    if (!project_id) return null;
+    const cfg = await loadConfig();
+    const scopes = await new ReadClient({ project_id: cfg.project_id, api_key: cfg.api_key }).roleScopes(project_id);
+    return Object.keys(scopes).length > 0 ? scopes : null;
   },
 
   // AS THE SIGNED-IN USER, through the security rules -- not the Admin SDK.

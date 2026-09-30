@@ -35,7 +35,7 @@ import {
 } from './agentic.ts';
 import { appendOutbox, drain, isConnected, readCursor, type OutboxRecord } from './outbox.ts';
 import { ApiClient, connectWithInvite, type WhoAmI } from './client.ts';
-import { git, materialise, publishToBlackboard } from './blackboard.ts';
+import { BLACKBOARD_BRANCH, git, materialise, publishToBlackboard } from './blackboard.ts';
 import { serve, currentTask } from './mcp.ts';
 import { ShipError, branchFor, classifyChanges, parseStatus, scopeForTask, shipScope, shouldCompleteOnShip, openPr, scopeToAcquire } from './ship.ts';
 import { openBrowser } from './browser.ts';
@@ -43,8 +43,12 @@ import { ensureIgnored } from './gitignore.ts';
 import { positional } from './args.ts';
 import { dropLanded, landedChanges } from './sync.ts';
 import { pickTasks } from './pick.ts';
+import { readFacts, readFactsQuietly, renderFactsReport, staleTouching, type Fact } from './facts.ts';
+import { branchForTask, deliverHandoff, performHandoff, releaseLockFor, type HandoffOutcome } from './handoff.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
 import { LAYER_OF, TASK_KINDS, type Event, type EventKind, type TaskKind } from '../shared/store/types.ts';
+import type { NewTask } from '../shared/store/tasks.ts';
+import { parseAskArgs, runAsk, runScan } from './ask.ts';
 import { ROLE_SLUGS, roleFor } from '../shared/store/directory.ts';
 import type { Logger } from '../shared/log.ts';
 
@@ -168,6 +172,9 @@ async function cmdStatus(root: string): Promise<number> {
       out('offline — cannot reach the backend');
       out(`agent:      ${state.agent_id || '(unknown)'}`);
       out(await pendingLine(root));
+      // From local git, so it is as true offline as on.
+      const factLine = staleFactsLine(await readFactsQuietly(root));
+      if (factLine) out(factLine);
       return 0;
     }
     throw err;
@@ -190,6 +197,8 @@ async function cmdStatus(root: string): Promise<number> {
   );
 
   out(await pendingLine(root));
+  const factLine = staleFactsLine(await readFactsQuietly(root));
+  if (factLine) out(factLine);
 
   if (snap) {
     const mine = snap.snapshot.tasks.filter((t) => t.claimed_by === me.agent_id);
@@ -207,6 +216,83 @@ async function cmdStatus(root: string): Promise<number> {
 }
 
 const yn = (b: boolean) => (b ? 'yes' : 'no');
+
+/**
+ * One line for `status`, or null when nothing is stale. Absent rather than "0 stale": status is
+ * read at a glance, and a line that is always there stops being read.
+ */
+export function staleFactsLine(facts: readonly Fact[]): string | null {
+  const n = facts.filter((f) => f.status === 'stale').length;
+  return n > 0 ? `facts:      ${n} stale — the code they pin has moved since (flotilla facts)` : null;
+}
+
+/**
+ * `flotilla facts` — every blackboard fact, and whether the code it describes has moved.
+ *
+ * Needs no token: it is a question about git, answered from git. Fetches the blackboard first
+ * because a human asked, which is the one case the "never poll git" rule allows; offline, it
+ * answers from what this checkout already has and says so.
+ */
+async function cmdFacts(root: string, rest: string[]): Promise<number> {
+  const hasOrigin = (await git(['remote', 'get-url', 'origin'], root, 5_000)).code === 0;
+  if (hasOrigin && !rest.includes('--no-fetch')) {
+    const f = await git(['fetch', '-q', 'origin', `${BLACKBOARD_BRANCH}:refs/remotes/origin/${BLACKBOARD_BRANCH}`], root, 20_000);
+    if (f.code !== 0 && !/couldn't find remote ref/i.test(f.stderr)) {
+      log.warn('cli.facts_fetch_failed', 'could not fetch the blackboard; showing what this checkout already has', {
+        error: f.stderr.trim().split('\n')[0] ?? '',
+      });
+    }
+  }
+  const { ref, facts } = await readFacts(root);
+  out(renderFactsReport(ref, facts));
+  return 0;
+}
+
+/**
+ * `flotilla ask <file>:<line> "<request>"` and `flotilla ask --scan`. See cli/ask.ts.
+ *
+ * The fences come from the project, as the member sees them, because the kind is chosen by which
+ * fence covers the file and a repo whose frontend lives in web/ has redrawn them. Failing to read
+ * them falls back to the template, loudly: a wrong kind is recoverable with --kind, a refusal to
+ * file anything because a read failed is not.
+ */
+async function cmdAsk(root: string, rest: string[]): Promise<number> {
+  const args = parseAskArgs(rest);
+  if ('error' in args) {
+    log.warn('cli.usage_flotilla_ask', args.error);
+    log.warn('cli.usage_flotilla_ask', 'usage: flotilla ask <file>:<line>[-<endline>] "<what you want>" [--kind <kind>] [--id <task_id>]  |  flotilla ask --scan [--dry-run] [--kind <kind>]');
+    return 1;
+  }
+  // A dry run needs no backend: it is the question "what would this file", answered locally.
+  const create = projectCommands?.createTask;
+  if (!args.dry_run && !create) {
+    log.warn('cli.no_backend', 'this build has no coordination backend wired in', {});
+    out('This flotilla build cannot reach a backend. Reinstall the published package.');
+    return 1;
+  }
+
+  let scopes: Record<string, string[]> = {};
+  if (projectCommands?.roleScopes) {
+    try {
+      scopes = (await projectCommands.roleScopes(root)) ?? {};
+    } catch (err) {
+      log.warn('cli.ask_fences_unread', "could not read this project's role fences; using the template fences", {
+        error: (err as Error).message,
+      });
+    }
+  }
+  const deps = {
+    root,
+    scopes,
+    create: create ? (t: NewTask & { task_id: string }) => create(root, t) : async () => ({ created: false, task_id: '' }),
+    out,
+  };
+  if (!args.scan) return runAsk(args, deps);
+  const r = await runScan(args, deps);
+  // Skipped markers are the one outcome a person has to act on, so they fail the command; a
+  // re-scan that finds everything already filed is the normal case and does not.
+  return r.skipped.length > 0 ? 1 : 0;
+}
 
 async function pendingLine(root: string): Promise<string> {
   const pending = await countPending(root);
@@ -272,17 +358,30 @@ async function cmdClaim(root: string, task_id: string, args: string[] = []): Pro
   }
 
   const state = await readState(root, log);
+  // THE MOMENT AN AGENT IS HANDED WORK is the moment a stale fact about that work can still be
+  // caught before it is trusted. Local git only, and quiet on failure: a claim must not fail
+  // because the blackboard could not be read.
+  const stale = staleTouching(await readFactsQuietly(root), want.globs);
   await writeAgenticTree(
     root,
-    { role: rolePackFor(await client.whoami()), project: await projectFile(root), task: task ?? null, state },
+    { role: rolePackFor(await client.whoami()), project: await projectFile(root), task: task ?? null, state, stale_facts: stale },
     log,
   );
   out(`claimed ${task_id}`);
+  if (stale.length > 0) {
+    out(`! ${stale.length} blackboard fact(s) about these files predate the code: ${stale.map((f) => f.path).join(', ')}`);
+    out(`  flagged in ${LAYOUT.current_task} for the agent to re-verify; see \`flotilla facts\``);
+  }
   if (task && want.globs.length > 0) out(`scope: ${want.globs.join(', ')}${want.from === 'flag' ? '  (from --scope)' : ''}`);
   else if (task) {
     out('scope: (none declared) — nothing is locked, so `flotilla ship` will refuse this task');
     out(`  name the files it touches: flotilla claim ${task_id} --scope 'server/**'`);
   }
+  // A HANDED-OFF TICKET IS PICKED UP WARM. The note is printed for the person, written to the
+  // inbox for the agent, and the checkout moved onto the branch the work is on. The no-id claim
+  // arrives here too, so a ticket handed out by `flotilla claim` is delivered the same way. After
+  // the tree is written, so current-task.md already carries the history when the agent looks.
+  if (task) for (const line of await deliverHandoff(root, task, log)) out(line);
   out(`see ${LAYOUT.current_task}`);
   return 0;
 }
@@ -303,13 +402,45 @@ async function cmdRelease(root: string, task_id: string): Promise<number> {
   const client = new ApiClient({ base_url: cfg.api_base, token: await readToken(root), log });
   const me = await client.whoami();
   const snap = await client.readSnapshot();
-  const held = snap ? scopeForTask(snap.snapshot.locks, me.agent_id, task_id) : [];
   await client.releaseTask(task_id);
-  // Only the lock held FOR THIS TASK. releaseScope drops the agent's one lock, so calling it
-  // unconditionally would free the files of a different task this agent is working on.
-  if (held.length > 0) await client.releaseScope();
+  // Only the lock held FOR THIS TASK -- the one helper `handoff` releases through as well.
+  const held = await releaseLockFor(client, snap?.snapshot.locks ?? [], me.agent_id, task_id);
   out(`released ${task_id}${held.length > 0 ? ` and its lock on ${held.join(', ')}` : ''}`);
   return 0;
+}
+
+/**
+ * `flotilla handoff <task_id> --note "..."` — release WITH context. See cli/handoff.ts.
+ *
+ * Exit 1 on every refusal, unlike a lost claim: a handoff that did not happen means the person
+ * walking away still holds the ticket, and a harness that reads exit 0 would let them leave.
+ */
+async function cmdHandoff(root: string, task_id: string, note: string): Promise<number> {
+  if (!(await isConnected(root))) {
+    log.warn('cli.not_connected_run_flotilla', 'not connected: run `flotilla connect <invite>` first');
+    return 2;
+  }
+  const cfg = await loadConfig(root);
+  const client = new ApiClient({ base_url: cfg.api_base, token: await readToken(root), log });
+  const r = await performHandoff({ root, task_id, note, client, log });
+  for (const line of handoffReport(r)) out(line);
+  return r.ok ? 0 : 1;
+}
+
+/** What a handoff says it did. Shared by the command and the outbox path, so both say the same. */
+export function handoffReport(r: HandoffOutcome): string[] {
+  if (!r.ok) return [`not handed off: ${r.message}`];
+  const lines = [`handed off ${r.task_id}`];
+  if (r.pushed && !r.pushed.unchanged) {
+    lines.push(`  pushed ${r.pushed.files.length} file(s) to ${r.pushed.branch} @ ${r.pushed.commit_sha.slice(0, 12)}`);
+  } else if (r.handoff.branch) {
+    lines.push(`  ${r.handoff.branch} already held your work${r.handoff.head_sha ? ` @ ${r.handoff.head_sha.slice(0, 12)}` : ''}`);
+  } else {
+    lines.push('  nothing was pushed: no in-scope changes and no branch yet');
+  }
+  lines.push(r.released_lock.length > 0 ? `  released the claim and its lock on ${r.released_lock.join(', ')}` : '  released the claim');
+  lines.push('  whoever claims it next gets your note and continues on that branch');
+  return lines;
 }
 
 /**
@@ -343,6 +474,10 @@ async function cmdSync(root: string): Promise<number> {
     return 1;
   }
   out(`up to date with ${ref}${kept.length ? ` — kept ${kept.length} local change(s): ${kept.join(', ')}` : ''}`);
+  // A sync is exactly when code moves under facts: a merge just landed. The fetch above already
+  // refreshed the blackboard's remote-tracking ref, so this costs no extra network.
+  const factLine = staleFactsLine(await readFactsQuietly(root));
+  if (factLine) out(factLine);
   return 0;
 }
 
@@ -471,7 +606,7 @@ async function cmdStart(root: string): Promise<number> {
           try {
             const { me, task, scope } = await shipContext(root, client);
             const res = await shipScope({
-              root, branch: branchFor(me.role_slug, task.task_id), scope,
+              root, branch: branchForTask(me.role_slug, task), scope,
               agent_id: me.agent_id, role_slug: me.role_slug,
               task_id: task.task_id, task_title: task.title,
             }, log);
@@ -595,6 +730,32 @@ function makePublisher(client: ApiClient, root: string, cfg: Config, logger: Log
       return client.appendEvent(kind, pointerBody, rec.idempotency_key);
     }
 
+    // `handoff_requested` is an agent saying "I am out of budget, pass this on". A REQUEST, like
+    // claim_requested: the ledger records the handoff itself, which only the transaction writes.
+    // This machine pushes the checkpoint and performs it; the agent holds no credential and
+    // never touches the repository history, which is exactly why it asks.
+    if (kind === 'handoff_requested') {
+      const current = await fs.readFile(path.join(root, LAYOUT.current_task), 'utf8').catch(() => '');
+      const task_id = typeof rec.body.task_id === 'string' && rec.body.task_id
+        ? rec.body.task_id
+        : /^task_id:\s*(\S+)/m.exec(current)?.[1] ?? '';
+      // Offline throws, and the drain retries the line later. Every REFUSAL is final: re-sending
+      // an empty note, or a ticket somebody else holds, would only be refused again, forever.
+      const r = await performHandoff({ root, task_id, note: rec.body.note, client, log: logger });
+      for (const line of handoffReport(r)) out(line);
+      if (!r.ok) {
+        logger.warn('cli.handoff_request_refused', 'the agent asked to hand off and it was refused', { task_id, reason: r.reason });
+        // AND THE AGENT IS TOLD, the way claim_denied tells it a claim was lost. Otherwise it
+        // stops believing the ticket is passed on while it is in fact still holding it.
+        await appendInbox(root, {
+          v: '0.2', seq: 0, layer: 'coordination', kind: 'handoff_refused', ts: new Date().toISOString(),
+          body: { task_id, reason: r.reason, detail: r.message },
+        }, logger);
+        return { seq: 0, duplicate: true };
+      }
+      return { seq: 0, duplicate: false };
+    }
+
     return client.appendEvent(kind as EventKind, rec.body, rec.idempotency_key);
   };
 }
@@ -698,8 +859,8 @@ async function cmdMcp(root: string): Promise<number> {
  *
  * This is the whole point of the design: Flotilla does not host the conversation, it FURNISHES
  * one. Claude Code keeps its own UX -- tool display, permission prompts, diff review -- and
- * gains four tools that answer what it could not know: your task, your scope, who holds what
- * right now, and how to report back.
+ * gains tools that answer what it could not know: your task, your scope, who holds what right
+ * now, which blackboard facts the code has outgrown, and how to report back.
  *
  * The agent runs on this machine under this user's own subscription. Flotilla never holds a
  * model key; it spawns a binary the user already installed.
@@ -732,6 +893,9 @@ async function cmdWork(root: string, rest: string[]): Promise<number> {
     'Before you edit anything, call `my_assignment` to learn your task and which file globs your',
     'role may write, and `fleet_status` to see which files other agents currently hold. Never edit',
     'a glob another agent holds. Use `report` for decisions and blockers a teammate would want.',
+    'Before relying on a published contract or decision, call `blackboard_facts`: a stale one',
+    'describes code that has changed since, and must be re-verified against the code.',
+    'If you are about to run out of budget mid-task, call `handoff` with a note instead of stopping.',
     '',
     'Start by telling me my assignment and what the rest of the fleet is doing.',
   ].join('\n');
@@ -1020,7 +1184,8 @@ async function cmdShip(root: string, rest: string[]): Promise<number> {
     throw err;
   }
   const { me, task, scope } = ctx;
-  const branch = branchFor(me.role_slug, task.task_id);
+  // Handoff-aware: a ticket picked up from a teammate continues on THEIR branch.
+  const branch = branchForTask(me.role_slug, task);
 
   // --dry-run BEFORE anything is pushed, because the first question anyone asks of a command
   // that commits on their behalf is "what exactly are you about to commit".
@@ -1108,13 +1273,23 @@ const USAGE = `flotilla — agentic coordination CLI
   flotilla status               what the board thinks is happening
   flotilla task <title> --kind <${TASK_KINDS.join('|')}> --scope "<globs>"
                                 create a task on the board; --id overrides the derived id
+  flotilla ask <file>:<line>[-<end>] "<what you want>"
+                                a ticket locked to that file, carrying the lines and the code
+                                kind from whichever role's fence covers it; --kind overrides
+  flotilla ask --scan           one ticket per FLOTILLA marker comment in tracked files
+                                idempotent: a re-scan files nothing twice; --dry-run previews
   flotilla claim [task_id]      atomic claim, then acquire the declared file scope
                                 no id: take the oldest open ticket inside your fence
                                 --scope <glob> names it for a ticket that declared none
   flotilla release <task_id>    give a ticket back, and its file lock with it
+  flotilla handoff <task_id> --note "<done, next, gotchas>"
+                                push a WIP checkpoint, then release it with your note;
+                                whoever claims it next continues on your branch
   flotilla cancel <task_id> --reason "<why>"
                                 take a ticket off the board, freeing its claim and lock
   flotilla sync                 after a merge: drop shipped copies, then fast-forward
+  flotilla facts                blackboard facts: fresh, stale (pinned code moved since), unpinned
+                                --no-fetch answers from this checkout without fetching
   flotilla report "<message>"   queue one progress line in the outbox
   flotilla ship                 commit your in-scope changes to agent/<role>/<task> and push
                                 marks the task complete and opens its PR (needs gh)
@@ -1157,6 +1332,17 @@ export interface ProjectCommands {
    * triage act and triage is a member capability. See docs/decisions/0005-work-appears-by-triage.md.
    */
   task: (root: string, title: string, kind: TaskKind, task_id?: string, file_scope?: string[]) => Promise<number>;
+  /**
+   * The same write `task` makes, returning what happened instead of printing it. `flotilla ask`
+   * files through this so there is still one way work appears, and needs to know "created" from
+   * "already existed" to report a re-scan honestly. Optional: an older backend build lacks it.
+   */
+  createTask?: (root: string, task: NewTask & { task_id: string }) => Promise<{ created: boolean; task_id: string }>;
+  /**
+   * Every role's file fence in this project, read as the signed-in member. Null when the project
+   * has no policy of its own, which means the template applies.
+   */
+  roleScopes?: (root: string) => Promise<Record<string, string[]> | null>;
   /**
    * `flotilla invite`. The one command that turns a one-person project into a team, and the
    * reason membership was unreachable until now: the invite document `connect` consumes was
@@ -1293,6 +1479,10 @@ export async function main(argv: string[]): Promise<number> {
     }
     case 'sync':
       return cmdSync(root);
+    case 'facts':
+      return cmdFacts(root, rest);
+    case 'ask':
+      return cmdAsk(root, rest);
     case 'release': {
       const task = rest[0];
       if (!task) {
@@ -1300,6 +1490,18 @@ export async function main(argv: string[]): Promise<number> {
         return 1;
       }
       return cmdRelease(root, task);
+    }
+    case 'handoff': {
+      const task = rest.find((a, i) => !a.startsWith('--') && rest[i - 1] !== '--note');
+      const ni = rest.indexOf('--note');
+      const note = ni > -1 ? (rest[ni + 1] ?? '') : '';
+      if (!task) {
+        log.warn('cli.usage_flotilla_handoff', 'usage: flotilla handoff <task_id> --note "what is done, what is next, what bit you"');
+        return 1;
+      }
+      // A missing note is refused inside performHandoff, BEFORE any push or network call, with a
+      // message pointing at release -- one refusal, one wording, for the CLI and the outbox alike.
+      return cmdHandoff(root, task, note);
     }
     case 'report': {
       const message = rest.join(' ').trim();

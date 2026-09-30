@@ -96,7 +96,7 @@ export interface ShipResult {
  */
 const NEVER = ['.flotilla-token', '.agentic/', 'AGENTS.md'];
 
-const excluded = (p: string): boolean =>
+export const excluded = (p: string): boolean =>
   NEVER.some((n) => (n.endsWith('/') ? p === n.slice(0, -1) || p.startsWith(n) : p === n));
 
 /**
