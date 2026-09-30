@@ -15,11 +15,12 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import type {
-  AgentId, AgentPresence, CoordinationStore, EventInput, ProjectId, Snapshot, TaskId, TaskKind,
+  AgentId, AgentPresence, CoordinationStore, EventInput, HandoffResult, ProjectId, Snapshot, TaskId, TaskKind,
 } from './types.ts';
 import { LIMITS, STALE_AFTER_MS } from './types.ts';
 import { StoreAuthError, StoreBusyError, StoreOfflineError, isRetryable } from './errors.ts';
 import { withRetry } from './retry.ts';
+import { HANDOFF_HISTORY_MAX } from './handoff.ts';
 import type { CapturingLogger } from '../log.ts';
 import { stripUnstorable } from '../sanitize.ts';
 
@@ -670,6 +671,120 @@ export function registerConformanceSuite(factory: HarnessFactory): void {
         // And a second decline is a lost race, not a crash.
         const again = await h.store.declineSuggestion(h.project_id, suggestion_id, 'uid_d2', 'also no');
         assert.equal(again.ok, false);
+      } finally { await h.dispose(); }
+    });
+
+    // ---- section A-H: handoff with context ----------------------------------------------
+    //
+    // Optional on the port like suggestions, so each SKIPS WITH A NAMED REASON. What these pin is
+    // the property the feature is for: nobody can claim a handed-off ticket without the note
+    // already being on the card.
+
+    const SHA = 'a'.repeat(40);
+    const handoff = (holder: string, note: string, by = holder) => ({
+      holder, from_label: 'Bea Backend', by: { actor_type: 'agent' as const, actor_id: by },
+      note, branch: 'agent/backend/items-api', head_sha: SHA,
+    });
+
+    it('AH1 a handoff records the note on the card, frees the claim, and appends one coordination event', async () => {
+      const h = await setup();
+      try {
+        if (!h.store.handoffTask) { console.log('    [skip] AH1: adapter has no handoffTask'); return; }
+        assert.deepEqual(await h.store.claimTask(h.project_id, 'task_items_api', 'agent_be01'), { ok: true });
+        const before = await h.ledgerSize();
+
+        const r = await h.store.handoffTask(h.project_id, 'task_items_api', handoff('agent_be01', 'GET done; POST next. The fixture needs a reset.'));
+        assert.equal(r.ok, true);
+        assert.ok(r.ok && r.seq > 0);
+        assert.equal(await h.ledgerSize(), before + 1, 'exactly one event: the handoff IS the release');
+        const { events } = await h.store.readEvents(h.project_id, 0);
+        const last = events.at(-1)!;
+        assert.equal(last.kind, 'task_handed_off');
+        assert.equal(last.layer, 'coordination', 'the note is for agents, so it rides the agent layer');
+
+        const t = (await h.store.readSnapshot(h.project_id))!.snapshot.tasks.find((x) => x.task_id === 'task_items_api')!;
+        assert.equal(t.claimed_by, null);
+        assert.equal(t.status, 'open', 'a handed-off ticket goes back to the pile');
+        assert.equal(t.handoffs?.length, 1);
+        const got = t.handoffs![0]!;
+        assert.equal(got.note, 'GET done; POST next. The fixture needs a reset.');
+        assert.deepEqual(got.from, { agent_id: 'agent_be01', label: 'Bea Backend' });
+        assert.equal(got.handed_off_by, 'agent_be01');
+        assert.equal(got.branch, 'agent/backend/items-api');
+        assert.equal(got.head_sha, SHA);
+        assert.ok(got.at, 'the server stamps when');
+
+        // Freed for real: somebody else can now take it, and the note is waiting for them.
+        assert.deepEqual(await h.store.claimTask(h.project_id, 'task_items_api', 'agent_fe01'), { ok: true });
+      } finally { await h.dispose(); }
+    });
+
+    it('AH2 a handoff by a non-holder is refused as a value, appends nothing, and keeps the claim', async () => {
+      const h = await setup();
+      try {
+        if (!h.store.handoffTask) { console.log('    [skip] AH2: adapter has no handoffTask'); return; }
+        // Nobody holds it: refused, owner null.
+        const free = await h.store.handoffTask(h.project_id, 'task_items_api', handoff('agent_be01', 'n'));
+        assert.deepEqual(free, { ok: false, owner: null });
+
+        await h.store.claimTask(h.project_id, 'task_items_api', 'agent_be01');
+        const before = await h.ledgerSize();
+        const r = await h.store.handoffTask(h.project_id, 'task_items_api', handoff('agent_fe01', 'not mine to give'));
+        assert.deepEqual(r, { ok: false, owner: 'agent_be01' }, 'the refusal names who holds it');
+        assert.equal(await h.ledgerSize(), before, 'a refused handoff appends nothing');
+        const lost = await h.store.claimTask(h.project_id, 'task_items_api', 'agent_fe01');
+        assert.equal(lost.ok, false, 'the claim is still held by its owner');
+      } finally { await h.dispose(); }
+    });
+
+    it('AH3 an empty note is refused and leaves the claim held', async () => {
+      const h = await setup();
+      try {
+        if (!h.store.handoffTask) { console.log('    [skip] AH3: adapter has no handoffTask'); return; }
+        await h.store.claimTask(h.project_id, 'task_items_api', 'agent_be01');
+        // A handoff with nothing to say is a release, and release already exists.
+        await assert.rejects(() => h.store.handoffTask!(h.project_id, 'task_items_api', handoff('agent_be01', '   ')));
+        const lost = await h.store.claimTask(h.project_id, 'task_items_api', 'agent_fe01');
+        assert.equal(lost.ok, false, 'a refused handoff must not have released anything');
+      } finally { await h.dispose(); }
+    });
+
+    it('AH4 history survives repeated handoffs, newest last, capped at the limit', async () => {
+      const h = await setup();
+      try {
+        if (!h.store.handoffTask) { console.log('    [skip] AH4: adapter has no handoffTask'); return; }
+        const ROUNDS = HANDOFF_HISTORY_MAX + 2;
+        for (let i = 0; i < ROUNDS; i += 1) {
+          const who = i % 2 === 0 ? 'agent_be01' : 'agent_fe01';
+          assert.deepEqual(await h.store.claimTask(h.project_id, 'task_items_api', who), { ok: true }, `round ${i} claim`);
+          const r: HandoffResult = await h.store.handoffTask(h.project_id, 'task_items_api', handoff(who, `note ${i}`));
+          assert.equal(r.ok, true, `round ${i} handoff`);
+        }
+        const t = (await h.store.readSnapshot(h.project_id))!.snapshot.tasks.find((x) => x.task_id === 'task_items_api')!;
+        const notes = (t.handoffs ?? []).map((x) => x.note);
+        // Control: the loop really produced more handoffs than the cap, so the cap was exercised.
+        assert.ok(ROUNDS > HANDOFF_HISTORY_MAX);
+        assert.equal(notes.length, HANDOFF_HISTORY_MAX);
+        assert.equal(notes.at(-1), `note ${ROUNDS - 1}`, 'newest last');
+        assert.equal(notes[0], `note ${ROUNDS - HANDOFF_HISTORY_MAX}`, 'the oldest fell off, not the newest');
+      } finally { await h.dispose(); }
+    });
+
+    it('AH5 a claim racing a handoff never takes the ticket without the note', async () => {
+      const h = await setup();
+      try {
+        if (!h.store.handoffTask) { console.log('    [skip] AH5: adapter has no handoffTask'); return; }
+        await h.store.claimTask(h.project_id, 'task_items_api', 'agent_be01');
+        const [, raced] = await Promise.all([
+          h.store.handoffTask(h.project_id, 'task_items_api', handoff('agent_be01', 'the race note')),
+          h.store.claimTask(h.project_id, 'task_items_api', 'agent_fe01'),
+        ]);
+        // Either the claim ran first and lost, or it ran after and won. If it won, the note MUST
+        // already be on the card: that is the whole reason the record and the release are one step.
+        const final = raced.ok ? raced : await h.store.claimTask(h.project_id, 'task_items_api', 'agent_fe01');
+        assert.deepEqual(final, { ok: true });
+        const t = (await h.store.readSnapshot(h.project_id))!.snapshot.tasks.find((x) => x.task_id === 'task_items_api')!;
+        assert.equal(t.handoffs?.at(-1)?.note, 'the race note');
       } finally { await h.dispose(); }
     });
 

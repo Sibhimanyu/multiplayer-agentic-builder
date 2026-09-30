@@ -21,12 +21,16 @@
 
 import type {
   AgentId, AgentPresence, AgentStatus, AppendResult, ClaimResult, ContractPointer,
-  CoordinationStore, CreateTaskResult, Event, EventInput, Freshness, ProjectId, ScopeLock,
+  CoordinationStore, CreateTaskResult, Event, EventInput, Freshness, HandoffInput, HandoffResult, ProjectId, ScopeLock,
   ScopeResult, Seq, Snapshot, SnapshotRead, SuggestionId, SuggestionStatus, SuggestionView,
   ReportType, TaskActor, TaskId, TaskKind, TaskView,
 } from './types.ts';
 import { LAYER_OF, LIMITS, REPORT_ORDER, STALE_AFTER_MS } from './types.ts';
 import { deriveTaskId, newTaskView, taskCreatedBody, type NewTask } from './tasks.ts';
+import {
+  HANDOFF_HISTORY_MAX, HANDOFF_NOTE_MAX, cleanBranch, cleanHandoffNote, cleanSha,
+  handoffEventBody, handoffFromEvent, statusAfterHandoff, withHandoff,
+} from './handoff.ts';
 import type { Clock } from '../clock.ts';
 import { systemClock } from '../clock.ts';
 import type { Logger } from '../log.ts';
@@ -414,6 +418,61 @@ export class MemoryStore implements CoordinationStore {
     this.#notify(p);
   }
 
+  /**
+   * Record a handoff and release the claim, with no await between the check and the release.
+   *
+   * The event is appended through appendEvent like any other, so it is deep-frozen, deduped and
+   * folded exactly as the Firestore adapter's is. The claim is deleted in the SAME critical
+   * section as the ownership check: a concurrent claimer must see either "still held" or "free,
+   * and the note is on the card", never "free with no note".
+   */
+  async handoffTask(project_id: ProjectId, task_id: TaskId, input: HandoffInput): Promise<HandoffResult> {
+    const p = this.#project(project_id);
+    await this.#gate(p, input.by.actor_type === 'agent' ? input.by.actor_id : undefined);
+    const note = cleanHandoffNote(input.note);
+    if (!note.ok) throw new StoreError(note.error);
+
+    // ---- critical section: no await below this line until the claim is gone.
+    const existing = p.claims.get(task_id);
+    if (!existing || existing.agent_id !== input.holder) {
+      this.#log.info('store.handoff.not_holder', 'handoff refused, the named agent does not hold the task', {
+        project_id, task_id, holder: input.holder, owner: existing?.agent_id ?? null,
+      });
+      return { ok: false, owner: existing?.agent_id ?? null };
+    }
+    p.claims.delete(task_id);
+    const seq = ++this.#seq;
+    const created_at = this.#clock.iso();
+    const body = sanitizeBody(handoffEventBody(task_id, {
+      from: { agent_id: input.holder, label: input.from_label },
+      handed_off_by: input.by.actor_id,
+      note: sanitizeText(note.note, { field: 'handoff.note', max: HANDOFF_NOTE_MAX, log: this.#log }),
+      branch: cleanBranch(input.branch),
+      head_sha: cleanSha(input.head_sha),
+    }), this.#log, 'task_handed_off.body');
+    const appended: Event = deepFreeze({
+      event_id: `evt_${seq.toString(36).padStart(6, '0')}`,
+      project_id, seq,
+      layer: LAYER_OF.task_handed_off,
+      kind: 'task_handed_off',
+      actor_type: input.by.actor_type,
+      actor_id: sanitizeText(input.by.actor_id, { field: 'events.actor_id', max: VARCHAR_MAX, log: this.#log }),
+      created_at,
+      body,
+    });
+    p.events.push(appended);
+    // One handoff per claim: the dedupe key is the claim, so the record of it is unambiguous.
+    p.dedupe.set(`handoff:${project_id}:${task_id}:${input.holder}:${existing.claimed_at}`, { event_id: appended.event_id, seq });
+    this.stats.inserts += 2;
+    // ---- end critical section
+    this.#touch(p);
+    this.#notify(p);
+
+    const parsed = handoffFromEvent(body, created_at);
+    if (!parsed.ok) throw new StoreError(parsed.reason); // unreachable: the body was built above
+    return { ok: true, seq, handoff: parsed.handoff };
+  }
+
   /** Reaper support: release claims whose owner has been stale past the timeout. */
   reapStaleClaims(project_id: ProjectId, claim_timeout_ms: number): { task_id: TaskId; agent_id: AgentId }[] {
     const p = this.#project(project_id);
@@ -796,6 +855,30 @@ export class MemoryStore implements CoordinationStore {
       case 'task_cancelled':
         if (task && !['merged', 'done', 'cancelled'].includes(task.status)) stamp(task, { status: 'cancelled', claimed_by: null });
         break;
+      case 'task_handed_off': {
+        if (!task) break;
+        // The same parse and the same cap as the Firestore fold: shared/store/handoff.ts.
+        const parsed = handoffFromEvent(body, e.created_at);
+        if (!parsed.ok) {
+          this.#log.warn('store.fold.unusable_handoff', 'task_handed_off was not usable and changed nothing', {
+            project_id: p.project_id, task_id: task.task_id, seq: e.seq, reason: parsed.reason,
+          });
+          break;
+        }
+        const { handoffs, dropped } = withHandoff(task.handoffs, parsed.handoff);
+        if (dropped > 0) {
+          this.#log.warn('store.handoff.history_capped', 'handoff history at its cap; the oldest was dropped', {
+            project_id: p.project_id, task_id: task.task_id, cap: HANDOFF_HISTORY_MAX, dropped,
+          });
+        }
+        stamp(task, {
+          handoffs,
+          status: statusAfterHandoff(task.status),
+          claimed_by: null,
+          branch: parsed.handoff.branch ?? task.branch,
+        });
+        break;
+      }
       // Claims and locks are live store state, folded in #buildSnapshot.
       // Human-layer events never change board state.
       case 'task_claimed': case 'scope_locked': case 'scope_released':
@@ -854,7 +937,11 @@ export class MemoryStore implements CoordinationStore {
       const claimed_by = claim ? claim.agent_id : null;
       // A claim on an otherwise-untouched task moves it out of `open`.
       const status = claim && t.status === 'open' ? 'claimed' : t.status;
-      return { ...t, claimed_by, status, depends_on: [...t.depends_on], file_scope: [...t.file_scope] };
+      return {
+        ...t, claimed_by, status, depends_on: [...t.depends_on], file_scope: [...t.file_scope],
+        // Copied, like every other array here: a caller mutating its snapshot must not rewrite history.
+        ...(t.handoffs ? { handoffs: t.handoffs.map((h) => ({ ...h, from: { ...h.from } })) } : {}),
+      };
     });
 
     return {

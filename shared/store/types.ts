@@ -32,7 +32,10 @@ export type CoordinationEventKind =
   | 'task_created' | 'task_claimed' | 'task_completed' | 'task_blocked'
   | 'branch_pushed' | 'pr_opened' | 'ci_passed' | 'ci_failed' | 'merged'
   // A ticket nobody will do. Only a member with `triage` appends it, through the write path.
-  | 'task_cancelled';
+  | 'task_cancelled'
+  // A release that carries its context: who, a note, the branch and the commit the work is on.
+  // Written only by the handoff transaction, never by a free-form append. See shared/store/handoff.ts.
+  | 'task_handed_off';
 
 /** Dashboard only. Delivering these to an agent is a protocol violation. */
 export type HumanEventKind = 'agent_heartbeat' | 'task_progress';
@@ -59,6 +62,9 @@ export const LAYER_OF: Record<EventKind, Layer> = {
   branch_pushed: 'coordination', pr_opened: 'coordination',
   ci_passed: 'coordination', ci_failed: 'coordination', merged: 'coordination',
   task_cancelled: 'coordination',
+  // COORDINATION, not human: the note is written for the next agent to read, so it has to be on
+  // the layer agents are delivered. On the human layer it would reach the board and no inbox.
+  task_handed_off: 'coordination',
   agent_heartbeat: 'human', task_progress: 'human',
 };
 
@@ -101,7 +107,53 @@ export interface TaskView {
   blocked_since?: string | null;
   file_scope: string[]; // globs
   updated_at: string;
+  /**
+   * Every time this ticket changed hands with a note, newest last, capped at HANDOFF_HISTORY_MAX.
+   *
+   * Optional so every existing adapter, fixture and the board's own mirror of this type stay
+   * valid without a migration: a task that was never handed off has none, and absent reads the
+   * same as empty.
+   */
+  handoffs?: Handoff[];
 }
+
+/**
+ * One handoff. What a teammate needs to pick a ticket up warm instead of cold.
+ *
+ * `branch` and `head_sha` are null when nothing was ever pushed -- the work was all reading, or
+ * it lives outside the scope that was locked. The note still travels; it is the part that cannot
+ * be recovered from the repository anyway.
+ */
+export interface Handoff {
+  /** The claimant the ticket was taken from, and the label the board shows for them. */
+  from: { agent_id: AgentId; label: string };
+  /** Who performed it: the claimant, or an owner handing off an absent teammate's ticket. */
+  handed_off_by: string;
+  note: string;
+  branch: string | null;
+  head_sha: string | null;
+  /** Server clock, from the event. */
+  at: string;
+}
+
+/** What a caller supplies to `handoffTask`. `at` is server-assigned. */
+export interface HandoffInput {
+  /** The agent the caller believes holds the claim. Checked atomically; a mismatch is ok:false. */
+  holder: AgentId;
+  from_label: string;
+  by: TaskActor;
+  note: string;
+  branch: string | null;
+  head_sha: string | null;
+}
+
+/**
+ * A refused handoff is a VALUE, like a lost claim. `owner` is who holds it now, or null when
+ * nobody does -- which is also what a replayed handoff sees, since the first one released it.
+ */
+export type HandoffResult =
+  | { ok: true; seq: Seq; handoff: Handoff }
+  | { ok: false; owner: AgentId | null };
 
 /**
  * What the person raising a suggestion says it IS. Order 0089.
@@ -310,6 +362,25 @@ export interface CoordinationStore {
 
   /** Idempotent. Releasing a task you do not own is a no-op, not an error. */
   releaseTask(project_id: ProjectId, task_id: TaskId, agent_id: AgentId): Promise<void>;
+
+  /**
+   * Hand a claimed task to whoever claims it next, with a note.
+   *
+   * ATOMIC: records the handoff AND releases the claim in one step. Recording after the release
+   * would let a fast claimer take the ticket in the gap and start cold -- the one outcome this
+   * operation exists to prevent. The file-scope lock is NOT released here; callers free it through
+   * the ordinary releaseScope path, exactly as `flotilla release` does.
+   *
+   * Appends exactly one `task_handed_off` event. Idempotent per claim: a replay after the claim is
+   * gone returns ok:false with owner null and appends nothing.
+   *
+   * WHO MAY CALL IT is not decided here -- see mayHandOff in shared/store/handoff.ts, enforced by
+   * the API. The store only checks that `holder` still holds the claim at commit time.
+   *
+   * OPTIONAL ON THE PORT, for the reason the suggestions section gives: a new operation does not
+   * get to inherit the claim primitive's evidence by being added to a required list.
+   */
+  handoffTask?(project_id: ProjectId, task_id: TaskId, input: HandoffInput): Promise<HandoffResult>;
 
   // ---- file scope locks ------------------------------------------------
   /** Server-enforced, not advisory. Rejects on glob intersection, names conflicts. */
