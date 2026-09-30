@@ -57,7 +57,7 @@ import { applyEvent, emptyProjection, toSnapshot, type FoldOutcome, type Project
 import { isEmptyDelta, rollupDelta } from '../shared/store/rollup.ts';
 import { deriveTaskId, taskCreatedBody, type NewTask } from '../shared/store/tasks.ts';
 import {
-  HANDOFF_NOTE_MAX, cleanBranch, cleanHandoffNote, cleanSha, handoffEventBody, handoffFromEvent,
+  HANDOFF_NOTE_MAX, cleanBranch, cleanHandoffNote, cleanSha, handoffEventBody, handoffFromEvent, handoffKey,
 } from '../shared/store/handoff.ts';
 import { StoreAuthError, StoreBusyError, StoreError, StoreOfflineError } from '../shared/store/errors.ts';
 import { sanitizeBody, sanitizeText, TEXT_MAX, VARCHAR_MAX } from '../shared/sanitize.ts';
@@ -1130,8 +1130,10 @@ export class FirestoreStore implements CoordinationStore {
           tx,
           pid,
           { layer: 'coordination', kind: 'task_handed_off', actor_type: input.by.actor_type, actor_id: input.by.actor_id, body },
-          // One handoff per claim, the same key discipline releaseTask uses.
-          `handoff:${pid}:${task_id}:${input.holder}:${held.get('claimed_at')}`,
+          // The claim AND the note. claimed_at alone is not unique: under an injected clock (the
+          // conformance harness) every re-claim shares one instant, and AH4 found ten distinct
+          // handoffs collapsing into two. A true replay -- same claim, same note -- still dedupes.
+          handoffKey(pid, task_id, input.holder, String(held.get('claimed_at')), body.note as string),
         );
         tx.delete(claimRef);
         this.commitAppend(tx, pid, plan);

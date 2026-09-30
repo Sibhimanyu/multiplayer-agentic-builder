@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  cleanBranch, cleanHandoffNote, cleanSha, handoffEventBody, handoffFromEvent, latestHandoff,
+  cleanBranch, cleanHandoffNote, cleanSha, handoffEventBody, handoffFromEvent, handoffKey, latestHandoff,
   mayHandOff, statusAfterHandoff, withHandoff, HANDOFF_HISTORY_MAX,
 } from './handoff.ts';
 import type { Handoff } from './types.ts';
@@ -54,6 +54,14 @@ test('an event body round-trips, and a label falls back to the id', () => {
   assert.deepEqual(h.from, { agent_id: 'agent_a', label: 'agent_a' });
   assert.equal(h.at, '2026-09-30T00:00:00.000Z', 'at is the event clock, never the machine');
   assert.equal(handoffFromEvent({ ...body, note: '' }, 'x').ok, false);
+});
+
+test('two handoffs of one claim instant get two keys; a replay gets the same one', () => {
+  // The defect: keyed on claimed_at alone, handoffs at one (fake-clock) instant deduped away.
+  const a = handoffKey('p', 't', 'agent_a', '2026-09-30T00:00:00.000Z', 'note 1');
+  const b = handoffKey('p', 't', 'agent_a', '2026-09-30T00:00:00.000Z', 'note 2');
+  assert.notEqual(a, b);
+  assert.equal(handoffKey('p', 't', 'agent_a', '2026-09-30T00:00:00.000Z', 'note 1'), a, 'a true replay still dedupes');
 });
 
 test('history keeps the newest, drops the oldest, and counts what fell off', () => {

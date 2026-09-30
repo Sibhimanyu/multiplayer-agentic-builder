@@ -90,6 +90,22 @@ export function handoffEventBody(
   };
 }
 
+/**
+ * The idempotency key for one handoff: the claim it ends, plus a digest of the note.
+ *
+ * The claim alone is not enough. It is identified by `claimed_at`, which is unique on a real
+ * clock and NOT under an injected one -- conformance AH4 on the Firestore harness saw twelve
+ * handoffs of one ticket collapse into two, because every re-claim happened at the same fake
+ * instant. With the note in the key, a genuine replay (same claim, same words) still dedupes and
+ * two different handoffs never do. FNV-1a, not a crypto hash: this is a key, not a secret, and
+ * this file stays free of node imports so every adapter can share it.
+ */
+export function handoffKey(pid: string, task_id: string, holder: string, claimed_at: string, note: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < note.length; i++) { h ^= note.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return `handoff:${pid}:${task_id}:${holder}:${claimed_at}:${h.toString(16)}`;
+}
+
 /** Parse a `task_handed_off` body back into a record, or say why it is unusable. */
 export function handoffFromEvent(
   body: Record<string, unknown>, at: string,

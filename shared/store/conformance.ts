@@ -753,6 +753,9 @@ export function registerConformanceSuite(factory: HarnessFactory): void {
       const h = await setup();
       try {
         if (!h.store.handoffTask) { console.log('    [skip] AH4: adapter has no handoffTask'); return; }
+        // No advanceTime between rounds, deliberately. Under the Firestore harness's injected
+        // clock every re-claim shares one `claimed_at`, and a handoff keyed on the claim alone
+        // collapsed twelve handoffs into two here. The key now carries the note too.
         const ROUNDS = HANDOFF_HISTORY_MAX + 2;
         for (let i = 0; i < ROUNDS; i += 1) {
           const who = i % 2 === 0 ? 'agent_be01' : 'agent_fe01';

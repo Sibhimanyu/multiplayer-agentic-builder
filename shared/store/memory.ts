@@ -29,7 +29,7 @@ import { LAYER_OF, LIMITS, REPORT_ORDER, STALE_AFTER_MS } from './types.ts';
 import { deriveTaskId, newTaskView, taskCreatedBody, type NewTask } from './tasks.ts';
 import {
   HANDOFF_HISTORY_MAX, HANDOFF_NOTE_MAX, cleanBranch, cleanHandoffNote, cleanSha,
-  handoffEventBody, handoffFromEvent, statusAfterHandoff, withHandoff,
+  handoffEventBody, handoffFromEvent, handoffKey, statusAfterHandoff, withHandoff,
 } from './handoff.ts';
 import type { Clock } from '../clock.ts';
 import { systemClock } from '../clock.ts';
@@ -462,7 +462,7 @@ export class MemoryStore implements CoordinationStore {
     });
     p.events.push(appended);
     // One handoff per claim: the dedupe key is the claim, so the record of it is unambiguous.
-    p.dedupe.set(`handoff:${project_id}:${task_id}:${input.holder}:${existing.claimed_at}`, { event_id: appended.event_id, seq });
+    p.dedupe.set(handoffKey(project_id, task_id, input.holder, existing.claimed_at, String(body.note)), { event_id: appended.event_id, seq });
     this.stats.inserts += 2;
     // ---- end critical section
     this.#touch(p);
