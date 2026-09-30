@@ -35,7 +35,7 @@ import {
 } from './agentic.ts';
 import { appendOutbox, drain, isConnected, readCursor, type OutboxRecord } from './outbox.ts';
 import { ApiClient, connectWithInvite, type WhoAmI } from './client.ts';
-import { git, materialise, publishToBlackboard } from './blackboard.ts';
+import { BLACKBOARD_BRANCH, git, materialise, publishToBlackboard } from './blackboard.ts';
 import { serve, currentTask } from './mcp.ts';
 import { ShipError, branchFor, classifyChanges, parseStatus, scopeForTask, shipScope, shouldCompleteOnShip, openPr, scopeToAcquire } from './ship.ts';
 import { openBrowser } from './browser.ts';
@@ -43,6 +43,7 @@ import { ensureIgnored } from './gitignore.ts';
 import { positional } from './args.ts';
 import { dropLanded, landedChanges } from './sync.ts';
 import { pickTasks } from './pick.ts';
+import { readFacts, readFactsQuietly, renderFactsReport, staleTouching, type Fact } from './facts.ts';
 import { StoreAuthError, StoreOfflineError } from '../shared/store/errors.ts';
 import { LAYER_OF, TASK_KINDS, type Event, type EventKind, type TaskKind } from '../shared/store/types.ts';
 import { ROLE_SLUGS, roleFor } from '../shared/store/directory.ts';
@@ -168,6 +169,9 @@ async function cmdStatus(root: string): Promise<number> {
       out('offline — cannot reach the backend');
       out(`agent:      ${state.agent_id || '(unknown)'}`);
       out(await pendingLine(root));
+      // From local git, so it is as true offline as on.
+      const factLine = staleFactsLine(await readFactsQuietly(root));
+      if (factLine) out(factLine);
       return 0;
     }
     throw err;
@@ -190,6 +194,8 @@ async function cmdStatus(root: string): Promise<number> {
   );
 
   out(await pendingLine(root));
+  const factLine = staleFactsLine(await readFactsQuietly(root));
+  if (factLine) out(factLine);
 
   if (snap) {
     const mine = snap.snapshot.tasks.filter((t) => t.claimed_by === me.agent_id);
@@ -207,6 +213,37 @@ async function cmdStatus(root: string): Promise<number> {
 }
 
 const yn = (b: boolean) => (b ? 'yes' : 'no');
+
+/**
+ * One line for `status`, or null when nothing is stale. Absent rather than "0 stale": status is
+ * read at a glance, and a line that is always there stops being read.
+ */
+export function staleFactsLine(facts: readonly Fact[]): string | null {
+  const n = facts.filter((f) => f.status === 'stale').length;
+  return n > 0 ? `facts:      ${n} stale — the code they pin has moved since (flotilla facts)` : null;
+}
+
+/**
+ * `flotilla facts` — every blackboard fact, and whether the code it describes has moved.
+ *
+ * Needs no token: it is a question about git, answered from git. Fetches the blackboard first
+ * because a human asked, which is the one case the "never poll git" rule allows; offline, it
+ * answers from what this checkout already has and says so.
+ */
+async function cmdFacts(root: string, rest: string[]): Promise<number> {
+  const hasOrigin = (await git(['remote', 'get-url', 'origin'], root, 5_000)).code === 0;
+  if (hasOrigin && !rest.includes('--no-fetch')) {
+    const f = await git(['fetch', '-q', 'origin', `${BLACKBOARD_BRANCH}:refs/remotes/origin/${BLACKBOARD_BRANCH}`], root, 20_000);
+    if (f.code !== 0 && !/couldn't find remote ref/i.test(f.stderr)) {
+      log.warn('cli.facts_fetch_failed', 'could not fetch the blackboard; showing what this checkout already has', {
+        error: f.stderr.trim().split('\n')[0] ?? '',
+      });
+    }
+  }
+  const { ref, facts } = await readFacts(root);
+  out(renderFactsReport(ref, facts));
+  return 0;
+}
 
 async function pendingLine(root: string): Promise<string> {
   const pending = await countPending(root);
@@ -272,12 +309,20 @@ async function cmdClaim(root: string, task_id: string, args: string[] = []): Pro
   }
 
   const state = await readState(root, log);
+  // THE MOMENT AN AGENT IS HANDED WORK is the moment a stale fact about that work can still be
+  // caught before it is trusted. Local git only, and quiet on failure: a claim must not fail
+  // because the blackboard could not be read.
+  const stale = staleTouching(await readFactsQuietly(root), want.globs);
   await writeAgenticTree(
     root,
-    { role: rolePackFor(await client.whoami()), project: await projectFile(root), task: task ?? null, state },
+    { role: rolePackFor(await client.whoami()), project: await projectFile(root), task: task ?? null, state, stale_facts: stale },
     log,
   );
   out(`claimed ${task_id}`);
+  if (stale.length > 0) {
+    out(`! ${stale.length} blackboard fact(s) about these files predate the code: ${stale.map((f) => f.path).join(', ')}`);
+    out(`  flagged in ${LAYOUT.current_task} for the agent to re-verify; see \`flotilla facts\``);
+  }
   if (task && want.globs.length > 0) out(`scope: ${want.globs.join(', ')}${want.from === 'flag' ? '  (from --scope)' : ''}`);
   else if (task) {
     out('scope: (none declared) — nothing is locked, so `flotilla ship` will refuse this task');
@@ -343,6 +388,10 @@ async function cmdSync(root: string): Promise<number> {
     return 1;
   }
   out(`up to date with ${ref}${kept.length ? ` — kept ${kept.length} local change(s): ${kept.join(', ')}` : ''}`);
+  // A sync is exactly when code moves under facts: a merge just landed. The fetch above already
+  // refreshed the blackboard's remote-tracking ref, so this costs no extra network.
+  const factLine = staleFactsLine(await readFactsQuietly(root));
+  if (factLine) out(factLine);
   return 0;
 }
 
@@ -698,8 +747,8 @@ async function cmdMcp(root: string): Promise<number> {
  *
  * This is the whole point of the design: Flotilla does not host the conversation, it FURNISHES
  * one. Claude Code keeps its own UX -- tool display, permission prompts, diff review -- and
- * gains four tools that answer what it could not know: your task, your scope, who holds what
- * right now, and how to report back.
+ * gains tools that answer what it could not know: your task, your scope, who holds what right
+ * now, which blackboard facts the code has outgrown, and how to report back.
  *
  * The agent runs on this machine under this user's own subscription. Flotilla never holds a
  * model key; it spawns a binary the user already installed.
@@ -732,6 +781,8 @@ async function cmdWork(root: string, rest: string[]): Promise<number> {
     'Before you edit anything, call `my_assignment` to learn your task and which file globs your',
     'role may write, and `fleet_status` to see which files other agents currently hold. Never edit',
     'a glob another agent holds. Use `report` for decisions and blockers a teammate would want.',
+    'Before relying on a published contract or decision, call `blackboard_facts`: a stale one',
+    'describes code that has changed since, and must be re-verified against the code.',
     '',
     'Start by telling me my assignment and what the rest of the fleet is doing.',
   ].join('\n');
@@ -1115,6 +1166,8 @@ const USAGE = `flotilla — agentic coordination CLI
   flotilla cancel <task_id> --reason "<why>"
                                 take a ticket off the board, freeing its claim and lock
   flotilla sync                 after a merge: drop shipped copies, then fast-forward
+  flotilla facts                blackboard facts: fresh, stale (pinned code moved since), unpinned
+                                --no-fetch answers from this checkout without fetching
   flotilla report "<message>"   queue one progress line in the outbox
   flotilla ship                 commit your in-scope changes to agent/<role>/<task> and push
                                 marks the task complete and opens its PR (needs gh)
@@ -1293,6 +1346,8 @@ export async function main(argv: string[]): Promise<number> {
     }
     case 'sync':
       return cmdSync(root);
+    case 'facts':
+      return cmdFacts(root, rest);
     case 'release': {
       const task = rest[0];
       if (!task) {

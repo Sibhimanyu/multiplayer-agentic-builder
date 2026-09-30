@@ -25,7 +25,9 @@ AGENTS.md                        generated role prompt, agent reads at session s
   role.md                        role pack prompt: responsibilities, file scope, branch prefix
   protocol.md                    the subset of the protocol the agent needs
   tasks/
-    current-task.md              the claimed task: title, description, acceptance
+    current-task.md              the claimed task: title, description, acceptance, and
+                                 "Facts to re-verify": stale blackboard facts that pin
+                                 files in its scope (see blackboard.md, Pins)
   contracts/                     materialised from the git blackboard, read-only to the agent
     items-api.v2.yaml
     schema/items.sql

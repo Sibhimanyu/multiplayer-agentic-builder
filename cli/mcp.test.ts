@@ -29,10 +29,10 @@ test('a notification gets no reply at all', async () => {
   assert.equal(await handle({ jsonrpc: '2.0', method: 'notifications/initialized' }, deps()), null);
 });
 
-test('tools/list returns four usable tools', async () => {
+test('tools/list returns five usable tools', async () => {
   const r = await handle({ jsonrpc: '2.0', id: 3, method: 'tools/list' }, deps());
   const tools = (r as never as { result: { tools: typeof TOOLS } }).result.tools;
-  assert.equal(tools.length, 4);
+  assert.equal(tools.length, 5);
   for (const t of tools) {
     assert.ok(t.name && t.description.length > 40, `${t.name} needs a description an agent can act on`);
     assert.equal(t.inputSchema.type, 'object');
@@ -80,4 +80,43 @@ test('an unassigned agent is still told what its role may write', () => {
   const a = renderAssignment({ agent_id: 'me', role_slug: 'frontend' }, ['client/**'], null);
   assert.match(a, /No task is claimed/);
   assert.match(a, /client\/\*\*/);
+});
+
+const staleFact = {
+  path: 'contracts/items.v2.yaml', commit_sha: 'a'.repeat(40), committed_at: 1, pins: ['web/**'],
+  problems: [], status: 'stale', moved: [{ sha: 'b'.repeat(40), subject: 'Rework filter', committed_at: 2 }],
+  more: false, dangling: [],
+};
+
+test('blackboard_facts lists stale facts first, and says so when none are', async () => {
+  const txt = async (facts: unknown[]) =>
+    ((await handle(
+      { jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'blackboard_facts', arguments: {} } },
+      deps({ facts: async () => facts }),
+    )) as never as { result: { content: { text: string }[] } }).result.content[0]!.text;
+
+  const withStale = await txt([staleFact, { ...staleFact, path: 'schema/x.sql', status: 'unpinned', pins: [] }]);
+  assert.match(withStale, /^STALE \(1\)/);
+  assert.match(withStale, /Rework filter/);
+  assert.match(withStale, /schema\/x\.sql: unpinned/);
+  assert.match(await txt([{ ...staleFact, status: 'fresh' }]), /No fact is stale/);
+  assert.match(await txt([]), /holds no facts/);
+});
+
+test('my_assignment flags stale facts about the files this agent holds, and only those', async () => {
+  const client = {
+    whoami: async () => ({ agent_id: 'me', role_slug: 'frontend' }),
+    readSnapshot: async () => ({
+      snapshot: { tasks: [], agents: [], locks: [{ agent_id: 'me', task_id: 't1', globs: ['web/**'], acquired_at: '' }] },
+    }),
+  };
+  const ask = async (facts: unknown[]) =>
+    ((await handle(
+      { jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'my_assignment', arguments: {} } },
+      deps({ client, facts: async () => facts }),
+    )) as never as { result: { content: { text: string }[] } }).result.content[0]!.text;
+
+  assert.match(await ask([staleFact]), /Facts to re-verify:[\s\S]*\n- contracts\/items\.v2\.yaml \(pins web\/\*\*\)/);
+  // The other branch: a stale fact about somebody else's directory is not this agent's concern.
+  assert.doesNotMatch(await ask([{ ...staleFact, pins: ['server/**'] }]), /Facts to re-verify/);
 });

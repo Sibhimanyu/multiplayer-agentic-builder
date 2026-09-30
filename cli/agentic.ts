@@ -21,6 +21,7 @@ import { sanitizeText, VARCHAR_MAX } from '../shared/sanitize.ts';
 import { nullLogger } from '../shared/log.ts';
 import { PROTOCOL_VERSION, type TaskView } from '../shared/store/types.ts';
 import type { Logger } from '../shared/log.ts';
+import { renderStaleForAgent, type Fact } from './facts.ts';
 
 export interface RolePack {
   role_slug: string;
@@ -251,8 +252,15 @@ export function renderProtocolMd(): string {
   ].join('\n');
 }
 
-/** The claimed task, as the agent sees it. */
-export function renderCurrentTask(task: TaskView | null): string {
+/**
+ * The claimed task, as the agent sees it.
+ *
+ * `stale` is the blackboard facts whose pinned code moved after they were written AND that
+ * overlap this task's scope. They go HERE, not in AGENTS.md, because this is the file the agent
+ * reads for this task, and staleness is only worth an agent's attention for the files it is about
+ * to touch: a stale fact about somebody else's directory is noise in this context.
+ */
+export function renderCurrentTask(task: TaskView | null, stale: readonly Fact[] = []): string {
   if (!task) {
     return [
       '# No task claimed',
@@ -288,6 +296,8 @@ export function renderCurrentTask(task: TaskView | null): string {
   if (task.depends_on.length > 0) {
     lines.push('', '## Depends on', '', ...task.depends_on.map((d) => `- ${d}`));
   }
+  const flags = renderStaleForAgent(stale);
+  if (flags.length > 0) lines.push('', '## Facts to re-verify', '', ...flags);
   if (task.blocked_by) {
     lines.push(
       '',
@@ -307,7 +317,11 @@ export function renderCurrentTask(task: TaskView | null): string {
  */
 export async function writeAgenticTree(
   root: string,
-  opts: { role: RolePack; project: ProjectFile; task: TaskView | null; state: CliState },
+  opts: {
+    role: RolePack; project: ProjectFile; task: TaskView | null; state: CliState;
+    /** Stale blackboard facts touching the task's scope. See renderCurrentTask. */
+    stale_facts?: readonly Fact[];
+  },
   log: Logger,
 ): Promise<string[]> {
   const written: string[] = [];
@@ -335,7 +349,7 @@ export async function writeAgenticTree(
   );
   await put(LAYOUT.role, renderRoleMd(opts.role));
   await put(LAYOUT.protocol, renderProtocolMd());
-  await put(LAYOUT.current_task, renderCurrentTask(opts.task));
+  await put(LAYOUT.current_task, renderCurrentTask(opts.task, opts.stale_facts ?? []));
 
   await ensureDir(root, LAYOUT.contracts_dir);
   await ensureDir(root, LAYOUT.decisions_dir);

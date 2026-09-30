@@ -18,6 +18,7 @@ import fs from 'node:fs/promises';
 import type { ApiClient } from './client.ts';
 import { appendOutbox } from './outbox.ts';
 import { LAYOUT } from './agentic.ts';
+import { readFactsQuietly, renderStaleForAgent, staleTouching, type Fact } from './facts.ts';
 import type { Logger } from '../shared/log.ts';
 import type { Snapshot, TaskView } from '../shared/store/types.ts';
 
@@ -65,6 +66,15 @@ export const TOOLS: ToolDef[] = [
       properties: { message: { type: 'string', description: 'One sentence, plain language.' } },
       required: ['message'],
     },
+  },
+  {
+    name: 'blackboard_facts',
+    description:
+      'The durable facts on the git blackboard (API contracts, schemas, decisions) and whether each '
+      + 'is still current: a fact is STALE when code it pins has changed since the fact was last '
+      + 'committed. Call this before relying on a contract or decision, and re-verify a stale one '
+      + 'against the code instead of trusting it.',
+    inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'claim_task',
@@ -194,9 +204,30 @@ export interface McpDeps {
   log: Logger;
   /** Globs this member's role may write, from the API's own answer. */
   allowedScope: () => Promise<string[]>;
+  /** The blackboard's facts. Injectable for tests; defaults to reading local git under `root`. */
+  facts?: () => Promise<Fact[]>;
+}
+
+/**
+ * The blackboard, for an agent: stale first, because a stale fact is the one that changes what
+ * the agent should do next. Fresh and unpinned are listed so "not flagged" can be told apart from
+ * "not looked at".
+ */
+export function renderFacts(facts: readonly Fact[]): string {
+  const live = facts.filter((f) => f.status !== 'superseded');
+  if (live.length === 0) return 'The blackboard holds no facts in this checkout yet.';
+  const stale = live.filter((f) => f.status === 'stale');
+  const rest = live.filter((f) => f.status !== 'stale');
+  return [
+    stale.length > 0 ? `STALE (${stale.length}):\n${renderStaleForAgent(stale).join('\n')}` : 'No fact is stale.',
+    '',
+    ...rest.map((f) => `- ${f.path}: ${f.status}${f.pins.length ? ` (pins ${f.pins.join(', ')})` : ''}`),
+  ].join('\n');
 }
 
 const text = (s: string) => ({ content: [{ type: 'text', text: s }] });
+
+const readFactsFor = (deps: McpDeps): Promise<Fact[]> => (deps.facts ? deps.facts() : readFactsQuietly(deps.root));
 
 async function callTool(name: string, args: Record<string, unknown>, deps: McpDeps) {
   switch (name) {
@@ -217,8 +248,15 @@ async function callTool(name: string, args: Record<string, unknown>, deps: McpDe
           .filter((l) => l.agent_id === me.agent_id)
           .flatMap((l) => l.globs),
       )];
-      return text(renderAssignment(me, await deps.allowedScope(), task, held));
+      // `flotilla work` and `chat` agents never read current-task.md; this call is their
+      // session-start context, so the same stale flags go here, scoped to what they hold.
+      const stale = staleTouching(await readFactsFor(deps), held.length > 0 ? held : task?.file_scope ?? []);
+      const flags = renderStaleForAgent(stale);
+      const assignment = renderAssignment(me, await deps.allowedScope(), task, held);
+      return text(flags.length > 0 ? `${assignment}\n\nFacts to re-verify:\n${flags.join('\n')}` : assignment);
     }
+    case 'blackboard_facts':
+      return text(renderFacts(await readFactsFor(deps)));
     case 'report': {
       const message = String(args.message ?? '').trim();
       if (!message) return text('report needs a message.');
