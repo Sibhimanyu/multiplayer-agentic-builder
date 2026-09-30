@@ -381,6 +381,8 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
       padding:var(--sp-1) var(--sp-3);line-height:var(--lh);border:1px solid transparent}
 .badge[data-t="ci-failed"],.badge[data-t="blocked"]{background:var(--red-soft);color:var(--red)}
 .badge[data-t="review"]{background:var(--inverse);color:var(--on-inverse)}
+/* A handoff is information, not a state to worry about: outlined, no hue. */
+.badge[data-t="handoff"]{background:transparent;color:var(--ink2);box-shadow:inset 0 0 0 1px var(--line3)}
 .verpill{font-family:var(--mono);font-size:var(--t-0);color:var(--ink);background:var(--raise);
       border-radius:var(--r-tag);padding:var(--sp-1) var(--sp-3);font-weight:500;
       line-height:var(--lh)}
@@ -456,6 +458,10 @@ pre{background:var(--paper);border:1px solid var(--line);border-radius:var(--r-c
 .sect .supersedes,.sect .lbl .verpill{text-transform:none;letter-spacing:0}
 .sect .supersedes{color:var(--muted)}
 .sect .ref{font-family:var(--mono);font-size:var(--t-0);color:var(--ink2)}
+.handoff{display:grid;gap:var(--sp-3);padding:var(--sp-5) 0;border-top:1px solid var(--line)}
+.handoff:first-of-type{border-top:0;padding-top:0}
+.handoff .h-meta{font-size:var(--t-1);color:var(--muted)}
+.handoff .h-meta b{color:var(--ink);font-weight:600}
 
 /* ---- tabular numbers, order 0066 point 2 ---- */
 /* Counts, durations and seq numbers sat in proportional Inter, so the digits have different

@@ -141,6 +141,9 @@ export function TaskCard({
           </span>
         )}
         {task.ci === 'failed' && <span className="badge" data-t="ci-failed">CI failed</span>}
+        {task.status === 'open' && (task.handoffs?.length ?? 0) > 0 && (
+          <span className="badge" data-t="handoff">Handed off</span>
+        )}
         {task.status === 'needs_review' && !task.blocked_by && (
           <span className="badge" data-t="review">Owner review</span>
         )}
@@ -652,6 +655,23 @@ export function DetailPanel({
             {task.file_scope.map((g) => (
               <div className="dep" key={g} title={g}>
                 <span className="d" /><span className="nm">{truncPath(g, 30)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {(task.handoffs?.length ?? 0) > 0 && (
+          <div className="sect">
+            <div className="lbl">Handoffs · newest first</div>
+            {[...task.handoffs!].reverse().map((h) => (
+              <div className="handoff" key={h.at + h.from.agent_id}>
+                <div className="h-meta">
+                  <b>{h.from.label}</b> · {formatAge(Date.now() - new Date(h.at).getTime())} ago
+                </div>
+                <p>{h.note}</p>
+                {h.branch && (
+                  <p className="ref">{h.branch}{h.head_sha ? ` @ ${h.head_sha.slice(0, 7)}` : ''}</p>
+                )}
               </div>
             ))}
           </div>
