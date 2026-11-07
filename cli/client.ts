@@ -15,6 +15,7 @@ import {
 } from '../shared/store/errors.ts';
 import { withRetry } from '../shared/store/retry.ts';
 import type { Logger } from '../shared/log.ts';
+import type { Message, ScopeRequest } from '../shared/store/sessions.ts';
 import type {
   AgentStatus,
   Event,
@@ -235,6 +236,38 @@ export class ApiClient {
     return this.retry(async () => {
       await this.request('POST', '/heartbeat', { status, current_task, branch });
     }, 'heartbeat');
+  }
+
+  // ---- shared sessions: asking for more, and talking. docs/designs/shared-sessions.md ----
+
+  /** Ask the host for files outside this seat. The answer arrives on GET /scope-requests. */
+  requestScope(globs: string[], reason: string, task_id: TaskId | null): Promise<ScopeRequest> {
+    return this.retry(async () => {
+      const r = await this.request<{ request: ScopeRequest }>('POST', '/scope-requests', {
+        globs, reason, ...(task_id ? { task_id } : {}),
+      });
+      return r.data.request;
+    }, 'requestScope');
+  }
+
+  /** This agent's own requests, newest first, with the host's answers. */
+  myScopeRequests(): Promise<ScopeRequest[]> {
+    return this.retry(async () => (await this.request<{ requests: ScopeRequest[] }>('GET', '/scope-requests')).data.requests ?? [], 'myScopeRequests');
+  }
+
+  /** `to` is @name, a seat, an id, or '*' for everyone. The server resolves it and refuses ambiguity. */
+  sendMessage(to: string, body: string, in_reply_to?: string): Promise<Message> {
+    return this.retry(async () => {
+      const r = await this.request<{ message: Message }>('POST', '/messages', {
+        to, body, ...(in_reply_to ? { in_reply_to } : {}),
+      });
+      return r.data.message;
+    }, 'sendMessage');
+  }
+
+  /** Messages to this agent, to everyone, or sent by it, after `since_ms`, oldest first. */
+  readMessages(since_ms: number): Promise<Message[]> {
+    return this.retry(async () => (await this.request<{ messages: Message[] }>('GET', `/messages?since_ms=${encodeURIComponent(String(since_ms))}`)).data.messages ?? [], 'readMessages');
   }
 
   readEvents(since_seq: Seq): Promise<{ events: Event[]; next_cursor: Seq; has_more: boolean }> {

@@ -53,3 +53,22 @@ test('a role refusing a glob is a 403 that says why, not a 500', () => {
 test('a genuinely unexpected error is still a bare 500', () => {
   assert.equal(statusFor(new Error('boom')).status, 500);
 });
+
+// ---- packFor: a seat drawn by `flotilla share` -------------------------------------------------
+
+import { packFor } from './authority.ts';
+
+test('a seat with lock and PR capabilities can push and open PRs, and never merge', () => {
+  const p = packFor('priya', { capabilities: ['claim', 'acquire_scope', 'open_pr', 'suggest'], file_scope: ['slides/05-*.html'] });
+  assert.deepEqual(p, { push_branches: true, open_prs: true, merge: false, publish_contracts: false });
+});
+
+test('a seat with no document gets nothing, and a template role keeps its pack', () => {
+  // The control: the permissions above came from the document, not from the slug.
+  assert.deepEqual(packFor('priya', null), { push_branches: false, open_prs: false, merge: false, publish_contracts: false });
+  assert.deepEqual(packFor('backend', null), ROLE_PACKS.backend);
+});
+
+test('a seat document cannot grant merge', () => {
+  assert.equal(packFor('priya', { capabilities: ['merge', 'deploy', 'acquire_scope'] }).merge, false);
+});

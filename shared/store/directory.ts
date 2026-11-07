@@ -27,9 +27,30 @@ import type { ProjectId } from './types.ts';
  * `owner` is the only one this port treats specially, and only to the extent that removing the
  * last owner would leave a project nobody can administer -- see revokeMember.
  */
-export type RoleSlug = 'owner' | 'architect' | 'backend' | 'frontend' | 'qa' | 'user';
+export type RoleSlug = string;
 
-export const ROLE_SLUGS: readonly RoleSlug[] = ['owner', 'architect', 'backend', 'frontend', 'qa', 'user'];
+/**
+ * The six roles of the `web` template. NOT the set of roles a project may have.
+ *
+ * Shared sessions (docs/designs/shared-sessions.md): a role is a project document, and a host can
+ * draw a seat for one person with `flotilla share` -- `priya`, `speaker-2`. This list is what
+ * `flotilla new --template web` writes, and what the board and AGENTS.md fall back to when a
+ * project has no policy of its own.
+ */
+export type WebRoleSlug = 'owner' | 'architect' | 'backend' | 'frontend' | 'qa' | 'user';
+export const ROLE_SLUGS: readonly WebRoleSlug[] = ['owner', 'architect', 'backend', 'frontend', 'qa', 'user'];
+
+/**
+ * The two roles nobody can redefine. `owner` is unscoped so a lock it cannot take is a lock
+ * nobody can break; `user` can only suggest, so a user's words never reach an agent. A host
+ * typing `flotilla share --label owner` must not be able to mint a second, narrower owner.
+ */
+export const RESERVED_ROLES: readonly RoleSlug[] = ['owner', 'user'];
+
+/** A role slug a project may define: lowercase, starts with a letter, 2-32 chars. */
+export function isRoleSlug(s: unknown): s is RoleSlug {
+  return typeof s === 'string' && /^[a-z][a-z0-9-]{1,31}$/.test(s);
+}
 
 /** A browser identity. Firebase anonymous uid, or whatever a backend calls a signed-in subject. */
 export type MemberUid = string;
@@ -64,6 +85,8 @@ export type Capability =
 
 export interface RoleDefinition {
   slug: RoleSlug;
+  /** What the board calls it. Absent on the template roles, whose slug is already a name. */
+  label?: string;
   /** Globs this role may hold a scope lock on. Empty means: may not hold any scope. */
   file_scope: string[];
   /** Deployable targets this role may deploy. Empty means: may not deploy. */
@@ -88,7 +111,7 @@ export interface RoleDefinition {
  * words out of every agent's inbox.jsonl structurally, rather than by a filter that has to stay
  * correct -- the property the old client-seat note in docs/designs/project-tier.md described.
  */
-export const DEFAULT_ROLES: Record<RoleSlug, RoleDefinition> = {
+export const DEFAULT_ROLES: Record<WebRoleSlug, RoleDefinition> = {
   owner: {
     slug: 'owner',
     // The owner is not scoped: they are the human who decides, and a lock they cannot take is a
@@ -131,14 +154,63 @@ export const DEFAULT_ROLES: Record<RoleSlug, RoleDefinition> = {
   },
 };
 
-export function roleFor(slug: string): RoleDefinition {
-  // An unknown slug gets the LEAST privilege, not a default of convenience. A typo in a role
-  // name must not silently grant backend rights.
-  return DEFAULT_ROLES[slug as RoleSlug] ?? DEFAULT_ROLES.user;
+export const CAPABILITIES: readonly Capability[] = [
+  'claim', 'acquire_scope', 'publish_contract', 'open_pr', 'deploy', 'triage', 'invite', 'suggest',
+];
+
+/** What a project's role document holds. Every field optional: documents written before shared sessions lack some. */
+export interface RolePolicy {
+  file_scope?: unknown;
+  deploy_scope?: unknown;
+  capabilities?: unknown;
+  label?: unknown;
 }
 
-export function hasCapability(slug: string, cap: Capability): boolean {
-  return roleFor(slug).capabilities.includes(cap);
+const strings = (v: unknown): string[] | null =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : null;
+
+/**
+ * The role a slug names, in a project.
+ *
+ * `policy` is the project's own role document (projects/{pid}/roles/{slug}) when the caller has
+ * read it. Shared sessions made that document the whole role: a seat drawn by `flotilla share`
+ * exists nowhere else, so a gate that consulted only the template would refuse every guest.
+ *
+ * Rules, in order:
+ *   1. `owner` and `user` are FIXED. No document can widen the user seat or narrow the owner.
+ *   2. A TEMPLATE role (architect, backend, frontend, qa) keeps the template's capabilities, and
+ *      takes only its scopes from the policy. Its documents were copied at project birth, some
+ *      before order 0089 widened `triage`; reading capabilities from them would quietly take
+ *      triage away from every older project. Nothing edits a template role's capabilities, so
+ *      the template is the truth.
+ *   3. Any other slug is a seat a host drew, and its policy IS the role. Unknown capability
+ *      strings are dropped, never kept: a typo must not become a permission.
+ *   4. An unknown slug with no policy gets the LEAST privilege, not a default of convenience. A
+ *      typo in a role name must not silently grant backend rights.
+ */
+export function roleFor(slug: string, policy?: RolePolicy | null): RoleDefinition {
+  if (slug === 'owner' || slug === 'user') return DEFAULT_ROLES[slug];
+  const template = (DEFAULT_ROLES as Record<string, RoleDefinition | undefined>)[slug];
+  if (!policy) return template ?? DEFAULT_ROLES.user;
+  const caps = template ? null : strings(policy.capabilities);
+  const base: RoleDefinition = caps
+    ? {
+        slug,
+        file_scope: [],
+        deploy_scope: [],
+        capabilities: caps.filter((c): c is Capability => (CAPABILITIES as readonly string[]).includes(c)),
+      }
+    : { ...(template ?? DEFAULT_ROLES.user), slug: template ? slug : 'user' };
+  return {
+    ...base,
+    file_scope: strings(policy.file_scope) ?? (caps ? [] : base.file_scope),
+    deploy_scope: strings(policy.deploy_scope) ?? (caps ? [] : base.deploy_scope),
+    ...(typeof policy.label === 'string' && policy.label ? { label: policy.label } : {}),
+  };
+}
+
+export function hasCapability(slug: string, cap: Capability, policy?: RolePolicy | null): boolean {
+  return roleFor(slug, policy).capabilities.includes(cap);
 }
 
 /** Thrown when a role attempts something outside its scope or capability set. */
@@ -212,6 +284,11 @@ export interface CreateProjectInput {
   /** Becomes the first member, with role `owner`. A project always has an owner from birth. */
   owner_uid: MemberUid;
   owner_label: string;
+  /**
+   * Which roles the project is born with: 'web' (the six, and the default), 'deck' or 'blank'.
+   * See shared/store/templates.ts. Absent means 'web', so every existing caller is unchanged.
+   */
+  template?: 'web' | 'deck' | 'blank';
 }
 
 export interface ProjectDirectory {

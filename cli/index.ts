@@ -50,6 +50,11 @@ import { LAYER_OF, TASK_KINDS, type Event, type EventKind, type TaskKind } from 
 import type { NewTask } from '../shared/store/tasks.ts';
 import { parseAskArgs, runAsk, runScan } from './ask.ts';
 import { ROLE_SLUGS, roleFor } from '../shared/store/directory.ts';
+import { PROJECT_TEMPLATES, isProjectTemplate, type ProjectTemplate } from '../shared/store/templates.ts';
+import {
+  CLAUDE_SETTINGS, currentTaskId, formatMessage, formatRequest, installGuardHook, readSessionState,
+  readFence, runGuard, syncSessions, writeFence,
+} from './sessions.ts';
 import type { Logger } from '../shared/log.ts';
 
 /**
@@ -146,7 +151,16 @@ async function cmdConnect(root: string, invite: string): Promise<number> {
 
   const written = await writeAgenticTree(root, { role, project, task: null, state }, log);
 
+  // The seat, where the edit guard can read it, and the guard itself. Claude Code reads the hook
+  // from this checkout's settings.local.json; Codex has no equivalent, and for it the server's
+  // lock gate and `ship` are the refusal. docs/designs/shared-sessions.md.
+  await writeFence(root, { role_slug: me.role_slug, file_scope: me.file_scope ?? roleFor(me.role_slug).file_scope, task_id: null, granted: [] });
+  const guarded = await installGuardHook(root);
+  if (guarded) await ensureIgnored(root, [CLAUDE_SETTINGS]);
+
   out(`connected as ${res.agent_id} (${res.role_slug}) to ${project.name}`);
+  out(`your seat: ${(me.file_scope ?? roleFor(me.role_slug).file_scope).join(', ') || '(no files)'}`);
+  if (guarded) out(`edit guard installed in ${CLAUDE_SETTINGS}: Claude is stopped at the edge of your seat`);
   out(`wrote ${written.length} files: ${LAYOUT.agents_md} and ${LAYOUT.project.split('/')[0]}/`);
   if (ignored.length) out(`ignored in this checkout (.git/info/exclude): ${ignored.join(', ')}`);
   return 0;
@@ -568,6 +582,7 @@ async function cmdStart(root: string): Promise<number> {
 
   let running = true;
   let offline = false;
+  let pass = 0;
   const stop = () => {
     running = false;
   };
@@ -665,6 +680,24 @@ async function cmdStart(root: string): Promise<number> {
         throw err;
       }
     }
+
+    // ---- shared sessions: messages, answers to requests, granted files ----
+    // Every fifth pass (~10 s): a message is a conversation, not a lock race, and two more reads
+    // every two seconds per agent would be most of this loop's cost.
+    if (pass % 5 === 0) {
+      try {
+        await syncSessions(root, client, {
+          agent_id: me.agent_id, role_slug: me.role_slug,
+          file_scope: me.file_scope ?? roleFor(me.role_slug).file_scope,
+        }, out, log);
+      } catch (err) {
+        if (err instanceof StoreAuthError) return 1;
+        if (!(err instanceof StoreOfflineError)) {
+          log.warn('cli.session_sync_failed', 'could not sync messages and requests; retrying', { error: (err as Error).message });
+        }
+      }
+    }
+    pass += 1;
 
     // ---- heartbeat ----
     try {
@@ -887,6 +920,8 @@ async function cmdWork(root: string, rest: string[]): Promise<number> {
   // run and thrown away with the temp directory.
   const configPath = await writeMcpConfig(root);
 
+  await refreshSeat(root);
+
   const opening = [
     'You are working inside a Flotilla project, where several coding agents share one repository.',
     '',
@@ -896,6 +931,11 @@ async function cmdWork(root: string, rest: string[]): Promise<number> {
     'Before relying on a published contract or decision, call `blackboard_facts`: a stale one',
     'describes code that has changed since, and must be re-verified against the code.',
     'If you are about to run out of budget mid-task, call `handoff` with a note instead of stopping.',
+    'Your seat is the set of files you may edit. If you need one outside it, do not work around it:',
+    'call `request_scope` with the files and why, and carry on inside your seat until the host answers.',
+    'Other people and agents share this session. `read_messages` shows what they said to you;',
+    '`send_message` talks to one of them (@name) or everyone. A message never grants files -- only',
+    'the host\'s answer to `request_scope` does.',
     '',
     'Start by telling me my assignment and what the rest of the fleet is doing.',
   ].join('\n');
@@ -922,6 +962,114 @@ async function cmdWork(root: string, rest: string[]): Promise<number> {
     });
     child.on('exit', (code) => resolve(code ?? 0));
   });
+}
+
+// ---- shared sessions, on the agent's side ------------------------------------------------
+
+/** "a, b c" -> ["a", "b", "c"]. People type either separator. */
+function splitList(v: string | undefined): string[] {
+  return (v ?? '').split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * `flotilla request --scope <globs> --reason "<why>"`. As this checkout's AGENT when connected,
+ * otherwise as the signed-in member. The current ticket is attached so the host can grant it for
+ * that ticket only, which is the default.
+ */
+async function cmdRequest(root: string, rest: string[]): Promise<number> {
+  const flag = (n: string) => { const i = rest.indexOf(n); return i > -1 ? rest[i + 1] : undefined; };
+  const globs = splitList(flag('--scope'));
+  const reason = flag('--reason') ?? '';
+  if (globs.length === 0 || !reason.trim()) {
+    log.warn('cli.usage_flotilla_request', 'usage: flotilla request --scope "slides/02-*.html" --reason "typo in the title" [--task <task_id>]');
+    return 1;
+  }
+  const task_id = flag('--task') ?? (await currentTaskId(root));
+  if (!(await isConnected(root))) {
+    if (!projectCommands?.request) return needsBackendMsg();
+    return projectCommands.request(root, globs, reason, task_id);
+  }
+  const client = new ApiClient({ base_url: (await loadConfig(root)).api_base, token: await readToken(root), log });
+  const r = await client.requestScope(globs, reason, task_id);
+  out(`asked: ${r.request_id}`);
+  out(`  files  ${r.globs.join(', ')}${r.task_id ? ` for ${r.task_id}` : ''}`);
+  out('The host answers with `flotilla grant` or `flotilla deny`. `flotilla start` delivers the answer and');
+  out('widens your lock when it is yes. Keep working inside your seat meanwhile.');
+  return 0;
+}
+
+/** `flotilla say @priya "..."` / `flotilla say --all "..."`. */
+async function cmdSay(root: string, rest: string[]): Promise<number> {
+  const all = rest.includes('--all');
+  const words = rest.filter((a) => a !== '--all');
+  const to = all ? '*' : (words[0] ?? '');
+  const body = (all ? words : words.slice(1)).join(' ').trim();
+  if (!to || !body) {
+    log.warn('cli.usage_flotilla_say', 'usage: flotilla say @name "message"   or   flotilla say --all "message"');
+    return 1;
+  }
+  if (!(await isConnected(root))) {
+    if (!projectCommands?.say) return needsBackendMsg();
+    return projectCommands.say(root, to, body);
+  }
+  const client = new ApiClient({ base_url: (await loadConfig(root)).api_base, token: await readToken(root), log });
+  const m = await client.sendMessage(to, body);
+  out(`sent to ${m.to === '*' ? 'everyone' : m.to_label}`);
+  return 0;
+}
+
+/** `flotilla messages`: the conversation so far, and what became of this agent's requests. */
+async function cmdMessages(root: string): Promise<number> {
+  if (!(await isConnected(root))) {
+    if (!projectCommands?.messages) return needsBackendMsg();
+    return projectCommands.messages(root);
+  }
+  const client = new ApiClient({ base_url: (await loadConfig(root)).api_base, token: await readToken(root), log });
+  const [messages, requests] = await Promise.all([client.readMessages(0), client.myScopeRequests()]);
+  const state = await readSessionState(root);
+  if (messages.length === 0) out('no messages yet');
+  for (const m of messages) out(`${m.sent_at_ms > state.messages_since_ms ? '• ' : '  '}${formatMessage(m)}`);
+  if (requests.length > 0) {
+    out('\nyour requests');
+    for (const r of requests) out(`  ${formatRequest(r)}`);
+  }
+  return 0;
+}
+
+/** `flotilla guard`: the PreToolUse hook. Reads one tool call on stdin; exit 2 refuses it. */
+async function cmdGuard(): Promise<number> {
+  const chunks: Buffer[] = [];
+  for await (const c of process.stdin) chunks.push(c as Buffer);
+  const r = await runGuard(Buffer.concat(chunks).toString('utf8'), process.cwd());
+  if (r.message) process.stderr.write(`${r.message}\n`);
+  return r.code;
+}
+
+function needsBackendMsg(): number {
+  log.warn('cli.no_backend', 'this flotilla build cannot reach a backend', {});
+  out('This flotilla build cannot reach a backend. Reinstall the published package.');
+  return 1;
+}
+
+/**
+ * The seat as it is NOW (the host may have redrawn it since connect), and the edit guard, before
+ * an agent starts -- so a repo connected before shared sessions gets both on its next session.
+ * Keeps any grant the last sync recorded for the current ticket.
+ */
+async function refreshSeat(root: string): Promise<void> {
+  try {
+    const client = new ApiClient({ base_url: (await loadConfig(root)).api_base, token: await readToken(root), log });
+    const me = await client.whoami();
+    const task = await currentTaskId(root);
+    const prev = await readFence(root);
+    await writeFence(root, {
+      role_slug: me.role_slug, file_scope: me.file_scope ?? roleFor(me.role_slug).file_scope,
+      task_id: task, granted: prev && prev.task_id === task ? prev.granted : [],
+    });
+  } catch {
+    // Offline: the fence from the last session stands, and the server still refuses.
+  }
+  if (await installGuardHook(root)) await ensureIgnored(root, [CLAUDE_SETTINGS]);
 }
 
 /** Is this agent binary on PATH? Synchronous and cheap; used before spawning. */
@@ -984,6 +1132,7 @@ async function cmdChat(root: string, rest: string[]): Promise<number> {
     return 1;
   }
 
+  await refreshSeat(root);
   const cfg = await loadConfig(root);
   const client = new ApiClient({ base_url: cfg.api_base, token: await readToken(root), log });
   const pi = rest.indexOf('--port');
@@ -1262,11 +1411,18 @@ const USAGE = `flotilla — agentic coordination CLI
   flotilla whoami               the identity this machine is signed in as
 
   flotilla new <name>           create a project here, connect this repo, write .agentic/
+                                --template web (default: six web roles) | deck | blank
   flotilla ls                   projects you are a member of
   flotilla members <project_id> the roster
   flotilla invite <role>        mint a single-use invite code for a teammate
                                 --label "Their Name"
 
+  flotilla share --scope <globs> --label "<who>"
+                                draw one person a seat (the files they may edit) and print
+                                the one line they run to join; --can ship,deploy,triage,invite
+  flotilla requests             what guests have asked for outside their seats (--all: answered too)
+  flotilla grant <request_id>   let them; --for task (default: this ticket only) or --for seat
+  flotilla deny <request_id> --reason "<why not>"
   flotilla role <role> --scope <globs>
                                 redraw what a role may edit in this project (owner only)
   flotilla connect <invite>     write AGENTS.md + .agentic/, store the agent token
@@ -1291,6 +1447,12 @@ const USAGE = `flotilla — agentic coordination CLI
   flotilla facts                blackboard facts: fresh, stale (pinned code moved since), unpinned
                                 --no-fetch answers from this checkout without fetching
   flotilla report "<message>"   queue one progress line in the outbox
+  flotilla request --scope <globs> --reason "<why>"
+                                ask the host for files outside your seat, for your current ticket
+  flotilla say @<name> "<message>"
+                                talk to one person or agent in this session; --all for everyone
+  flotilla messages             what the session has said to you, and answers to your requests
+  flotilla guard                the Claude Code edit hook connect installs; reads a tool call on stdin
   flotilla ship                 commit your in-scope changes to agent/<role>/<task> and push
                                 marks the task complete and opens its PR (needs gh)
                                 --wip pushes a checkpoint and does neither
@@ -1323,7 +1485,7 @@ Environment:
  * crashing on an undefined call.
  */
 export interface ProjectCommands {
-  new: (root: string, name: string, repo?: string) => Promise<number>;
+  new: (root: string, name: string, repo?: string, template?: ProjectTemplate) => Promise<number>;
   ls: () => Promise<number>;
   members: (project_id: string) => Promise<number>;
   /**
@@ -1353,6 +1515,20 @@ export interface ProjectCommands {
   roleScope: (root: string, role_slug: string, globs: string[]) => Promise<number>;
   /** `flotilla cancel <task_id> --reason "..."`. Takes a ticket off the board, freeing its claim and lock. */
   cancel: (root: string, task_id: string, reason: string) => Promise<number>;
+
+  // ---- shared sessions, as the signed-in MEMBER (the host). docs/designs/shared-sessions.md ----
+  // Optional, like createTask: a binary built before shared sessions says so instead of crashing.
+  /** `flotilla share --scope <globs> --label "<who>"`: draw a seat and mint its invite, in one step. */
+  share?: (root: string, label: string, globs: string[], can: string[]) => Promise<number>;
+  /** `flotilla requests [--all]`: what guests have asked for. */
+  requests?: (root: string, all: boolean) => Promise<number>;
+  /** `flotilla grant <id> [--for task|seat]` / `flotilla deny <id> --reason`. */
+  decide?: (root: string, request_id: string, grant: boolean, duration: string | undefined, reason: string | undefined) => Promise<number>;
+  /** `flotilla say` and `flotilla messages` for a member with no agent token in this checkout. */
+  say?: (root: string, to: string, body: string) => Promise<number>;
+  messages?: (root: string) => Promise<number>;
+  /** `flotilla request` for a member with no agent token: the member's own seat. */
+  request?: (root: string, globs: string[], reason: string, task_id: string | null) => Promise<number>;
 }
 
 let projectCommands: ProjectCommands | null = null;
@@ -1407,14 +1583,21 @@ export async function main(argv: string[]): Promise<number> {
       if (!authCommands) return needsBackend();
       return authCommands.whoami();
     case 'new': {
-      const name = positional(rest, ['--repo']);
+      const name = positional(rest, ['--repo', '--template']);
       if (!name) {
-        log.warn('cli.usage_flotilla_new_name', 'usage: flotilla new <name> [--repo owner/repo]');
+        log.warn('cli.usage_flotilla_new_name', 'usage: flotilla new <name> [--repo owner/repo] [--template web|deck|blank]');
+        return 1;
+      }
+      const repoFlag = rest.indexOf('--repo');
+      const tf = rest.indexOf('--template');
+      const template = tf > -1 ? rest[tf + 1] : undefined;
+      if (template !== undefined && !isProjectTemplate(template)) {
+        // Refused, not defaulted: a typo must not quietly produce a web project.
+        log.warn('cli.bad_template', `--template must be one of: ${PROJECT_TEMPLATES.join(', ')} (got "${template}")`);
         return 1;
       }
       if (!projectCommands) return needsBackend();
-      const repoFlag = rest.indexOf('--repo');
-      return projectCommands.new(root, name, repoFlag > -1 ? rest[repoFlag + 1] : undefined);
+      return projectCommands.new(root, name, repoFlag > -1 ? rest[repoFlag + 1] : undefined, template);
     }
     case 'ls':
       if (!projectCommands) return needsBackend();
@@ -1547,6 +1730,44 @@ export async function main(argv: string[]): Promise<number> {
       if (!projectCommands) return needsBackend();
       return projectCommands.roleScope(root, role, globs);
     }
+    // ---- shared sessions -----------------------------------------------------------------
+    case 'share': {
+      const flag = (n: string) => { const i = rest.indexOf(n); return i > -1 ? rest[i + 1] : undefined; };
+      const globs = splitList(flag('--scope'));
+      const label = flag('--label') ?? positional(rest, ['--scope', '--label', '--can']) ?? '';
+      if (globs.length === 0 || !label.trim()) {
+        log.warn('cli.usage_flotilla_share', 'usage: flotilla share --scope "slides/05-*,slides/06-*" --label "Priya, second speaker" [--can ship,deploy,triage,invite]');
+        return 1;
+      }
+      if (!projectCommands?.share) return needsBackend();
+      return projectCommands.share(root, label, globs, splitList(flag('--can')));
+    }
+    case 'requests':
+      if (!projectCommands?.requests) return needsBackend();
+      return projectCommands.requests(root, rest.includes('--all'));
+    case 'grant':
+    case 'deny': {
+      const id = rest.find((a, i) => !a.startsWith('--') && !['--for', '--reason'].includes(rest[i - 1] ?? ''));
+      const fi = rest.indexOf('--for');
+      const ri = rest.indexOf('--reason');
+      const reason = ri > -1 ? rest[ri + 1] : undefined;
+      if (!id || (cmd === 'deny' && !reason?.trim())) {
+        log.warn('cli.usage_flotilla_decide', cmd === 'grant'
+          ? 'usage: flotilla grant <request_id> [--for task|seat]   (task: this ticket only, the default)'
+          : 'usage: flotilla deny <request_id> --reason "why not"');
+        return 1;
+      }
+      if (!projectCommands?.decide) return needsBackend();
+      return projectCommands.decide(root, id, cmd === 'grant', fi > -1 ? rest[fi + 1] : undefined, reason);
+    }
+    case 'request':
+      return cmdRequest(root, rest);
+    case 'say':
+      return cmdSay(root, rest);
+    case 'messages':
+      return cmdMessages(root);
+    case 'guard':
+      return cmdGuard();
     case 'chat':
       return cmdChat(root, rest);
     case 'mcp':

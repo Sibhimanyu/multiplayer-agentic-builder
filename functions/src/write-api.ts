@@ -24,12 +24,18 @@ import type { Auth } from 'firebase-admin/auth';
 import type { Firestore } from 'firebase-admin/firestore';
 
 import {
-  ROLE_SLUGS,
   RoleDeniedError,
   hasCapability,
+  isRoleSlug,
+  roleFor,
   type Capability,
-  type RoleSlug,
+  type RolePolicy,
 } from '../../shared/store/directory.ts';
+import { isProjectTemplate, PROJECT_TEMPLATES, seatCapabilities, seatSlug } from '../../shared/store/templates.ts';
+import { cleanMessageBody, resolveRecipient, validateScopeRequest } from '../../shared/store/sessions.ts';
+import {
+  createScopeRequest, decideScopeRequest, grantedGlobs, listScopeRequests, readMessages, roster, sendMessage,
+} from '../../firebase/sessions-db.ts';
 import { hashToken, mintToken } from './authority.ts';
 import { assertDeployAllowed, assertScopeAllowed } from '../../shared/store/roles.ts';
 import { TASK_KINDS, isTaskKind, deriveTaskId } from '../../shared/store/tasks.ts';
@@ -45,7 +51,10 @@ export interface WriteRequest {
     | 'claim' | 'release' | 'acquire_scope' | 'release_scope' | 'append_event' | 'heartbeat'
     | 'deploy' | 'create_project' | 'create_task' | 'create_invite'
     | 'raise_suggestion' | 'accept_suggestion' | 'decline_suggestion'
-    | 'set_role_scope' | 'cancel_task' | 'handoff_task';
+    | 'set_role_scope' | 'cancel_task' | 'handoff_task'
+    // ---- shared sessions, docs/designs/shared-sessions.md ----
+    | 'create_seat' | 'list_scope_requests' | 'decide_scope_request' | 'request_scope'
+    | 'send_message' | 'read_messages';
   /** Operation payload. Shape depends on `op`. */
   body: Record<string, unknown>;
 }
@@ -81,8 +90,10 @@ export interface WriteDeps {
   /** The directory's createProject. Separate port, so the write path does not grow a second one. */
   createProject: (input: {
     project_id: string; project_name: string; repo_url: string;
-    owner_uid: string; owner_label: string;
+    owner_uid: string; owner_label: string; template?: 'web' | 'deck' | 'blank';
   }) => Promise<unknown>;
+  /** Clock for the session documents. Injectable for tests; defaults to Date.now. */
+  now?: () => number;
 }
 
 /** Which capability each operation requires. Explicit, so adding an op forces the decision. */
@@ -123,6 +134,19 @@ const REQUIRES: Partial<Record<WriteRequest["op"], Capability>> = {
   append_event: 'suggest',
   heartbeat: 'suggest',
   deploy: 'deploy',
+  // ---- shared sessions ----
+  // Drawing a seat IS deciding who may touch what and minting the invite that admits them: the
+  // two things `invite` already means. Deciding a request for more is the same authority. No new
+  // capability, for decision 0005's reason.
+  create_seat: 'invite',
+  list_scope_requests: 'invite',
+  decide_scope_request: 'invite',
+  // A MEMBER asking for more for their own agent (agents ask through POST /scope-requests).
+  request_scope: 'acquire_scope',
+  // `claim`, not `suggest`: the user seat holds suggest and nothing else, and a user's words must
+  // not reach an agent's prompt. A message is exactly that path, so it needs a working seat.
+  send_message: 'claim',
+  read_messages: 'claim',
 };
 
 /**
@@ -140,7 +164,10 @@ const REQUIRES: Partial<Record<WriteRequest["op"], Capability>> = {
 export function validateRoleScope(
   role_slug: string, globs: unknown,
 ): { ok: true; globs: string[] } | { ok: false; error: string } {
-  if (!ROLE_SLUGS.includes(role_slug as RoleSlug)) return { ok: false, error: `role_slug must be one of ${ROLE_SLUGS.join(', ')}` };
+  // Any slug a project may define, not only the web template's: a seat drawn by `flotilla share`
+  // is redrawn with the same `flotilla role`. Whether THIS project has the role is the caller's
+  // check (set_role_scope answers 404), because a fence for a role nobody holds is harmless.
+  if (!isRoleSlug(role_slug)) return { ok: false, error: 'a role is 2-32 lowercase letters, digits or -, starting with a letter' };
   if (role_slug === 'owner') return { ok: false, error: 'the owner scope is ** and is not editable' };
   if (role_slug === 'user') return { ok: false, error: 'the user seat holds no file scope by design' };
   if (!Array.isArray(globs) || globs.length === 0) return { ok: false, error: 'file_scope must be a non-empty list of globs' };
@@ -215,7 +242,7 @@ export async function authorize(
   deps: WriteDeps,
   uid: string,
   project_id: string,
-): Promise<{ role: string; label: string; file_scope: string[]; deploy_scope: string[] }> {
+): Promise<{ role: string; label: string; file_scope: string[]; deploy_scope: string[]; policy: RolePolicy }> {
   const member = await deps.db.collection('projects').doc(project_id).collection('members').doc(uid).get();
   if (!member.exists) throw new Unauthorized(403, 'not a member of this project');
   // Revoked is a STATE, not an absence -- the row is retained so the ledger's references to this
@@ -237,6 +264,8 @@ export async function authorize(
     label: (member.get('label') as string) ?? '',
     file_scope: (policy.get('file_scope') as string[]) ?? [],
     deploy_scope: (policy.get('deploy_scope') as string[]) ?? [],
+    // The whole document, so a seat drawn by `flotilla share` is judged by its own capabilities.
+    policy: policy.data() as RolePolicy,
   };
 }
 
@@ -274,6 +303,10 @@ export async function handleWrite(
     if (typeof b.project_name !== 'string' || typeof b.repo_url !== 'string') {
       return { status: 400, body: { error: 'create_project needs project_name and repo_url' } };
     }
+    // Refused, not defaulted: a typo in --template must not quietly produce a web project.
+    if (b.template !== undefined && !isProjectTemplate(b.template)) {
+      return { status: 400, body: { error: `template must be one of ${PROJECT_TEMPLATES.join(', ')}` } };
+    }
     try {
       const rec = await deps.createProject({
         project_id: req.project_id,
@@ -281,6 +314,7 @@ export async function handleWrite(
         repo_url: b.repo_url,
         owner_uid: caller.uid,
         owner_label: typeof b.owner_label === 'string' ? b.owner_label : (caller.email ?? caller.uid),
+        ...(isProjectTemplate(b.template) ? { template: b.template } : {}),
       });
       deps.log.info('api.project_created', 'project created through the write path', {
         project_id: req.project_id, owner_uid: caller.uid,
@@ -310,7 +344,7 @@ export async function handleWrite(
   if (!needed) return { status: 400, body: { error: `unknown op "${req.op}"` } };
 
   try {
-    if (!hasCapability(grant.role, needed)) {
+    if (!hasCapability(grant.role, needed, grant.policy)) {
       throw new RoleDeniedError(grant.role, needed.replace(/_/g, ' '), [needed], []);
     }
 
@@ -322,7 +356,9 @@ export async function handleWrite(
       case 'acquire_scope': {
         const globs = Array.isArray(req.body.globs) ? (req.body.globs as string[]) : [];
         // THE GATE, using the project's policy rather than the default template.
-        assertScopeAllowed(grant.role, globs, grant.file_scope);
+        // Plus whatever the host granted for THIS ticket while the same claim stands.
+        const granted = await grantedGlobs(deps.db, req.project_id, agent_id, String(req.body.task_id ?? ''));
+        assertScopeAllowed(grant.role, globs, grant.file_scope, { policy: grant.policy, granted });
         const r = await deps.store.acquireScope(req.project_id, agent_id, String(req.body.task_id ?? ''), globs);
         return { status: 200, body: { ok: true, result: r as Record<string, unknown> } };
       }
@@ -417,7 +453,7 @@ export async function handleWrite(
         // then lock, so a frontend member must not be able to accept a suggestion as
         // `functions/**` work and hand themselves the server. Checked against the project's own
         // policy, not the default template.
-        if (globs.length > 0) assertScopeAllowed(grant.role, globs, grant.file_scope);
+        if (globs.length > 0) assertScopeAllowed(grant.role, globs, grant.file_scope, { policy: grant.policy });
 
         const title = typeof req.body.title === 'string' && req.body.title.trim()
           ? req.body.title.trim()
@@ -456,10 +492,16 @@ export async function handleWrite(
       }
       case 'create_invite': {
         const role_slug = typeof req.body.role_slug === 'string' ? req.body.role_slug : '';
-        if (!ROLE_SLUGS.includes(role_slug as RoleSlug)) {
+        // Any role THIS PROJECT defines -- the template's, or a seat drawn by `share` -- and no
+        // other. An invite for a role with no policy admits someone authorize() then refuses on
+        // every request: a code that works once and does nothing.
+        const rolesRef = deps.db.collection('projects').doc(req.project_id).collection('roles');
+        const roleDoc = isRoleSlug(role_slug) ? await rolesRef.doc(role_slug).get() : null;
+        if (!roleDoc?.exists) {
+          const known = (await rolesRef.get()).docs.map((d) => d.id);
           return {
             status: 400,
-            body: { error: `role_slug must be one of ${ROLE_SLUGS.join(', ')}`, roles: [...ROLE_SLUGS] },
+            body: { error: `this project has no role "${role_slug}". One of: ${known.join(', ')}`, roles: known },
           };
         }
         const member_label = typeof req.body.member_label === 'string' && req.body.member_label.trim()
@@ -570,6 +612,93 @@ export async function handleWrite(
           project_id: req.project_id, uid: caller.uid, role: grant.role, task_id, holder, ok: r.ok,
         });
         return { status: 200, body: { ...r } as Record<string, unknown> };
+      }
+      // ---- shared sessions --------------------------------------------------------------
+      case 'create_seat': {
+        const label = typeof req.body.label === 'string' ? req.body.label.trim().slice(0, 80) : '';
+        if (!label) return { status: 400, body: { error: 'a seat needs a --label: who it is for' } };
+        const scope = validateRoleScope('seat', req.body.file_scope);
+        if (!scope.ok) return { status: 400, body: { error: scope.error } };
+        const caps = seatCapabilities(Array.isArray(req.body.can) ? (req.body.can as unknown[]).map(String) : []);
+        if (!caps.ok) return { status: 400, body: { error: caps.error } };
+        // A host cannot hand out more than they hold. Without this, a seat with `invite` could
+        // draw a seat with `deploy` and connect to it -- an escalation through a side door.
+        const mine = roleFor(grant.role, grant.policy).capabilities;
+        const beyond = caps.capabilities.filter((c) => !mine.includes(c));
+        if (beyond.length > 0) {
+          throw new RoleDeniedError(grant.role, 'grant capabilities it does not hold', beyond, mine);
+        }
+        // Nor more files than they may touch: the same containment the lock gate uses.
+        assertScopeAllowed(grant.role, scope.globs, grant.file_scope, { policy: grant.policy });
+
+        const rolesRef = deps.db.collection('projects').doc(req.project_id).collection('roles');
+        const taken = (await rolesRef.get()).docs.map((d) => d.id);
+        const slug = seatSlug(label, taken);
+        const now = (deps.now ?? Date.now)();
+        // create(), not set(): a concurrent share that derived the same slug loses loudly rather
+        // than overwriting somebody else's seat.
+        await rolesRef.doc(slug).create({
+          slug, label, file_scope: scope.globs, deploy_scope: [], capabilities: caps.capabilities,
+          created_by: caller.uid, created_at_ms: now,
+        });
+        const code = mintToken();
+        const ttl_ms = 7 * 24 * 60 * 60 * 1000;
+        await deps.db.collection('projects').doc(req.project_id).collection('invites').doc().set({
+          code_sha256: hashToken(code), role_slug: slug, member_label: label,
+          expires_at_ms: now + ttl_ms, consumed: false, created_by: caller.uid, created_at_ms: now,
+        });
+        deps.log.info('api.seat_created', 'seat drawn and invite minted', {
+          project_id: req.project_id, uid: caller.uid, slug, file_scope: scope.globs, capabilities: caps.capabilities,
+        });
+        return {
+          status: 200,
+          body: { ok: true, role_slug: slug, label, file_scope: scope.globs, capabilities: caps.capabilities, invite: code, expires_at_ms: now + ttl_ms },
+        };
+      }
+      case 'list_scope_requests': {
+        const all = req.body.status === 'all';
+        const requests = await listScopeRequests(deps.db, req.project_id, all ? {} : { status: 'open' });
+        return { status: 200, body: { ok: true, requests: requests as unknown as Record<string, unknown>[] } };
+      }
+      case 'decide_scope_request': {
+        const request_id = typeof req.body.request_id === 'string' ? req.body.request_id : '';
+        if (!request_id) return { status: 400, body: { error: 'name the request: flotilla grant <request_id>' } };
+        const r = await decideScopeRequest(deps.db, req.project_id, request_id, grant.label || caller.uid, {
+          grant: req.body.grant === true, duration: req.body.duration, reason: req.body.reason,
+        }, (deps.now ?? Date.now)());
+        deps.log.info('api.scope_request_decided', 'scope request decided', {
+          project_id: req.project_id, uid: caller.uid, request_id, grant: req.body.grant === true, ok: r.ok,
+        });
+        if (!r.ok) return { status: r.status, body: { ok: false, error: r.error, decided_by: r.decided_by ?? null } };
+        return { status: 200, body: { ok: true, request: r.request as unknown as Record<string, unknown> } };
+      }
+      case 'request_scope': {
+        const v = validateScopeRequest(req.body);
+        if (!v.ok) return { status: 400, body: { error: v.error } };
+        const r = await createScopeRequest(deps.db, req.project_id, {
+          agent_id, label: grant.label || caller.uid, role_slug: grant.role,
+          globs: v.globs, reason: v.reason, task_id: v.task_id,
+        }, (deps.now ?? Date.now)());
+        return { status: 200, body: { ok: true, request: r as unknown as Record<string, unknown> } };
+      }
+      case 'send_message': {
+        const body = cleanMessageBody(req.body.body);
+        if (!body.ok) return { status: 400, body: { error: body.error } };
+        const who = resolveRecipient(String(req.body.to ?? ''), await roster(deps.db, req.project_id));
+        if (!who.ok) return { status: 400, body: { error: who.error } };
+        // The sender is the VERIFIED uid and its stored label, never the body's: a message is the
+        // one place a stranger would most like to sign as somebody else.
+        const m = await sendMessage(deps.db, req.project_id, {
+          from_id: caller.uid, from_kind: 'member', from_label: grant.label || caller.uid,
+          to: who.to, to_label: who.to_label, body: body.body,
+          in_reply_to: typeof req.body.in_reply_to === 'string' ? req.body.in_reply_to : null,
+        }, (deps.now ?? Date.now)());
+        return { status: 200, body: { ok: true, message: m as unknown as Record<string, unknown> } };
+      }
+      case 'read_messages': {
+        const since = Number(req.body.since_ms ?? 0);
+        const messages = await readMessages(deps.db, req.project_id, [caller.uid], Number.isFinite(since) ? since : 0);
+        return { status: 200, body: { ok: true, messages: messages as unknown as Record<string, unknown>[] } };
       }
       case 'claim': {
         const r = await deps.store.claimTask(req.project_id, String(req.body.task_id ?? ''), agent_id);

@@ -24,8 +24,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_ROLES, ROLE_SLUGS, type Capability, type RoleSlug } from '../shared/store/directory.ts';
+import { DEFAULT_ROLES, ROLE_SLUGS, type Capability, type WebRoleSlug } from '../shared/store/directory.ts';
 import { TASK_KINDS } from '../shared/store/tasks.ts';
+import { PROJECT_TEMPLATES } from '../shared/store/templates.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(root, 'docs', 'board.html');
@@ -63,7 +64,7 @@ const DECLARED = {
     },
     {
       kind: 'terminal', name: 'The CLI', sub: 'flotilla',
-      does: ['Join a project', 'Claim a ticket', 'Push your branch', 'Keeps you online'],
+      does: ['Join a project', 'Claim a ticket', 'Share a seat, grant more', 'Talk to the session'],
       who: 'anyone with an agent',
     },
     {
@@ -92,8 +93,12 @@ const DECLARED = {
       body: 'Claiming locks the files. Nobody else can take overlapping files until you are done, so two agents cannot edit the same thing.',
     },
     {
-      n: 'III', b: 'Your role is a fence',
-      body: 'Frontend cannot touch the server. It is refused, not merely discouraged.',
+      n: 'III', b: 'Your seat is a fence',
+      body: 'The host draws what each person may edit. Outside it the edit is refused, not merely discouraged.',
+    },
+    {
+      n: 'IV', b: 'Ask, never work around',
+      body: 'Need a file outside your seat? Your agent asks; the host grants it for that ticket, or says no and why.',
     },
   ],
   /** Gaps that are facts about the world. Code-derived gaps are appended to these. */
@@ -167,7 +172,7 @@ const capLabel: Partial<Record<Capability, string>> = {
   open_pr: 'open pr',
 };
 
-function roleRow(slug: RoleSlug): string {
+function roleRow(slug: WebRoleSlug): string {
   const r = DEFAULT_ROLES[slug];
   const scope = r.file_scope.length === 0
     ? '<span class="g none">nothing</span>'
@@ -270,6 +275,8 @@ function render(): string {
   .sec > h2 .num{font-family:var(--mono);font-size:var(--t-1);font-weight:400;color:var(--mid);
                  letter-spacing:.1em}
 
+  .lede{font-size:var(--t-2);color:var(--ink2);margin:0 0 var(--sp-6);max-width:68ch}
+  .lede code{font-family:var(--mono);font-size:var(--t-1);color:var(--ink)}
   .roles{border-top:1px solid var(--hair)}
   .rrow{display:grid;grid-template-columns:200px 1fr 300px;gap:var(--sp-6);
         padding:var(--sp-6) 0;border-bottom:1px solid var(--hair);align-items:center}
@@ -376,7 +383,8 @@ function render(): string {
 </header>
 
 <section class="sec">
-  <h2><span class="num">01</span> The ${ROLE_SLUGS.length} roles you can hand out</h2>
+  <h2><span class="num">01</span> The ${ROLE_SLUGS.length} roles a web project starts with</h2>
+  <p class="lede">One of ${PROJECT_TEMPLATES.length} templates (${PROJECT_TEMPLATES.join(', ')}). Any project can also draw one person a seat of their own: <code>flotilla share</code>.</p>
   <div class="roles">
     <div class="rrow head"><div>role</div><div>owns these files</div><div>may</div></div>
 ${ROLE_SLUGS.map(roleRow).join('\n')}

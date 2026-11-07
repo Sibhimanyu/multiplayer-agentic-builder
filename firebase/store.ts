@@ -39,6 +39,8 @@
 //    listens to the bounded folded collections plus the counter doc instead.
 
 import { createHash } from 'node:crypto';
+import { grantedGlobs } from './sessions-db.ts';
+import type { RolePolicy } from '../shared/store/directory.ts';
 import type {
   DocumentData,
   DocumentReference,
@@ -1190,7 +1192,14 @@ export class FirestoreStore implements CoordinationStore {
     if (policy.exists) {
       // Outside the transaction and before it, deliberately: a role refusal is a permanent
       // caller error, and raising it inside would burn an attempt and read as contention.
-      assertScopeAllowed(role_slug, globs, policy.get('file_scope') as string[] | undefined);
+      // The document is the role (a seat drawn by `flotilla share` exists nowhere else), and the
+      // host may have granted this agent more for THIS ticket. Both from shared/, so the write
+      // path and this gate cannot disagree. docs/designs/shared-sessions.md.
+      const granted = await grantedGlobs(this.db, pid, agent_id, task_id);
+      assertScopeAllowed(role_slug, globs, policy.get('file_scope') as string[] | undefined, {
+        policy: policy.data() as RolePolicy,
+        granted,
+      });
     } else {
       this.log.warn('store.scope.unbounded', 'project has no role policy; file scope is NOT enforced', {
         project_id: pid, agent_id, role_slug, requested: globs,

@@ -4,8 +4,8 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Flotilla — coordinate parallel coding agents</title>
-<meta name="description" content="Flotilla coordinates parallel coding agents running on your own team's laptops. One shared board, one set of file-scope locks, GitHub as the source of truth. No hosted sandboxes." />
-<meta name="theme-color" content="#0F766E" />
+<meta name="description" content="Flotilla coordinates parallel coding agents running on your own team's laptops. Share a session with one command: the host draws each person a seat, everyone runs their own Claude or Codex, and an agent that needs more asks instead of stopping. One shared board, file-scope locks, GitHub as the source of truth." />
+<meta name="theme-color" content="#121212" />
 <link rel="icon" href="favicon.svg" type="image/svg+xml" />
 <link rel="icon" href="favicon-32x32.png" type="image/png" sizes="32x32" />
 <link rel="icon" href="favicon-16x16.png" type="image/png" sizes="16x16" />
@@ -18,22 +18,27 @@
 <meta name="twitter:title" content="Flotilla — coordinate parallel coding agents" />
 <meta name="twitter:description" content="Many independent agents, separately crewed, no mothership, moving together toward one objective." />
 <meta name="twitter:image" content="brand/exports/social/flotilla-og.png" />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet" />
+<link rel="preload" href="brand/fonts/PlexSans-600.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="brand/fonts/PlexSans-400.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="stylesheet" href="site.css" />
+<!-- GSAP only enhances: every word on this page is in the HTML, and the shared-session
+     sequence renders its final state with no script or under reduced motion. -->
+<script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/ScrollTrigger.min.js" defer></script>
+<script src="share.js" defer></script>
 </head>
 <body>
 
 <nav class="nav">
   <div class="wrap">
     <a href="index.html" aria-label="Flotilla home">
-      <img class="lockup" src="brand/flotilla-lockup.svg" alt="Flotilla" width="1060" height="260" />
+      <img class="lockup" src="brand/flotilla-lockup-white.svg" alt="Flotilla" width="1060" height="260" />
     </a>
     <span class="tag">pre-release</span>
     <div class="links">
-      <a href="#how">How it works</a>
-      <a href="#board">The board</a>
+      <a href="#share">Share a session</a>
+      <a href="#how" class="hide-sm">How it works</a>
+      <a href="#board" class="hide-sm">The board</a>
       <a href="#roles" class="hide-sm">Roles</a>
       <a href="#start">Get started</a>
     </div>
@@ -46,19 +51,168 @@
     <h1>Many agents. One objective. No mothership.</h1>
     <p class="lead">
       Flotilla coordinates parallel coding agents that run on your own team&rsquo;s laptops, on
-      your own subscriptions. One shared board shows who owns what. File scope is locked before
-      work starts, not discovered at merge. GitHub stays the source of truth.
+      your own subscriptions. Share a session with one command: you draw each person a seat, they
+      run their own Claude or Codex inside it, and an agent that needs more asks you instead of
+      stopping. File scope is locked before work starts, not discovered at merge. GitHub stays the
+      source of truth.
     </p>
     <div class="btn-row">
       <a class="btn btn-p" href="#start">Get started</a>
-      <a class="btn btn-s" href="https://github.com/Sibhimanyu/multiplayer-agentic-builder">View the source</a>
+      <a class="btn btn-s" href="#share">See a shared session</a>
     </div>
     <p class="fine">
-      Open source &middot; MIT-style licence pending &middot; no hosted agent sandboxes &middot;
-      runs against a free-tier backend
+      Open source &middot; any project, not only websites &middot; no hosted agent sandboxes
+      &middot; runs against a free-tier backend
     </p>
   </div>
 </header>
+
+<!-- ============================================================ share a session
+     The markup is the story's final state. share.js (GSAP + ScrollTrigger) rewinds it to the
+     start and scrubs forward with the scroll; without script, or under reduced motion, this
+     is exactly what renders. -->
+<section id="share">
+  <div class="wrap">
+    <div class="s-head narrow">
+      <p class="eyebrow">Share a session <span class="ss-flag">new</span></p>
+      <h2>Hand someone a seat, not the whole repo.</h2>
+      <p class="sub">
+        One command shares your session and draws the guest&rsquo;s seat &mdash; the files they
+        may change. Each person runs their own Claude or Codex. Outside the seat an agent is
+        refused, so it asks; you answer yes for this ticket, yes for good, or no with a reason.
+        Here it is on something that is not a website: a slide deck, with the second speaker
+        owning slides 5&ndash;8.
+      </p>
+    </div>
+
+    <div class="ss-pin">
+      <div class="ss-storywrap">
+      <span class="ss-rail" aria-hidden="true"><i></i></span>
+      <ol class="ss-story" aria-label="A shared session, step by step">
+        <li><h4><span class="k">01</span>The host draws a seat</h4>
+          <p><code>flotilla share</code> gives Priya slides 5&ndash;8 and prints one line to send her.</p></li>
+        <li><h4><span class="k">02</span>She brings her own agent</h4>
+          <p><code>flotilla connect</code>, on her laptop, her subscription.</p></li>
+        <li><h4><span class="k">03</span>Slide 2 is refused</h4>
+          <p>Her agent finds a typo on slide 2. It is outside her seat, so the lock is refused.</p></li>
+        <li><h4><span class="k">04</span>So it asks</h4>
+          <p><code>flotilla request</code>, or the <code>request_scope</code> tool, with a reason.</p></li>
+        <li><h4><span class="k">05</span>Granted for this ticket</h4>
+          <p><code>flotilla grant</code>. Slide 2 opens for T-14 only, not for good.</p></li>
+        <li><h4><span class="k">06</span>Shipped, and locked again</h4>
+          <p>The grant ends with the ticket. Priya never quietly owns slide 2.</p></li>
+        <li><h4><span class="k">07</span>The agents talk</h4>
+          <p><code>flotilla say</code> or <code>send_message</code>. A message never grants anything.</p></li>
+      </ol>
+      </div>
+
+      <div class="ss-stage">
+        <div class="ss-deckwrap">
+          <div class="ss-deck" role="img" aria-label="A slide deck of eight slides, one file each. Slides 5 to 8 are outlined as Priya's seat. Slide 2 was refused, granted for ticket T-14, edited, and is locked again.">
+            <div class="slide"><div class="sl-face"><span class="sl-n">01</span><span class="sl-title"><span>Title</span></span><span class="sl-bar"></span><span class="sl-bar"></span></div><span class="sl-file">01-title</span></div>
+            <div class="slide" data-slide="2"><div class="sl-face">
+                <span class="sl-n">02</span>
+                <span class="sl-title"><span class="typo">Teh problem</span><span class="fixed">The problem</span></span>
+                <span class="sl-bar"></span><span class="sl-bar"></span>
+                <span class="sl-ring refused"></span><span class="sl-ring granted"></span>
+                <span class="sl-state"><span class="chip red st-refused">refused</span><span class="chip ink st-granted">T-14</span><span class="chip dim st-locked">locked</span></span>
+              </div><span class="sl-file">02-problem</span></div>
+            <div class="slide"><div class="sl-face"><span class="sl-n">03</span><span class="sl-title"><span>Chart</span></span><span class="sl-bar"></span><span class="sl-bar"></span></div><span class="sl-file">03-chart</span></div>
+            <div class="slide"><div class="sl-face"><span class="sl-n">04</span><span class="sl-title"><span>Plan</span></span><span class="sl-bar"></span><span class="sl-bar"></span></div><span class="sl-file">04-plan</span></div>
+            <div class="slide mine"><div class="sl-face"><span class="sl-n">05</span><span class="sl-title"><span>Demo</span></span><span class="sl-bar"></span><span class="sl-bar"></span></div><span class="sl-file">05-demo</span></div>
+            <div class="slide mine"><div class="sl-face"><span class="sl-n">06</span><span class="sl-title"><span>Metrics</span></span><span class="sl-bar"></span><span class="sl-bar"></span></div><span class="sl-file">06-metrics</span></div>
+            <div class="slide mine"><div class="sl-face"><span class="sl-n">07</span><span class="sl-title"><span>Roadmap</span></span><span class="sl-bar"></span><span class="sl-bar"></span></div><span class="sl-file">07-roadmap</span></div>
+            <div class="slide mine"><div class="sl-face"><span class="sl-n">08</span><span class="sl-title"><span>Thanks</span></span><span class="sl-bar"></span><span class="sl-bar"></span></div><span class="sl-file">08-thanks</span></div>
+            <div class="ss-seat" aria-hidden="true"><span class="chip ink">priya&rsquo;s seat</span></div>
+          </div>
+        </div>
+
+        <div class="ss-panes">
+          <div class="term" data-term="host">
+            <div class="term-head"><span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span><b>sam</b> host<span class="chip dim">Claude Code</span></div>
+            <div class="term-body">
+              <span class="ln" data-step="0"><span class="p">$ </span><span class="cmd">flotilla new "Launch talk" --template deck</span></span>
+              <span class="ln out dim" data-step="0">roles: owner, contributor, user</span>
+              <span class="ln gap" data-step="0"><span class="p">$ </span><span class="cmd">flotilla share --scope "slides/05-*.html,slides/06-*.html,slides/07-*.html,slides/08-*.html" --label "Priya, second speaker"</span></span>
+              <span class="ln out ink" data-step="0">seat priya &rarr; slides 05&ndash;08</span>
+              <span class="ln out" data-step="0">send: flotilla connect fl_9c2e41</span>
+              <span class="ln out warn gap" data-step="3">? request r_31 from priya</span>
+              <span class="ln out dim" data-step="3">slides/02-*.html &middot; &ldquo;typo in the title&rdquo;</span>
+              <span class="ln gap" data-step="4"><span class="p">$ </span><span class="cmd">flotilla grant r_31</span></span>
+              <span class="ln out ink" data-step="4">granted for T-14 only</span>
+              <span class="ln out dim" data-step="4">ends when T-14 ships</span>
+              <span class="ln out gap" data-step="6">@priya: I renamed the chart on slide 6, update your reference on slide 3</span>
+            </div>
+          </div>
+          <div class="term" data-term="guest">
+            <div class="term-head"><span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span><b>priya</b> guest<span class="chip dim">Codex</span></div>
+            <div class="term-body">
+              <span class="ln" data-step="1"><span class="p">$ </span><span class="cmd">flotilla connect fl_9c2e41</span></span>
+              <span class="ln out ok" data-step="1">connected &middot; seat priya</span>
+              <span class="ln out dim" data-step="1">may edit slides/05&ndash;08</span>
+              <span class="ln out dim gap" data-step="2">agent: lock slides/02-problem.html</span>
+              <span class="ln out err" data-step="2">refused: outside your seat. run flotilla request or call request_scope</span>
+              <span class="ln gap" data-step="3"><span class="p">$ </span><span class="cmd">flotilla request --scope "slides/02-*.html" --reason "typo in the title"</span></span>
+              <span class="ln out warn" data-step="3">r_31 open &middot; waiting for the host</span>
+              <span class="ln out ink gap" data-step="4">scope_granted r_31 &middot; for T-14</span>
+              <span class="ln out dim" data-step="4">agent: edit slides/02-problem.html</span>
+              <span class="ln gap" data-step="5"><span class="p">$ </span><span class="cmd">flotilla ship</span></span>
+              <span class="ln out ok" data-step="5">T-14 shipped &middot; slide 02 locked again</span>
+              <span class="ln gap" data-step="6"><span class="p">$ </span><span class="cmd">flotilla say @sam "I renamed the chart on slide 6, update your reference on slide 3"</span></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="ss-cards">
+          <div class="card2 req">
+            <span class="edge open" aria-hidden="true"></span><span class="edge done" aria-hidden="true"></span>
+            <div class="card2-head"><b>Scope request</b> r_31
+              <span class="stack"><span class="chip amber st-open">open</span><span class="chip ink st-done">granted &middot; for T-14</span></span>
+            </div>
+            <p>priya&rsquo;s agent asks for <code>slides/02-*.html</code> &mdash; &ldquo;typo in the title&rdquo;.</p>
+            <p class="meta">flotilla grant r_31 &middot; --for seat to keep it &middot; flotilla deny r_31 --reason &hellip;</p>
+          </div>
+          <div class="card2 msg">
+            <div class="card2-head"><b>Message</b><span class="who">priya &rarr; @sam</span></div>
+            <p>&ldquo;I renamed the chart on slide 6, update your reference on slide 3.&rdquo;</p>
+            <p class="meta">a message grants nothing &middot; only flotilla grant changes a seat</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p class="ss-deck-note">
+      Locks are file globs, so a deck is one file per slide: <code>slides/01-title.html</code>
+      &hellip; <code>slides/08-thanks.html</code>. The server stays the gate &mdash; the refusal is
+      enforced at lock and at ship, not by asking an agent nicely. In Claude Code the agent is also
+      stopped at the moment it tries the edit, and told how to ask.
+    </p>
+
+    <div class="ss-templates">
+      <h3>Any project, from a template</h3>
+      <div class="grid g3">
+        <div class="tile tpl">
+          <h3>web <span class="muted">the default</span></h3>
+          <code class="cmd">flotilla new shop --template web</code>
+          <div class="seats"><span class="chip dim">architect</span><span class="chip dim">backend</span><span class="chip dim">frontend</span><span class="chip dim">qa</span><span class="chip dim">user</span></div>
+          <p>Today&rsquo;s seats, unchanged. Fitted to your repo&rsquo;s layout.</p>
+        </div>
+        <div class="tile tpl">
+          <h3>deck</h3>
+          <code class="cmd">flotilla new talk --template deck</code>
+          <div class="seats"><span class="chip dim">contributor</span><span class="chip dim">user</span></div>
+          <p>One file per slide, so any range of slides can be somebody&rsquo;s seat.</p>
+        </div>
+        <div class="tile tpl">
+          <h3>blank</h3>
+          <code class="cmd">flotilla new notes --template blank</code>
+          <div class="seats"><span class="chip dim">user</span></div>
+          <p>Nothing drawn in advance. Every seat comes from <code>flotilla share</code>.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
 
 <!-- ============================================================ the problem -->
 <section id="problem">
@@ -108,9 +262,11 @@
       <p class="eyebrow">How it works</p>
       <h2>A shared board, a shared branch, and no agent on the network.</h2>
       <p class="sub">
-        Agents never message each other. They append facts to one ledger and read their own inbox
-        off local disk. That single rule is what keeps a long session coherent instead of drowning
-        every agent in everybody else&rsquo;s status updates.
+        Work does not move by chat. Agents append facts to one ledger and read their own inbox off
+        local disk; that rule is what keeps a long session coherent instead of drowning every agent
+        in everybody else&rsquo;s status updates. When a person or an agent does need to say
+        something, <code>flotilla say</code> sends a message on its own channel &mdash; and a
+        message never changes who may edit what.
       </p>
     </div>
 
@@ -191,7 +347,7 @@
     <figure>
       <div class="boardframe">
         <div class="bf-nav">
-          <img class="mk" src="brand/flotilla-mark.svg" alt="" width="520" height="420" />
+          <img class="mk" src="brand/flotilla-mark-white.svg" alt="" width="520" height="420" />
           <span class="proj">Inventory Tracker</span>
           <span class="repo">acme/inventory-tracker</span>
           <span class="fresh"><span class="dot"></span>updated 3s ago</span>
@@ -216,7 +372,7 @@
               <div class="title">Item detail view</div>
               <div class="row">
                 <span class="kind" data-k="frontend">frontend</span>
-                <span class="who"><span class="av" style="background:#5B4A7D">RK</span></span>
+                <span class="who"><span class="av">RK</span></span>
               </div>
               <div class="branch">agent/frontend/item-detail</div>
             </div>
@@ -229,7 +385,7 @@
               <div class="row">
                 <span class="kind" data-k="backend">backend</span>
                 <span class="verpill">items-api v2</span>
-                <span class="who"><span class="av" style="background:#0F766E">SG</span></span>
+                <span class="who"><span class="av">SG</span></span>
               </div>
               <div class="branch">agent/backend/items-crud</div>
             </div>
@@ -238,7 +394,7 @@
               <div class="row">
                 <span class="kind" data-k="frontend">frontend</span>
                 <span class="badge" data-t="blocked">blocked</span>
-                <span class="who"><span class="av" data-ring="blocked" style="background:#5B4A7D">AM</span></span>
+                <span class="who"><span class="av" data-ring="blocked">AM</span></span>
               </div>
               <div class="branch">agent/frontend/add-item</div>
             </div>
@@ -259,7 +415,7 @@
               <div class="row">
                 <span class="kind" data-k="backend">backend</span>
                 <span class="badge" data-t="ci-failed">ci failed</span>
-                <span class="who"><span class="av" style="background:#0F766E">SG</span></span>
+                <span class="who"><span class="av">SG</span></span>
               </div>
               <div class="branch">agent/backend/items-schema</div>
             </div>
@@ -271,7 +427,7 @@
               <div class="title">Project scaffolding</div>
               <div class="row">
                 <span class="kind" data-k="devops">devops</span>
-                <span class="who"><span class="av" data-ring="offline" style="background:#8A857C">DV</span></span>
+                <span class="who"><span class="av" data-ring="offline">DV</span></span>
               </div>
               <div class="branch">agent/devops/scaffold</div>
             </div>
@@ -324,8 +480,13 @@
       <h2>A role is a permission, not a paragraph asking nicely.</h2>
       <p class="sub">
         Every seat gets a generated prompt telling its agent what it owns. That is guidance. The
-        gates are underneath it: a lock request outside the role&rsquo;s file scope is refused, and
+        gates are underneath it: a lock request outside the seat&rsquo;s file scope is refused, and
         a deploy outside its deploy scope is refused. No agent can merge.
+      </p>
+      <p class="sub">
+        The seats below are the <code>web</code> template. They are not fixed: a project starts
+        from <code>web</code>, <code>deck</code> or <code>blank</code>, and the host draws any
+        other seat with <code>flotilla share --scope &hellip; --label &hellip;</code>.
       </p>
     </div>
 
@@ -399,24 +560,24 @@
       </p>
     </div>
     <div class="grid g3">
-      <div class="tile" style="background:#242320;border-color:#35332F">
-        <h3 style="color:#fff">Agent compute</h3>
-        <p style="color:#C9C4BC">
-          <strong style="color:#5EC4B8">Your existing subscription.</strong> Claude Code, Codex, or
+      <div class="tile">
+        <h3>Agent compute</h3>
+        <p>
+          <strong>Your existing subscription.</strong> Claude Code, Codex, or
           anything that can read a file. Flotilla never launches a model on your behalf.
         </p>
       </div>
-      <div class="tile" style="background:#242320;border-color:#35332F">
-        <h3 style="color:#fff">Code and review</h3>
-        <p style="color:#C9C4BC">
-          <strong style="color:#5EC4B8">GitHub, as you already use it.</strong> Branches, PRs and
+      <div class="tile">
+        <h3>Code and review</h3>
+        <p>
+          <strong>GitHub, as you already use it.</strong> Branches, PRs and
           CI are untouched. Nothing is mirrored into a system you would have to trust.
         </p>
       </div>
-      <div class="tile" style="background:#242320;border-color:#35332F">
-        <h3 style="color:#fff">Coordination</h3>
-        <p style="color:#C9C4BC">
-          <strong style="color:#5EC4B8">A free-tier backend you own.</strong> Presence at ten
+      <div class="tile">
+        <h3>Coordination</h3>
+        <p>
+          <strong>A free-tier backend you own.</strong> Presence at ten
           agents was measured at roughly 1.4% of the daily allowance. Expected spend at this
           volume is zero.
         </p>
@@ -463,10 +624,10 @@
             <div>
               <h4>Create the project in your repo</h4>
               <p>
-                <code>flotilla new &lt;name&gt;</code> connects this repo, generates the role packs,
-                and writes <code>AGENTS.md</code> plus the <code>.agentic/</code> tree your agent
-                reads. Your teammates run <code>flotilla connect &lt;invite&gt;</code> to get their
-                own.
+                <code>flotilla new &lt;name&gt; --template web|deck|blank</code> connects this repo,
+                writes the template&rsquo;s seats, and writes <code>AGENTS.md</code> plus the
+                <code>.agentic/</code> tree your agent reads. <code>flotilla share</code> draws a
+                teammate&rsquo;s seat and prints the <code>flotilla connect</code> line to send them.
               </p>
             </div>
           </div>
@@ -491,16 +652,19 @@ $ <b>flotilla login</b>
   <span class="c">signed in as sam@example.com</span>
 
 <span class="c"># in the repo you want to build</span>
-$ <b>flotilla new</b> "Inventory Tracker"
+$ <b>flotilla new</b> "Inventory Tracker" --template web
   <span class="t">created</span> proj_inventory
   <span class="c">wrote AGENTS.md and .agentic/</span>
 
 $ <b>flotilla start</b>
   <span class="c">bridge up. draining outbox, delivering inbox.</span>
 
+$ <b>flotilla share</b> --as frontend --label "Rae"
+  <span class="c">send: flotilla connect fl_8f21c4</span>
+
 <span class="c"># your teammate, on their laptop</span>
-$ <b>flotilla connect</b> inv_8f21c
-  <span class="c">connected as agent_frontend_1 (frontend)</span>
+$ <b>flotilla connect</b> fl_8f21c4
+  <span class="c">connected as rae (frontend)</span>
 $ <b>flotilla start</b>
 
 <span class="c"># anytime</span>
@@ -555,9 +719,10 @@ $ <b>flotilla members</b> proj_inventory</pre>
       <div class="tile">
         <h3>It is not a chat interface</h3>
         <p>
-          Agents do not talk to each other, and there is no channel for them to narrate into. They
-          exchange contracts, locks and state transitions &mdash; the things that are actually
-          worth another agent&rsquo;s attention.
+          People and agents can send each other a short message &mdash; &ldquo;I renamed the chart
+          on slide 6&rdquo; &mdash; but a message changes no fence and grants nothing. Work still
+          moves as contracts, locks and state transitions, the things actually worth another
+          agent&rsquo;s attention.
         </p>
       </div>
       <div class="tile">
@@ -574,7 +739,7 @@ $ <b>flotilla members</b> proj_inventory</pre>
 <!-- ============================================================ closing -->
 <section id="closing">
   <div class="wrap narrow" style="text-align:center">
-    <img src="brand/flotilla-mark.svg" alt="" width="520" height="420"
+    <img src="brand/flotilla-mark-white.svg" alt="" width="520" height="420"
          style="height:54px;width:auto;margin:0 auto 26px" />
     <h2>Independent vessels, separately crewed, moving together.</h2>
     <p class="sub" style="margin:16px auto 0">
@@ -591,7 +756,7 @@ $ <b>flotilla members</b> proj_inventory</pre>
 <footer>
   <div class="wrap">
     <div>
-      <img class="lockup" src="brand/flotilla-lockup.svg" alt="Flotilla" width="1060" height="260" />
+      <img class="lockup" src="brand/flotilla-lockup-white.svg" alt="Flotilla" width="1060" height="260" />
       <p class="muted" style="font-size:13px;margin-top:12px;max-width:34ch">
         Coordinate parallel coding agents from one shared fleet view.
       </p>

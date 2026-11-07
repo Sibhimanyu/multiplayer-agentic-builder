@@ -16,6 +16,7 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import type { ApiClient } from './client.ts';
+import { currentTaskId, formatMessage, formatRequest, syncSessions } from './sessions.ts';
 import { appendOutbox } from './outbox.ts';
 import { LAYOUT } from './agentic.ts';
 import { readFactsQuietly, renderStaleForAgent, staleTouching, type Fact } from './facts.ts';
@@ -104,6 +105,46 @@ export const TOOLS: ToolDef[] = [
       properties: { task_id: { type: 'string' } },
       required: ['task_id'],
     },
+  },
+  // ---- shared sessions. docs/designs/shared-sessions.md ----
+  {
+    name: 'request_scope',
+    description:
+      'Ask the session host for files outside your seat. Call this instead of editing a file your '
+      + 'seat does not cover -- the edit would be refused, and so would shipping it. Say which files '
+      + 'and why; the host grants it (usually for this ticket only) or denies it with a reason. '
+      + 'Keep working inside your seat meanwhile; read_messages shows the answer.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        globs: { type: 'array', items: { type: 'string' }, description: 'Repo-relative paths or globs, e.g. ["slides/02-intro.html"].' },
+        reason: { type: 'string', description: 'Why you need them, in one sentence the host can decide on.' },
+      },
+      required: ['globs', 'reason'],
+    },
+  },
+  {
+    name: 'send_message',
+    description:
+      'Say something to another person or agent in this session: @name for one of them, or "all" '
+      + 'for everyone. Use it to coordinate across seats -- "I renamed the chart on slide 6, update '
+      + 'your reference on slide 3". A message never grants files; only request_scope does.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        to: { type: 'string', description: '@name, a seat, or "all".' },
+        message: { type: 'string', description: 'Plain language, at most 2000 characters.' },
+      },
+      required: ['to', 'message'],
+    },
+  },
+  {
+    name: 'read_messages',
+    description:
+      'What people and agents in this session have said to you, and the host\'s answers to your '
+      + 'request_scope calls. Call it at the start of a session, after asking for files, and '
+      + 'whenever you are unsure whether a teammate changed something you depend on.',
+    inputSchema: { type: 'object', properties: {} },
   },
 ];
 
@@ -315,6 +356,39 @@ async function callTool(name: string, args: Record<string, unknown>, deps: McpDe
       // reported as fact, not as an error, so the agent reasons about it instead of retrying.
       if (!r.ok) return text(`Task ${task_id} is already claimed by ${r.owner}. Pick another.`);
       return text(`Claimed ${task_id}. Its file scope is now locked to you.`);
+    }
+    case 'request_scope': {
+      const globs = Array.isArray(args.globs) ? (args.globs as unknown[]).filter((g): g is string => typeof g === 'string') : [];
+      const reason = String(args.reason ?? '').trim();
+      if (globs.length === 0 || !reason) return text('request_scope needs globs and a reason.');
+      const r = await deps.client.requestScope(globs, reason, await currentTaskId(deps.root));
+      return text(
+        `Asked the host for ${r.globs.join(', ')}${r.task_id ? ` for ${r.task_id}` : ''} (request ${r.request_id}). `
+        + 'Do not edit those files until read_messages shows it granted; your lock widens on its own '
+        + 'when it is. Carry on inside your seat.',
+      );
+    }
+    case 'send_message': {
+      const to = String(args.to ?? '').trim();
+      const message = String(args.message ?? '').trim();
+      if (!to || !message) return text('send_message needs to and message.');
+      const m = await deps.client.sendMessage(to.toLowerCase() === 'all' ? '*' : to, message);
+      return text(`Sent to ${m.to === '*' ? 'everyone' : m.to_label}.`);
+    }
+    case 'read_messages': {
+      // The same pass `flotilla start` makes, so an agent run under `flotilla work` with no
+      // bridge alongside still gets its answers, and a grant still widens its lock.
+      const me = await deps.client.whoami();
+      const lines: string[] = [];
+      await syncSessions(deps.root, deps.client, {
+        agent_id: me.agent_id, role_slug: me.role_slug, file_scope: await deps.allowedScope(),
+      }, (l) => lines.push(l), deps.log);
+      const [messages, requests] = await Promise.all([deps.client.readMessages(0), deps.client.myScopeRequests()]);
+      const out: string[] = [];
+      out.push(messages.length ? messages.slice(-30).map(formatMessage).join('\n') : 'No messages in this session yet.');
+      if (requests.length) out.push(`\nYour requests:\n${requests.map(formatRequest).join('\n')}`);
+      if (lines.some((l) => l.startsWith('lock'))) out.push(`\n${lines.filter((l) => l.startsWith('lock')).join('\n')}`);
+      return text(out.join('\n'));
     }
     default:
       return text(`Unknown tool: ${name}`);
