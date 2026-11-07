@@ -14,8 +14,17 @@ test('owner and user scopes are not editable', () => {
   assert.equal(validateRoleScope('user', ['server/**']).ok, false);
 });
 
-test('an unknown role is refused', () => {
-  assert.equal(validateRoleScope('backend-builder', ['server/**']).ok, false);
+test('a slug a project could not define is refused', () => {
+  for (const bad of ['Backend', 'b', '1speaker', 'speaker two', '', 'a'.repeat(33)]) {
+    assert.equal(validateRoleScope(bad, ['server/**']).ok, false, bad);
+  }
+});
+
+test('a seat drawn by flotilla share can be redrawn like a template role', () => {
+  // Shared sessions: roles are project documents, so the fence of "priya" is as editable as
+  // backend's. Whether THIS project has that role is set_role_scope's 404, not this check.
+  assert.deepEqual(validateRoleScope('priya', ['slides/05-*.html']), { ok: true, globs: ['slides/05-*.html'] });
+  assert.deepEqual(validateRoleScope('speaker-2', ['slides/**']), { ok: true, globs: ['slides/**'] });
 });
 
 test('empty, non-list and oversized scopes are refused', () => {

@@ -10,6 +10,8 @@
 // external because it is a real dependency with native pieces.
 
 import { readFile } from 'node:fs/promises';
+import { formatMessage, formatRequest } from '../cli/sessions.ts';
+import type { Message, ScopeRequest } from '../shared/store/sessions.ts';
 import { join } from 'node:path';
 
 import { main, registerAuthCommands, registerProjectCommands } from '../cli/index.ts';
@@ -257,8 +259,95 @@ async function writeTask(
   };
 }
 
+/**
+ * One write through the deployed function, as the signed-in member, for the project in this repo.
+ * Prints the server's refusal and returns null, so each command below is only its happy path.
+ */
+async function writeHere(root: string, op: string, body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+  const project_id = await projectIdHere(root);
+  if (!project_id) {
+    console.error('\nno project here. Run this in a repo with .agentic/project.json.');
+    return null;
+  }
+  const cfg = await loadConfig();
+  const client = new WriteClient({ api_url: writeUrl(cfg), api_key: cfg.api_key, log: consoleLogger });
+  const res = await client.write(project_id, op, body);
+  if (!res.ok || res.body.ok === false) {
+    console.error(`\n${String(res.body.error ?? `write refused (HTTP ${res.status})`)}`);
+    return null;
+  }
+  return res.body;
+}
+
 registerProjectCommands({
-  async new(root, name, repo) {
+  // ---- shared sessions, as the host. docs/designs/shared-sessions.md ----
+  async share(root, label, globs, can) {
+    const b = await writeHere(root, 'create_seat', { label, file_scope: globs, can });
+    if (!b) return 1;
+    console.log(`\nseat drawn for ${String(b.label)}`);
+    console.log(`  seat     @${String(b.role_slug)}`);
+    console.log(`  may edit ${(b.file_scope as string[]).join(', ')}`);
+    console.log(`  may      ${(b.capabilities as string[]).join(', ')}`);
+    console.log('\nSend them this, once (it works one time, for 7 days):\n');
+    console.log(`  flotilla connect ${String(b.invite)}\n`);
+    console.log(`Outside their seat they ask; you answer with \`flotilla requests\`, then grant or deny.`);
+    console.log(`Talk to them with \`flotilla say @${String(b.role_slug)} "..."\`. Redraw with \`flotilla role ${String(b.role_slug)} --scope ...\`.`);
+    return 0;
+  },
+
+  async requests(root, all) {
+    const b = await writeHere(root, 'list_scope_requests', all ? { status: 'all' } : {});
+    if (!b) return 1;
+    const rs = (b.requests ?? []) as ScopeRequest[];
+    if (rs.length === 0) {
+      console.log(all ? 'no requests yet' : 'nothing waiting on you');
+      return 0;
+    }
+    for (const r of rs) console.log(formatRequest(r));
+    if (rs.some((r) => r.status === 'open')) {
+      console.log('\nflotilla grant <id>            this ticket only');
+      console.log('flotilla grant <id> --for seat  for good');
+      console.log('flotilla deny <id> --reason "..."');
+    }
+    return 0;
+  },
+
+  async decide(root, request_id, grant, duration, reason) {
+    const b = await writeHere(root, 'decide_scope_request', {
+      request_id, grant, ...(duration ? { duration } : {}), ...(reason ? { reason } : {}),
+    });
+    if (!b) return 1;
+    const r = b.request as ScopeRequest;
+    console.log(formatRequest(r));
+    if (grant) console.log('Their agent widens its lock on its next pass; nothing else to do.');
+    return 0;
+  },
+
+  async request(root, globs, reason, task_id) {
+    const b = await writeHere(root, 'request_scope', { globs, reason, ...(task_id ? { task_id } : {}) });
+    if (!b) return 1;
+    console.log(`asked: ${String((b.request as ScopeRequest).request_id)}`);
+    return 0;
+  },
+
+  async say(root, to, body) {
+    const b = await writeHere(root, 'send_message', { to, body });
+    if (!b) return 1;
+    const m = b.message as Message;
+    console.log(`sent to ${m.to === '*' ? 'everyone' : m.to_label}`);
+    return 0;
+  },
+
+  async messages(root) {
+    const b = await writeHere(root, 'read_messages', { since_ms: 0 });
+    if (!b) return 1;
+    const ms = (b.messages ?? []) as Message[];
+    if (ms.length === 0) console.log('no messages yet');
+    for (const m of ms) console.log(formatMessage(m));
+    return 0;
+  },
+
+  async new(root, name, repo, template) {
     // THROUGH THE WRITE FUNCTION, with the user's own token. Not the Admin SDK: a stranger has a
     // user credential from `flotilla login` and no service-account key, and this is the first
     // real command they run.
@@ -271,7 +360,7 @@ registerProjectCommands({
     try {
       const r = await newProject({
         root, name, directory, owner_uid: uid(), owner_label: process.env.USER ?? 'owner',
-        repo_url: repo, log: consoleLogger,
+        repo_url: repo, log: consoleLogger, ...(template ? { template } : {}),
       });
       console.log(`\ncreated ${r.project_id}`);
       console.log(`  name       ${r.project_name}`);
@@ -280,8 +369,9 @@ registerProjectCommands({
       console.log(`  role packs ${r.role_packs.length}`);
 
       // Fit the fences to this repo. After the create, and never fatal: the project exists and
-      // works with template scopes; a failed fit is one `flotilla role` away from fixed.
-      const fitted = inferRoleScopes(await topLevelDirs(root), {
+      // works with template scopes; a failed fit is one `flotilla role` away from fixed. Only the
+      // web template has backend/frontend/qa to fit; a deck's seats are drawn per person.
+      const fitted = template && template !== 'web' ? {} : inferRoleScopes(await topLevelDirs(root), {
         backend: DEFAULT_ROLES.backend.file_scope,
         frontend: DEFAULT_ROLES.frontend.file_scope,
         qa: DEFAULT_ROLES.qa.file_scope,
@@ -291,6 +381,10 @@ registerProjectCommands({
         console.log(res.ok
           ? `  ${role_slug.padEnd(10)} ${file_scope.join(', ')}  (fitted to this repo)`
           : `  ${role_slug.padEnd(10)} kept the default: ${String(res.body.error ?? res.status)}`);
+      }
+      if (template && template !== 'web') {
+        console.log(`\n${template} project: draw each person a seat with`);
+        console.log('  flotilla share --scope "<their files>" --label "<who>"');
       }
       console.log(`\nopen it at /p/${r.project_id}`);
       return 0;

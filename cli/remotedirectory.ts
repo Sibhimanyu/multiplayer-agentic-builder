@@ -33,6 +33,7 @@ export class RemoteDirectory {
       project_name: input.project_name,
       repo_url: input.repo_url,
       owner_label: input.owner_label,
+      ...(input.template ? { template: input.template } : {}),
       // owner_uid is deliberately NOT sent. The server takes it from the verified token, so a
       // caller cannot create a project owned by somebody else. Sending it would imply it matters.
     });

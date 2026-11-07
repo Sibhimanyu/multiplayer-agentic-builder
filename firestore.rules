@@ -135,6 +135,17 @@ service cloud.firestore {
       // Invite codes are write-only secrets: an existing member must not be able to read a
       // pending invite and connect a second agent under someone else's role. Owners cannot
       // read them either — the API returns the code once, at creation, and never again.
+      // Shared sessions (docs/designs/shared-sessions.md). SERVER-ONLY, read included: a message
+      // to one person is not the whole project's business, and a scope request names files and
+      // a reason that only the host decides on. Both are read through the write function and the
+      // agent API, which filter by the verified caller. The catch-all below would deny these too;
+      // they are named so nobody adds a member-read rule here thinking it was simply forgotten.
+      match /scope_requests/{rid} {
+        allow read, write: if false;
+      }
+      match /messages/{mid} {
+        allow read, write: if false;
+      }
       match /invites/{code} {
         allow read, write: if false;
       }

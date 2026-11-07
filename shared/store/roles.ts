@@ -14,7 +14,7 @@
 // allows. That is a subset test, and it is strictly stronger.
 
 import { normalizeGlob } from '../globs.ts';
-import { RoleDeniedError, roleFor, type Capability } from './directory.ts';
+import { RoleDeniedError, roleFor, type Capability, type RolePolicy } from './directory.ts';
 
 /**
  * Is every path matched by `requested` also matched by `allowed`?
@@ -35,11 +35,17 @@ export function globContains(allowed: string, requested: string): boolean {
   const segContains = (allowSeg: string, reqSeg: string): boolean => {
     if (allowSeg === '**' || allowSeg === '*') return true;
     if (reqSeg === '**' || reqSeg === '*') return false; // a wildcard request needs a wildcard grant
-    // Literal-ish comparison with '?' on the allowed side only, for the same reason.
     if (allowSeg === reqSeg) return true;
     if (!allowSeg.includes('?') && !allowSeg.includes('*')) return false;
-    if (allowSeg.length !== reqSeg.length) return false;
-    return [...allowSeg].every((c, i) => c === '?' || c === reqSeg[i]);
+    // A wildcard INSIDE the requested segment (`05-*.html`) is only contained by the identical
+    // pattern or a whole-segment wildcard, both handled above. Deciding whether one partial
+    // pattern contains another is a language-inclusion question, and the bias here is refuse.
+    if (reqSeg.includes('*') || reqSeg.includes('?')) return false;
+    // A literal requested segment against a partial pattern on the allowed side: `*` is any run
+    // within the segment, `?` one character. Shared sessions need this -- a deck seat is
+    // `slides/05-*.html`, and before it every such fence contained nothing, not even its own files.
+    const re = new RegExp(`^${allowSeg.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]')}$`);
+    return re.test(reqSeg);
   };
 
   const go = (i: number, j: number): boolean => {
@@ -82,15 +88,29 @@ export function globsWithinRole(role_slug: string, requested: string[], override
  * Bounds acquireScope by ROLE rather than by whatever the agent asks for. The primitive itself is
  * unchanged and still verified contended; this only narrows what may be asked of it.
  */
-export function assertScopeAllowed(role_slug: string, requested: string[], override?: string[]): void {
-  const role = roleFor(role_slug);
-  const allowed = override ?? role.file_scope;
+export function assertScopeAllowed(
+  role_slug: string,
+  requested: string[],
+  override?: string[],
+  opts: {
+    /** The project's role document, so a seat drawn by `flotilla share` has its own capabilities. */
+    policy?: RolePolicy | null;
+    /** Globs the host granted for THIS ticket (shared/store/sessions.ts activeGrantGlobs). */
+    granted?: string[];
+  } = {},
+): void {
+  const role = roleFor(role_slug, opts.policy);
+  const seat = override ?? role.file_scope;
+  const granted = opts.granted ?? [];
+  const allowed = [...seat, ...granted.filter((g) => !seat.includes(g))];
   if (!role.capabilities.includes('acquire_scope') || allowed.length === 0) {
-    throw new RoleDeniedError(role.slug, 'hold a file scope at all', requested, allowed);
+    throw new RoleDeniedError(role_slug, 'hold a file scope at all', requested, allowed);
   }
   const refused = globsWithinRole(role_slug, requested, allowed);
   if (refused.length > 0) {
-    throw new RoleDeniedError(role.slug, 'edit outside its file scope', refused, allowed);
+    // The message names the way out. Before shared sessions a refusal was the end of the story;
+    // now the agent can ask, and an agent that is not told so will not.
+    throw new RoleDeniedError(role_slug, 'edit outside its file scope (ask the host: flotilla request)', refused, allowed);
   }
 }
 
@@ -115,8 +135,9 @@ export function assertDeployAllowed(role_slug: string, targets: string[]): void 
 }
 
 /** Capability check for everything that is not a scope or a target. */
-export function assertCapability(role_slug: string, cap: Capability): void {
-  if (!roleFor(role_slug).capabilities.includes(cap)) {
-    throw new RoleDeniedError(role_slug, cap.replace(/_/g, ' '), [cap], roleFor(role_slug).capabilities);
+export function assertCapability(role_slug: string, cap: Capability, policy?: RolePolicy | null): void {
+  const role = roleFor(role_slug, policy);
+  if (!role.capabilities.includes(cap)) {
+    throw new RoleDeniedError(role_slug, cap.replace(/_/g, ' '), [cap], role.capabilities);
   }
 }

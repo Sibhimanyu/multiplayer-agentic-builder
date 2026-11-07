@@ -16,7 +16,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Firestore } from 'firebase-admin/firestore';
 
-import { hasCapability, ROLE_SLUGS } from '../../shared/store/directory.ts';
+import { hasCapability, roleFor, ROLE_SLUGS, type RolePolicy } from '../../shared/store/directory.ts';
 import { StoreAuthError } from '../../shared/store/errors.ts';
 import type { AgentId, ProjectId } from '../../shared/store/types.ts';
 
@@ -62,6 +62,25 @@ export const ROLE_PACKS: Record<string, Permissions> = Object.fromEntries(
     },
   ]),
 );
+
+/**
+ * The permissions of a seat drawn by `flotilla share`, from the project's role document.
+ *
+ * ROLE_PACKS only knows the web template. Without this, every guest's agent resolved to DENY_ALL:
+ * connected, able to lock its slides, and unable to push the branch or open the PR that finishes
+ * the work. Same derivation as the packs, so a seat and a template role with the same
+ * capabilities get the same permissions. `merge` is still never from here.
+ */
+export function packFor(role_slug: string, policy: RolePolicy | null): Permissions {
+  if (!policy) return ROLE_PACKS[role_slug] ?? { ...DENY_ALL };
+  const caps = roleFor(role_slug, policy).capabilities;
+  return {
+    push_branches: caps.includes('acquire_scope'),
+    open_prs: caps.includes('open_pr'),
+    merge: false,
+    publish_contracts: caps.includes('publish_contract'),
+  };
+}
 
 const DENY_ALL: Permissions = {
   push_branches: false,
@@ -173,7 +192,14 @@ export async function resolveAgent(db: Firestore, header: string | undefined): P
   if (!project_id) throw new StoreAuthError('agent document is not under a project');
 
   const role_slug = data.role_slug ?? '';
-  const pack = ROLE_PACKS[role_slug];
+  // A template role keeps its static pack (roleFor ignores a template document's capabilities);
+  // any other slug is a seat, and its document is the only place its capabilities exist. One point
+  // read, paid only by seats -- the same immediacy argument as the token lookup above.
+  let pack: Permissions | undefined = ROLE_PACKS[role_slug];
+  if (!pack && role_slug) {
+    const policy = await db.collection('projects').doc(project_id).collection('roles').doc(role_slug).get();
+    if (policy.exists) pack = packFor(role_slug, policy.data() as RolePolicy);
+  }
   if (!pack) {
     // Fail closed. An unknown role gets no permissions rather than a default set.
     return {

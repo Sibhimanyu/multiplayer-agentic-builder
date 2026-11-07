@@ -16,7 +16,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import type { ProjectDirectory, RoleSlug } from '../shared/store/directory.ts';
-import { ROLE_SLUGS } from '../shared/store/directory.ts';
+import { templateRoles, type ProjectTemplate } from '../shared/store/templates.ts';
 import type { Logger } from '../shared/log.ts';
 
 /** Every git child gets a DEADLINE. A wedged git child with no timeout hangs the CLI forever. */
@@ -82,7 +82,7 @@ You do not write code, claim tasks, or hold a file scope, and you have no agent.
 suggestions are HUMAN-LAYER events: they are recorded on the board and never written into any
 agent's inbox.jsonl. That is not a policy — it is how the file contract is built. An owner or
 architect turns a suggestion into a task, or declines it with a recorded reason.`
-      : `Your file scope is ${scope[role]}
+      : `Your file scope is ${scope[role] ?? 'drawn by the host, per person, with `flotilla share`. `flotilla status` shows yours.'}
 
 Claim a task before you touch anything. Append one JSON line to .agentic/outbox.jsonl; never call
 the network and never run git yourself — the bridge does both. Read .agentic/inbox.jsonl from the
@@ -120,6 +120,8 @@ export interface NewProjectOptions {
   owner_label: string;
   /** Overrides the repo detected from `git remote get-url origin`. */
   repo_url?: string;
+  /** The roles the project is born with. Absent means 'web': the six, exactly as before. */
+  template?: ProjectTemplate;
   log: Logger;
 }
 
@@ -155,6 +157,7 @@ export async function newProject(opts: NewProjectOptions): Promise<NewProjectRes
     repo_url,
     owner_uid: opts.owner_uid,
     owner_label: opts.owner_label,
+    ...(opts.template && opts.template !== 'web' ? { template: opts.template } : {}),
   });
 
   // ---- scaffold, only now that the project exists ----
@@ -169,7 +172,7 @@ export async function newProject(opts: NewProjectOptions): Promise<NewProjectRes
   );
 
   const role_packs: string[] = [];
-  for (const role of ROLE_SLUGS) {
+  for (const role of templateRoles(opts.template ?? 'web').map((r) => r.slug)) {
     const rel = path.join('.agentic', 'roles', `${role}.md`);
     await fs.writeFile(path.join(opts.root, rel), rolePack(role, record.project_name), 'utf8');
     role_packs.push(rel);

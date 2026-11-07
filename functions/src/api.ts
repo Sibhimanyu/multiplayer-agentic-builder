@@ -29,6 +29,8 @@ import { RoleDeniedError } from '../../shared/store/directory.ts';
 import { LAYER_OF, type EventKind } from '../../shared/store/types.ts';
 import { cleanHandoffNote, mayHandOff } from '../../shared/store/handoff.ts';
 import type { Logger } from '../../shared/log.ts';
+import { cleanMessageBody, resolveRecipient, validateScopeRequest } from '../../shared/store/sessions.ts';
+import { createScopeRequest, listScopeRequests, readMessages, roster, sendMessage } from '../../firebase/sessions-db.ts';
 import type { FirestoreStore } from '../../firebase/store.ts';
 import type { Firestore } from 'firebase-admin/firestore';
 
@@ -320,6 +322,48 @@ export async function handleApi(req: ApiRequest, deps: ApiDeps): Promise<ApiResp
           });
         }
         return json(200, { events, next_cursor: r.next_cursor, has_more: r.has_more });
+      }
+
+      // ---- shared sessions: asking for more, and talking. docs/designs/shared-sessions.md ----
+      case 'POST /scope-requests': {
+        // The agent that asks is the TOKEN's agent, and its label and seat come from the token
+        // document -- a request cannot be filed in somebody else's name.
+        const v = validateScopeRequest(obj(req.body));
+        if (!v.ok) return json(400, { error: 'bad_request', detail: v.error });
+        const r = await createScopeRequest(deps.db, id.project_id, {
+          agent_id: id.agent_id, label: id.member_label, role_slug: id.role_slug,
+          globs: v.globs, reason: v.reason, task_id: v.task_id,
+        }, deps.now());
+        log.info('fn.scope_requested', 'agent asked for more scope', {
+          project_id: id.project_id, agent_id: id.agent_id, globs: v.globs, task_id: v.task_id,
+        });
+        return json(201, { ok: true, request: r });
+      }
+
+      case 'GET /scope-requests': {
+        // An agent sees ITS OWN requests and their answers. Deciding is the host's, through the
+        // write path; there is no agent route that can set a request's status.
+        const requests = await listScopeRequests(deps.db, id.project_id, { agent_id: id.agent_id });
+        return json(200, { requests });
+      }
+
+      case 'POST /messages': {
+        const body = cleanMessageBody(obj(req.body).body);
+        if (!body.ok) return json(400, { error: 'bad_request', detail: body.error });
+        const who = resolveRecipient(str(req.body, 'to') ?? '', await roster(deps.db, id.project_id));
+        if (!who.ok) return json(400, { error: 'unknown_recipient', detail: who.error });
+        const m = await sendMessage(deps.db, id.project_id, {
+          from_id: id.agent_id, from_kind: 'agent', from_label: id.member_label,
+          to: who.to, to_label: who.to_label, body: body.body,
+          in_reply_to: str(req.body, 'in_reply_to'),
+        }, deps.now());
+        return json(201, { ok: true, message: m });
+      }
+
+      case 'GET /messages': {
+        const since = Number(obj(req.body).since_ms ?? 0);
+        const messages = await readMessages(deps.db, id.project_id, [id.agent_id], Number.isFinite(since) ? since : 0);
+        return json(200, { messages });
       }
 
       case 'GET /whoami': {
